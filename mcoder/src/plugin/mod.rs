@@ -6,7 +6,6 @@
 
 pub mod hooks;
 pub mod mcp;
-pub mod skills;
 
 use crate::types::HookConfig;
 use anyhow::Result;

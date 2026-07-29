@@ -7,7 +7,7 @@ import type { SessionMeta } from '@mcoder/shared/rpc/types.js';
 interface CommandInfo {
   name: string;
   description: string;
-  usage: string;
+  usage?: string;
 }
 
 interface Props {

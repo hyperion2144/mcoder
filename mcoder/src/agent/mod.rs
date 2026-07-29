@@ -451,6 +451,18 @@ fn default_system_prompt() -> String {
 - Use `sandbox_read` with handle when previous tool output was truncated.
 - Use `workflow_create` / `workflow_query` / `workflow_update` for blueprint-style project management.
 
+## Spec-Driven Workflow (blueprint-style)
+When the user describes a large change (e.g. "实现一个 X 功能", "重构 Y 模块", "做一个 Z 系统"), suggest using the workflow system:
+- Use `/workflow init <title>` to start a new roadmap with the first change in `propose` phase.
+- Use `/workflow plan <change_id>` to advance to planning (planner sub-agent generates design + spec + tasks).
+- Use `/workflow apply <change_id>` to advance to implementation (executor sub-agent implements tasks per spec).
+- Use `/workflow review <change_id>` to advance to review (reviewer sub-agent checks implementation vs spec).
+- Use `/workflow archive <change_id>` to archive completed changes.
+- Use `/workflow list` to see all roadmaps.
+Workflow entities use sequence IDs: RM-1, MS-1, CH-1, PR-1, DS-1, SP-1, T-1, RV-1.
+Profiles: `standard` (parallel tasks, mandatory TDD, all tasks must pass review) / `lite` (sequential, optional TDD, any task pass suffices).
+When spec.tdd=true, apply phase MUST follow RED (write failing test) -> GREEN (minimal impl) -> REFACTOR cycle.
+
 ## Token Saving
 - Don't repeat file contents unnecessarily; reference them by path.
 - Prefer batch operations (sed, bash commands array) over multiple single operations.

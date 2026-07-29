@@ -87,6 +87,8 @@ pub struct SessionManager {
     mcp_manager: Arc<crate::plugin::mcp::McpManager>,
     /// per-project 资源缓存：project_path → ProjectResources
     project_resources: RwLock<HashMap<PathBuf, Arc<ProjectResources>>>,
+    /// Slash command 分发器（元命令 + 自定义命令 + skill 调用）
+    command_dispatcher: Arc<crate::commands::CommandDispatcher>,
     event_tx: broadcast::Sender<ServerEvent>,
 }
 
@@ -142,6 +144,7 @@ impl SessionManager {
         role_registry: Arc<RoleRegistry>,
         experience_store: Arc<MemoryStore>,
         mcp_manager: Arc<crate::plugin::mcp::McpManager>,
+        command_dispatcher: Arc<crate::commands::CommandDispatcher>,
     ) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(1024);
         Arc::new(Self {
@@ -154,8 +157,20 @@ impl SessionManager {
             experience_store,
             mcp_manager,
             project_resources: RwLock::new(HashMap::new()),
+            command_dispatcher,
             event_tx,
         })
+    }
+
+    /// 分发 slash command（/xxx 输入，不含前导 /）
+    /// 返回 DispatchResult，由 ws_server 层执行对应的 RPC 操作
+    pub async fn dispatch_command(&self, input: &str) -> Result<crate::commands::DispatchResult> {
+        self.command_dispatcher.dispatch(input).await
+    }
+
+    /// 列出所有可用命令（元命令 + 自定义命令 + user-invocable skills）
+    pub async fn list_commands(&self) -> Vec<serde_json::Value> {
+        self.command_dispatcher.list_all().await
     }
 
     /// 设计文档 §8.3.2: 优雅关闭所有 MCP server / LSP server / DAP adapter

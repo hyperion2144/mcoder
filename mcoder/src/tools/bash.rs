@@ -290,8 +290,9 @@ struct CmdOutput {
 }
 
 async fn run_command(cmd: &str, cwd: Option<&str>, env: &std::collections::HashMap<String, String>) -> Result<CmdOutput> {
-    let mut c = tokio::process::Command::new("bash");
-    c.arg("-c").arg(cmd);
+    // 跨平台：Unix 用 sh -c，Windows 用 cmd /C
+    let mut c = crate::utils::shell::shell_command_tokio();
+    c.arg(cmd);
     if let Some(cwd) = cwd {
         c.current_dir(cwd);
     }
@@ -322,8 +323,8 @@ fn should_run_async(cmd: &str, timeout: u64) -> bool {
             return true;
         }
     }
-    // 后台进程
-    if cmd.trim_end().ends_with('&') {
+    // 后台进程（跨平台检测）
+    if crate::utils::shell::is_background_command(cmd) {
         return true;
     }
     false

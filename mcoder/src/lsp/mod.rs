@@ -131,24 +131,53 @@ fn percent_decode_path(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// 将路径转为 file:// URI（macOS/Linux 格式：file:///absolute/path）
-/// P2-4 修复：对路径中的特殊字符（空格/中文/符号）做 percent-encoding
+/// 将路径转为 file:// URI（跨平台）
+/// - Unix: file:///absolute/path
+/// - Windows: file:///C:/Users/foo/bar.rs
 pub fn path_to_uri(path: &Path) -> String {
-    // canonicalize 失败时退回到原路径
     let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    // file:// + /absolute/path = file:///absolute/path
-    // 对路径做 percent-encoding，保留 '/'
-    format!("file://{}", percent_encode_path(&abs.to_string_lossy()))
+    // 跨平台：用 url crate 自动处理盘符和反斜杠
+    // 简化实现：手动构造，确保三个斜杠 + 正斜杠
+    let path_str = abs.to_string_lossy();
+    #[cfg(unix)]
+    {
+        // Unix: file:// + /absolute/path = file:///absolute/path
+        format!("file://{}", percent_encode_path(&path_str))
+    }
+    #[cfg(windows)]
+    {
+        // Windows: file:///C:/Users/foo/bar.rs
+        // 把反斜杠转为正斜杠，并确保以 / 开头
+        let normalized = path_str.replace('\\', "/");
+        let with_slash = if normalized.starts_with('/') {
+            normalized
+        } else {
+            format!("/{}", normalized)
+        };
+        format!("file://{}", percent_encode_path(&with_slash))
+    }
 }
 
-/// 将 file:// URI 转回 PathBuf
-/// P2-4 修复：做 percent-decode，正确还原特殊字符
+/// 将 file:// URI 转回 PathBuf（跨平台）
 pub fn uri_to_path(uri: &str) -> PathBuf {
-    if let Some(rest) = uri.strip_prefix("file://") {
-        // file:///absolute/path -> /absolute/path
-        PathBuf::from(percent_decode_path(rest))
+    // 兼容 file:// 和 file:/// 两种前缀
+    let rest = if let Some(r) = uri.strip_prefix("file:///") {
+        r
+    } else if let Some(r) = uri.strip_prefix("file://") {
+        r
     } else {
-        PathBuf::from(uri)
+        return PathBuf::from(uri);
+    };
+    let decoded = percent_decode_path(rest);
+    #[cfg(windows)]
+    {
+        // Windows: 去掉前导 / （/C:/Users -> C:/Users），把正斜杠转反斜杠
+        let trimmed = decoded.trim_start_matches('/');
+        PathBuf::from(trimmed.replace('/', "\\"))
+    }
+    #[cfg(unix)]
+    {
+        PathBuf::from(decoded)
     }
 }
 

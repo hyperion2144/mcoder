@@ -917,7 +917,8 @@ async fn which_adapter(name: &str) -> Option<PathBuf> {
         return None;
     }
     let path = std::env::var("PATH").ok()?;
-    for dir in path.split(':') {
+    // 跨平台 PATH 分隔符：Unix 用 ':'，Windows 用 ';'
+    for dir in path.split(crate::utils::shell::PATH_SEP) {
         let candidate = Path::new(dir).join(name);
         if candidate.exists() {
             return Some(candidate);

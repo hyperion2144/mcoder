@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { WsClient } from '@mcoder/shared/rpc/client.js';
 import { useSessionStore, useMessagesStore } from '@mcoder/shared/store/index.js';
-import { findCommand, listCommands } from '@mcoder/shared/commands/index.js';
+import { dispatchSlashCommand } from '@mcoder/shared/commands/index.js';
 import { parsePairingString } from '@mcoder/shared/utils/pairing.js';
 import { NetworkMonitor } from './network.js';
 import { PairingScreen } from './components/PairingScreen.js';
@@ -135,6 +135,8 @@ export function App() {
   const [currentProject, setCurrentProject] = useState<string | null>(null);
   // 当前项目内打开为 tab 的会话 ID 列表
   const [openTabs, setOpenTabs] = useState<string[]>([]);
+  // 从服务端获取的命令列表（供 Drawer 展示）
+  const [commands, setCommands] = useState<{ name: string; description: string }[]>([]);
   const sessionStore = useSessionStore();
   const msgStore = useMessagesStore();
   const networkMonitor = useRef<NetworkMonitor | null>(null);
@@ -187,6 +189,11 @@ export function App() {
         const sessions = await c.request('sessions.list');
         sessionStore.setSessions(sessions);
         setView('projects');
+      } catch {}
+      // 从服务端获取命令列表（供 Drawer 展示）
+      try {
+        const cmds = await c.request('command.list');
+        setCommands(cmds);
       } catch {}
     } catch (e: any) {
       msgStore.setError(`Connection failed: ${e.message}`);
@@ -403,15 +410,11 @@ export function App() {
 
   const handleSlash = useCallback(async (cmd: string) => {
     if (!client) return;
-    const parts = cmd.slice(1).split(/\s+/);
-    const cmdDef = findCommand(parts[0]);
-    if (!cmdDef) {
-      msgStore.setError(`unknown command: /${parts[0]}`);
-      return;
-    }
+    // 所有 slash command 转发到服务端分发（commands/mod.rs::CommandDispatcher）
     try {
-      const result = await cmdDef.handler(parts.slice(1), client);
+      const result = await dispatchSlashCommand(cmd, client);
       if (result.error) msgStore.setError(result.error);
+      else msgStore.setError(null);
       if (result.systemMessage) {
         msgStore.addMessage({ role: 'system', content: [{ type: 'text', text: result.systemMessage }] });
       }
@@ -537,7 +540,7 @@ export function App() {
         onSelectSession={handleDrawerSelectSession}
         onNewSession={handleNewSessionInTabs}
         onDisconnect={disconnect}
-        commands={listCommands()}
+        commands={commands}
       />
     </div>
   );

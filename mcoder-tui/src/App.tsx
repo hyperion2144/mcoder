@@ -5,7 +5,7 @@
 import { useState, useEffect } from 'react';
 import { Box, Text, useInput, useApp } from 'ink';
 import { useSessionStore, useMessagesStore, useUiStore } from './store/index.js';
-import { findCommand } from './commands/index.js';
+import { dispatchSlashCommand } from './commands/index.js';
 import type { WsClient } from './rpc/client.js';
 import type { Message } from './rpc/types.js';
 import {
@@ -96,16 +96,10 @@ export function App({ client }: Props) {
   };
 
   const handleSlashCommand = async (cmd: string) => {
-    const parts = cmd.slice(1).split(/\s+/);
-    const commandName = parts[0];
-    const args = parts.slice(1);
-    const cmdDef = findCommand(commandName);
-    if (!cmdDef) {
-      msgStore.setError(`unknown command: /${commandName} (try /help)`);
-      return;
-    }
+    // 所有 slash command 转发到服务端分发（commands/mod.rs::CommandDispatcher）
+    // 服务端返回 DispatchResult，客户端根据结果执行 UI 动作
     try {
-      const result = await cmdDef.handler(args, client);
+      const result = await dispatchSlashCommand(cmd, client);
       if (result.error) msgStore.setError(result.error);
       else msgStore.setError(null);
       if (result.systemMessage) {
@@ -202,7 +196,7 @@ export function App({ client }: Props) {
       {currentView === 'todos' && <TodoView />}
       {currentView === 'tasks' && <TaskMonitor />}
       {currentView === 'config' && <ConfigView />}
-      {currentView === 'help' && <HelpView />}
+      {currentView === 'help' && <HelpView client={client} />}
 
       {/* 设计文档 §6.5: 紧凑模式 */}
       {uiStore.compact ? (

@@ -4,6 +4,7 @@ mod browser;
 // 设计文档 §8.7 M5: Computer Use（桌面级自测）
 mod computer_use;
 mod code_graph;
+mod commands;
 mod config;
 // 设计文档 §8.4.3: DAP 调试子系统
 mod debug;
@@ -13,10 +14,12 @@ mod memory;
 mod persistence;
 mod plugin;
 mod session_manager;
+mod skills;
 mod tools;
 mod transport;
 mod tree_sitter;
 mod types;
+mod utils;
 mod workflow;
 
 use clap::{Parser, Subcommand};
@@ -168,19 +171,44 @@ async fn start_server_full(
     let (mut tools_reg, subagent_tool) = tools::build_full_registry();
 
     // 设计文档 §8.3.4: 加载 skills（全局 ~/.mcoder/skills/ + 项目 .mcoder/skills/）
+    // Skill = 能力扩展包（文件夹 + SKILL.md），支持渐进式披露
     let global_skills_dir = crate::config::global_config_dir().join("skills");
     let project_skills_dir = project_dir.join("skills");
-    match plugin::skills::build_skill_tools(&global_skills_dir, &project_skills_dir).await {
-        Ok((_skill_registry, skill_tools)) => {
-            if !skill_tools.is_empty() {
-                tracing::info!("registered {} skill tools", skill_tools.len());
-            }
-            tools_reg.register_all(skill_tools);
+    let skill_registry = match skills::build_registry(&global_skills_dir, &project_skills_dir).await {
+        Ok(reg) => {
+            let count = reg.list().await.len();
+            tracing::info!("loaded {} skills", count);
+            reg
         }
         Err(e) => {
             tracing::warn!("failed to load skills: {}", e);
+            std::sync::Arc::new(skills::SkillRegistry::new())
         }
-    }
+    };
+
+    // 加载自定义 slash commands（全局 ~/.mcoder/commands/ + 项目 .mcoder/commands/）
+    let global_commands_dir = crate::config::global_config_dir().join("commands");
+    let project_commands_dir = project_dir.join("commands");
+    let command_registry = match commands::build_registry(&global_commands_dir, &project_commands_dir).await {
+        Ok(reg) => {
+            let count = reg.list().await.len();
+            tracing::info!("loaded {} custom commands", count);
+            reg
+        }
+        Err(e) => {
+            tracing::warn!("failed to load commands: {}", e);
+            std::sync::Arc::new(commands::CommandRegistry::new())
+        }
+    };
+
+    // 构建 skill_use 工具（让 LLM 能调用 skill）
+    let skill_use_tool: tools::SharedTool = Arc::new(tools::SkillUseTool {
+        registry: skill_registry.clone(),
+    });
+    let skill_list_tool: tools::SharedTool = Arc::new(tools::SkillListTool {
+        registry: skill_registry.clone(),
+    });
+    tools_reg.register_all(vec![skill_use_tool, skill_list_tool]);
 
     // 设计文档 §8.3.2: 启动 MCP servers 并注册其工具
     let mcp_manager = Arc::new(plugin::mcp::McpManager::new());
@@ -211,6 +239,12 @@ async fn start_server_full(
         role_registry: role_registry.clone(),
     })).await;
 
+    // 构建 slash command 分发器
+    let command_dispatcher = Arc::new(commands::CommandDispatcher::new(
+        command_registry.clone(),
+        skill_registry.clone(),
+    ));
+
     let mgr = session_manager::SessionManager::new(
         tools,
         app_config.clone(),
@@ -219,6 +253,7 @@ async fn start_server_full(
         role_registry,
         experience_store,
         mcp_manager,
+        command_dispatcher,
     );
 
     // 设计文档 §8.3.3: 触发 OnStart hook（server 启动时）
@@ -358,8 +393,8 @@ fn read_lock_pid() -> Option<u32> {
     let path = server_lock_path();
     let content = std::fs::read_to_string(&path).ok()?;
     let pid: u32 = content.trim().parse().ok()?;
-    // 检查进程是否存活：kill(pid, 0) 返回 0 表示进程存在
-    if pid > 0 && unsafe { libc::kill(pid as i32, 0) } == 0 {
+    // 检查进程是否存活（跨平台）
+    if pid > 0 && process_is_alive(pid) {
         Some(pid)
     } else {
         // 进程已死，清理锁文件
@@ -375,22 +410,40 @@ fn try_acquire_server_lock() -> bool {
     let parent = path.parent().unwrap_or(std::path::Path::new("."));
     let _ = std::fs::create_dir_all(parent);
 
-    // 原子创建：O_CREAT | O_EXCL 确保只有一个进程能创建
-    use std::os::unix::fs::OpenOptionsExt;
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)  // O_CREAT | O_EXCL
-        .mode(0o644)
-        .open(&path)
+    // 原子创建：create_new 确保只有一个进程能创建
+    #[cfg(unix)]
     {
-        Ok(mut f) => {
-            use std::io::Write;
-            let _ = write!(f, "{}", std::process::id());
-            true
+        // Unix: 用 OpenOptionsExt::mode 设置文件权限
+        use std::os::unix::fs::OpenOptionsExt;
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .open(&path)
+        {
+            Ok(mut f) => {
+                use std::io::Write;
+                let _ = write!(f, "{}", std::process::id());
+                true
+            }
+            Err(_) => read_lock_pid().is_none(),
         }
-        Err(_) => {
-            // 锁文件已存在——检查持有者是否存活
-            read_lock_pid().is_none()  // 进程已死 → 锁已释放，可以重试
+    }
+
+    #[cfg(windows)]
+    {
+        // Windows: create_new 已是原子操作，无需 mode
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut f) => {
+                use std::io::Write;
+                let _ = write!(f, "{}", std::process::id());
+                true
+            }
+            Err(_) => read_lock_pid().is_none(),
         }
     }
 }
@@ -400,7 +453,33 @@ fn release_server_lock() {
     let _ = std::fs::remove_file(server_lock_path());
 }
 
-/// 以守护进程方式启动 server（fork + detach）
+/// 检查进程是否存活（跨平台）
+#[cfg(unix)]
+fn process_is_alive(pid: u32) -> bool {
+    // Unix: kill(pid, 0) 返回 0 表示进程存在
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(windows)]
+fn process_is_alive(pid: u32) -> bool {
+    // Windows: OpenProcess + GetExitCodeProcess
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle == 0 {
+            return false;
+        }
+        let mut exit_code: u32 = 0;
+        let ok = GetExitCodeProcess(handle, &mut exit_code);
+        CloseHandle(handle);
+        ok != 0 && exit_code == STILL_ACTIVE
+    }
+}
+
+/// 以守护进程方式启动 server（跨平台 detach）
 /// 父进程立即退出，子进程在后台运行，日志写入 log_path
 fn spawn_detached_server(host: &str, port: u16) -> anyhow::Result<u32> {
     let exe = std::env::current_exe()?;
@@ -408,8 +487,6 @@ fn spawn_detached_server(host: &str, port: u16) -> anyhow::Result<u32> {
     std::fs::create_dir_all(&log_dir)?;
     let log_path = log_dir.join("mcoder.log");
 
-    // 以 nohup 风格 fork：子进程 setsid + 重定向 stdin/stdout/stderr
-    use std::os::unix::process::CommandExt;
     let log_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -423,20 +500,61 @@ fn spawn_detached_server(host: &str, port: u16) -> anyhow::Result<u32> {
         .stdout(std::process::Stdio::from(log_file.try_clone()?))
         .stderr(std::process::Stdio::from(log_file));
 
-    // before_exec: setsid 脱离控制终端
+    spawn_detached_child(&mut cmd)
+}
+
+/// 跨平台 kill 进程
+#[cfg(unix)]
+fn kill_process(pid: u32) {
+    // Unix: SIGTERM
+    unsafe {
+        libc::kill(pid as i32, libc::SIGTERM);
+    }
+}
+
+#[cfg(windows)]
+fn kill_process(pid: u32) {
+    // Windows: TerminateProcess
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, TerminateProcess, PROCESS_TERMINATE,
+    };
+    unsafe {
+        let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        if handle != 0 {
+            TerminateProcess(handle, 1);
+            CloseHandle(handle);
+        }
+    }
+}
+
+/// Unix: setsid 脱离控制终端；Windows: CREATE_NO_WINDOW + DETACHED_PROCESS
+#[cfg(unix)]
+fn spawn_detached_child(cmd: &mut std::process::Command) -> anyhow::Result<u32> {
+    use std::os::unix::process::CommandExt;
     unsafe {
         cmd.pre_exec(|| {
-            // 创建新会话
             if libc::setsid() == -1 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())
         });
     }
-
     let child = cmd.spawn()?;
     let pid = child.id();
-    // 父进程立即退出，子进程被 init 收养
+    std::mem::forget(child);
+    Ok(pid)
+}
+
+#[cfg(windows)]
+fn spawn_detached_child(cmd: &mut std::process::Command) -> anyhow::Result<u32> {
+    use std::os::windows::process::CommandExt;
+    // CREATE_NO_WINDOW (0x08000000) | DETACHED_PROCESS (0x00000008)
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    const DETACHED_PROCESS: u32 = 0x00000008;
+    cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+    let child = cmd.spawn()?;
+    let pid = child.id();
     std::mem::forget(child);
     Ok(pid)
 }
@@ -645,12 +763,11 @@ async fn main() -> anyhow::Result<()> {
                     Ok(())
                 }
                 Err(_) => {
-                    // fallback：通过端口查找进程并 kill
-                    eprintln!("cannot reach server API, trying pkill...");
-                    let _ = std::process::Command::new("pkill")
-                        .arg("-f")
-                        .arg(format!("mcoder.*--port {}", port))
-                        .status();
+                    // fallback：跨平台 kill 进程
+                    eprintln!("cannot reach server API, trying to kill by pid...");
+                    if let Some(pid) = read_lock_pid() {
+                        kill_process(pid);
+                    }
                     release_server_lock();
                     println!("sent kill signal to processes on port {}", port);
                     Ok(())

@@ -1,2 +1,357 @@
-// 设计文档 §6.12: commands/index.ts - 统一导出
-export * from './builtin.js';
+// 设计文档 §6.9: commands/index.ts - Slash command 客户端
+//
+// 所有 slash command 的解析和分发在服务端进行（commands/mod.rs::CommandDispatcher）
+// 客户端只负责：
+//   1. 把 /xxx 输入转发到服务端 (command.call)
+//   2. 根据返回的 DispatchResult 执行对应的 UI 动作
+//      - Meta: 结构化指令，由客户端执行对应 RPC（如 session.mode.set）
+//      - CustomCommand / Skill: 服务端已渲染好的提示词，注入对话流
+//      - Unknown: 报错
+//
+// 自定义命令和 skill 的加载/渲染全在服务端，客户端零感知
+
+import type { WsClient } from '../rpc/client.js';
+import { useSessionStore, useMessagesStore } from '../store/index.js';
+import { generateQrCode } from '../utils/pairing.js';
+
+/// 服务端返回的 DispatchResult（对应 commands/mod.rs::DispatchResult）
+export type DispatchResult =
+  | { kind: 'meta'; result: MetaCommandResult }
+  | { kind: 'custom_command'; name: string; prompt: string }
+  | { kind: 'skill'; name: string; prompt: string }
+  | { kind: 'unknown'; name: string };
+
+/// 元命令结果（对应 commands/mod.rs::MetaCommandResult）
+export type MetaCommandResult =
+  | { type: 'mode'; role: string }
+  | { type: 'model'; action: string; model: string | null }
+  | { type: 'sessions'; action: string; session_id: string | null }
+  | { type: 'undo'; id: string | null }
+  | { type: 'diff' }
+  | { type: 'compact' }
+  | { type: 'cancel' }
+  | { type: 'task'; action: string; task_id: string | null }
+  | { type: 'config'; key: string; value: string | null }
+  | { type: 'pair' }
+  | { type: 'exit' }
+  | { type: 'help' }
+  | { type: 'workflow'; action: string; change_id: string | null; args: string[] };
+
+/// 客户端处理结果：告诉调用方需要做什么 UI 动作
+export interface CommandResult {
+  /// 需要添加到消息流的系统消息（可选）
+  systemMessage?: string;
+  /// 是否需要切换视图
+  switchView?: 'chat' | 'sessions' | 'todos' | 'tasks' | 'config' | 'help' | 'diff';
+  /// 是否需要重新加载会话列表
+  loadSessions?: boolean;
+  /// 是否需要退出
+  exit?: boolean;
+  /// 错误信息
+  error?: string;
+}
+
+/// 分发 slash command
+/// 输入：完整的 /xxx args 字符串
+/// 流程：转发到服务端 → 根据 DispatchResult 执行对应动作
+export async function dispatchSlashCommand(
+  input: string,
+  client: WsClient,
+): Promise<CommandResult> {
+  // 去掉前导 /
+  const stripped = input.startsWith('/') ? input.slice(1) : input;
+  if (!stripped.trim()) {
+    return { error: 'empty command' };
+  }
+
+  let result: DispatchResult;
+  try {
+    result = await client.request('command.call', { input: stripped });
+  } catch (e: any) {
+    return { error: e.message };
+  }
+
+  return handleDispatchResult(result, client);
+}
+
+/// 处理服务端返回的 DispatchResult
+async function handleDispatchResult(
+  result: DispatchResult,
+  client: WsClient,
+): Promise<CommandResult> {
+  switch (result.kind) {
+    case 'meta':
+      return handleMetaCommand(result.result, client);
+
+    case 'custom_command':
+    case 'skill': {
+      // 服务端已渲染好提示词，作为用户消息注入对话流
+      const prompt = result.prompt;
+      const msgStore = useMessagesStore.getState();
+      const sessionStore = useSessionStore.getState();
+      const sid = sessionStore.currentSessionId;
+      if (!sid) {
+        return { error: 'no active session' };
+      }
+      msgStore.addMessage({
+        role: 'user',
+        content: [{ type: 'text', text: prompt }],
+      });
+      msgStore.setStreaming(true);
+      try {
+        await client.request('sessions.send', { session_id: sid, content: prompt });
+      } catch (e: any) {
+        msgStore.setError(e.message);
+        msgStore.setStreaming(false);
+      }
+      return {};
+    }
+
+    case 'unknown':
+      return { error: `unknown command: /${result.name} (try /help)` };
+  }
+}
+
+/// 处理元命令：客户端执行对应的 RPC 和 UI 动作
+/// 元命令是内置命令，需要客户端配合做 UI 切换或调用特定 RPC
+async function handleMetaCommand(
+  meta: MetaCommandResult,
+  client: WsClient,
+): Promise<CommandResult> {
+  const sessionStore = useSessionStore.getState();
+  const msgStore = useMessagesStore.getState();
+
+  switch (meta.type) {
+    case 'help':
+      return { switchView: 'help' };
+
+    case 'exit':
+      return { exit: true };
+
+    case 'mode': {
+      const sid = sessionStore.currentSessionId;
+      if (!sid) return { error: 'no active session' };
+      try {
+        await client.request('session.mode.set', { session_id: sid, role: meta.role });
+        sessionStore.setRole(meta.role);
+        return {};
+      } catch (e: any) {
+        return { error: e.message };
+      }
+    }
+
+    case 'model': {
+      if (meta.action === 'list') {
+        try {
+          const result = await client.request('config.list_models');
+          return { systemMessage: 'Available models:\n' + JSON.stringify(result, null, 2) };
+        } catch (e: any) {
+          return { error: e.message };
+        }
+      } else if (meta.action === 'set' && meta.model) {
+        sessionStore.setModel(meta.model);
+        return {};
+      }
+      return { error: 'usage: /model <list|set <name>>' };
+    }
+
+    case 'sessions': {
+      const action = meta.action;
+      if (action === 'list') {
+        try {
+          const result = await client.request('sessions.list');
+          sessionStore.setSessions(result);
+          return { switchView: 'sessions' };
+        } catch (e: any) {
+          return { error: e.message };
+        }
+      } else if (action === 'new') {
+        try {
+          const result = await client.request('sessions.create', { title: 'New Session' });
+          sessionStore.setCurrentSession(result.session_id);
+          client.setReconnectSession(result.session_id);
+          msgStore.setMessages([]);
+          try {
+            const msgs = await client.request('sessions.messages', {
+              session_id: result.session_id,
+            });
+            msgStore.setMessages(msgs);
+          } catch {}
+          return {};
+        } catch (e: any) {
+          return { error: e.message };
+        }
+      } else if (action === 'open' && meta.session_id) {
+        try {
+          const result = await client.request('session.attach', {
+            session_id: meta.session_id,
+          });
+          sessionStore.setCurrentSession(meta.session_id);
+          client.setReconnectSession(meta.session_id);
+          msgStore.setMessages(result.messages || []);
+          try {
+            const roleResp = await client.request('session.mode.get', {
+              session_id: meta.session_id,
+            });
+            sessionStore.setRole(roleResp.role);
+          } catch {}
+          return {};
+        } catch (e: any) {
+          return { error: e.message };
+        }
+      } else if (action === 'delete' && meta.session_id) {
+        try {
+          await client.request('session.delete', { session_id: meta.session_id });
+          return { loadSessions: true };
+        } catch (e: any) {
+          return { error: e.message };
+        }
+      }
+      return { error: 'usage: /sessions <list|new|open <id>|delete <id>>' };
+    }
+
+    case 'undo': {
+      const sid = sessionStore.currentSessionId;
+      if (!sid) return { error: 'no active session' };
+      try {
+        const undoArgs: any = {};
+        if (meta.id) {
+          undoArgs.op = 'undo';
+          undoArgs.id = meta.id;
+        } else {
+          undoArgs.op = 'undo';
+        }
+        const result = await client.request('tool.call', { name: 'undo', args: undoArgs });
+        return { systemMessage: 'undo: ' + JSON.stringify(result) };
+      } catch (e: any) {
+        return { error: e.message };
+      }
+    }
+
+    case 'diff': {
+      try {
+        const result = await client.request('tool.call', {
+          name: 'bash',
+          args: { cmd: 'git diff --stat', timeout: 10 },
+        });
+        return { systemMessage: 'diff:\n' + JSON.stringify(result, null, 2), switchView: 'diff' };
+      } catch (e: any) {
+        return { error: e.message };
+      }
+    }
+
+    case 'compact':
+      // 设计文档 §8.3.4: 手动触发上下文压缩
+      return { systemMessage: '[compact requested - will apply on next LLM call]' };
+
+    case 'cancel': {
+      const sid = sessionStore.currentSessionId;
+      if (!sid) return { error: 'no active session' };
+      try {
+        await client.request('session.cancel', { session_id: sid });
+        msgStore.setStreaming(false);
+        return {};
+      } catch (e: any) {
+        return { error: e.message };
+      }
+    }
+
+    case 'task': {
+      if (meta.action === 'list') {
+        try {
+          const result = await client.request('task.list');
+          sessionStore.setTaskCount(result.length);
+          sessionStore.setBackgroundTasks(result);
+          return { switchView: 'tasks' };
+        } catch (e: any) {
+          return { error: e.message };
+        }
+      } else if (meta.action === 'cancel' && meta.task_id) {
+        try {
+          await client.request('task.cancel', { task_id: meta.task_id });
+          return {};
+        } catch (e: any) {
+          return { error: e.message };
+        }
+      }
+      return { error: 'usage: /task <list|cancel <id>>' };
+    }
+
+    case 'config': {
+      if (meta.key === 'get' || meta.value === null) {
+        // /config get <key>
+        try {
+          const result = await client.request('config.get', { key: meta.key });
+          return {
+            systemMessage: 'config:\n' + JSON.stringify(result, null, 2),
+            switchView: 'config',
+          };
+        } catch (e: any) {
+          return { error: e.message };
+        }
+      } else {
+        // /config set <key> <value>
+        try {
+          await client.request('config.set', { key: meta.key, value: meta.value });
+          return {};
+        } catch (e: any) {
+          return { error: e.message };
+        }
+      }
+    }
+
+    case 'pair': {
+      try {
+        const result = await client.request('config.get', { key: null });
+        const pairingStr = result.pairing_string || '';
+        const qr = pairingStr ? generateQrCode(pairingStr) : '';
+        const msg =
+          'Server info:\n' +
+          JSON.stringify(result, null, 2) +
+          (qr ? '\n\nScan QR to connect:\n' + qr : '');
+        return { systemMessage: msg };
+      } catch (e: any) {
+        return { error: e.message };
+      }
+    }
+
+    case 'workflow': {
+      // /workflow slash command：转发到服务端 workflow 工具
+      const { action, change_id, args } = meta;
+      try {
+        let result: any;
+        if (action === 'init') {
+          // /workflow init <title>
+          const title = change_id || 'New Roadmap';
+          result = await client.request('tool.call', {
+            name: 'workflow_create',
+            args: { op: 'init', title, description: args.join(' ') || '' },
+          });
+        } else if (action === 'list') {
+          // /workflow list
+          result = await client.request('tool.call', {
+            name: 'workflow_query',
+            args: { op: 'list' },
+          });
+        } else if (action === 'continue' && change_id) {
+          // /workflow continue <change_id> -> phase_next
+          result = await client.request('tool.call', {
+            name: 'workflow_update',
+            args: { op: 'phase_next', change_id },
+          });
+        } else if (['propose', 'plan', 'apply', 'review', 'archive'].includes(action) && change_id) {
+          // /workflow <phase> <change_id> -> phase_set
+          result = await client.request('tool.call', {
+            name: 'workflow_update',
+            args: { op: 'phase_set', change_id, phase: action },
+          });
+        } else {
+          return { error: `usage: /workflow <init|propose|plan|apply|review|archive|continue|list> [change_id]` };
+        }
+        return { systemMessage: 'workflow: ' + JSON.stringify(result, null, 2) };
+      } catch (e: any) {
+        return { error: e.message };
+      }
+    }
+  }
+}

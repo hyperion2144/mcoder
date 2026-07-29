@@ -542,6 +542,28 @@ async fn handle_request(req: JsonRpcRequest, mgr: &Arc<SessionManager>) -> JsonR
             JsonRpcResponse::ok(req.id, serde_json::json!(models))
         }
 
+        // ===== Slash Commands =====
+        // 客户端转发 /xxx 输入到服务端，由服务端解析和分发
+        // 返回 DispatchResult：Meta（结构化指令）/ CustomCommand（提示词）/ Skill（提示词）/ Unknown
+        "command.call" => {
+            let params = req.params.unwrap_or_default();
+            let input = params["input"].as_str().unwrap_or("");
+            if input.is_empty() {
+                return JsonRpcResponse::err(req.id, -1, "missing 'input' field".to_string());
+            }
+            // 去掉前导 /
+            let input = input.strip_prefix('/').unwrap_or(input);
+            match mgr.dispatch_command(input).await {
+                Ok(result) => JsonRpcResponse::ok(req.id, serde_json::json!(result)),
+                Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+            }
+        }
+
+        "command.list" => {
+            let commands = mgr.list_commands().await;
+            JsonRpcResponse::ok(req.id, serde_json::json!(commands))
+        }
+
         // ===== Server =====
         "server.stats" => {
             let stats = mgr.server_stats().await;

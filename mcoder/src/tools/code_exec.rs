@@ -145,7 +145,11 @@ async fn run_code(lang: &str, code: &str, cwd: Option<&str>, stdin: Option<Strin
 
     let (argv0, cmd_args): (String, Vec<String>) = match lang {
         "shell" => {
-            ("bash".to_string(), vec!["-c".to_string(), code.to_string()])
+            // 跨平台：Unix 用 sh -c，Windows 用 cmd /C
+            #[cfg(unix)]
+            { ("sh".to_string(), vec!["-c".to_string(), code.to_string()]) }
+            #[cfg(windows)]
+            { ("cmd".to_string(), vec!["/C".to_string(), code.to_string()]) }
         }
         "python" => {
             let f = tmp_dir.join("exec.py");
@@ -197,7 +201,8 @@ async fn run_code(lang: &str, code: &str, cwd: Option<&str>, stdin: Option<Strin
     // 注意：真正的网络禁用需要 namespace/isolate，这里靠 NO_PROXY 和 unset 网络相关变量
     cmd.env_clear();
     cmd.env("PATH", std::env::var("PATH").unwrap_or_default());
-    cmd.env("HOME", tmp_dir.to_string_lossy().to_string());
+    // 跨平台 home 环境变量：Unix 用 HOME，Windows 用 USERPROFILE
+    cmd.env(crate::utils::shell::HOME_ENV, tmp_dir.to_string_lossy().to_string());
     cmd.env("LANG", "C");
     cmd.env("LC_ALL", "C");
     // 禁用网络相关环境变量

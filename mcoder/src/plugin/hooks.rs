@@ -69,8 +69,8 @@ impl HookHandler for ShellHookHandler {
         let cmd = self.substitute(ctx);
         tracing::debug!("hook '{}' executing: {}", self.name, cmd);
 
-        let output = Command::new("sh")
-            .arg("-c")
+        // 跨平台执行：Unix 用 sh -c，Windows 用 cmd /C
+        let output = crate::utils::shell::shell_command_tokio()
             .arg(&cmd)
             .output()
             .await?;

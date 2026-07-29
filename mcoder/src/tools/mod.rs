@@ -13,6 +13,15 @@ pub mod task;
 pub mod undo;
 pub mod workflow;
 
+// SkillUseTool / SkillListTool：让 LLM 能调用 skill
+// skill 引擎定义在 crate::skills，这里只做工具适配
+pub struct SkillUseTool {
+    pub registry: std::sync::Arc<crate::skills::SkillRegistry>,
+}
+pub struct SkillListTool {
+    pub registry: std::sync::Arc<crate::skills::SkillRegistry>,
+}
+
 use crate::types::{ToolCall, ToolOutput, ToolSchema};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -176,4 +185,82 @@ pub fn build_full_registry() -> (ToolRegistry, Arc<subagent::SubagentTool>) {
     reg.register_all(crate::computer_use::build_computer_use_tools());
 
     (reg, subagent_tool)
+}
+
+// ==================== Skill 工具实现 ====================
+
+#[async_trait]
+impl Tool for SkillUseTool {
+    fn name(&self) -> &str {
+        "skill_use"
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "skill_use".into(),
+            description: "Activate a skill by name. Returns the expanded prompt to guide subsequent actions. Use when the user's request matches a skill's description, or after the user invokes /skill-name.".into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Skill name (e.g. 'tdd', 'commit', 'review')"
+                    },
+                    "args": {
+                        "type": "string",
+                        "description": "Arguments to substitute into the skill template ($ARGUMENTS)"
+                    }
+                },
+                "required": ["name"]
+            }),
+        }
+    }
+
+    async fn execute(&self, args: serde_json::Value, _ctx: &ToolContext) -> Result<ToolOutput> {
+        let name = args.get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing 'name' field"))?;
+        let skill_args = args.get("args")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let prompt = self.registry.activate(name, skill_args).await
+            .map_err(|e| anyhow::anyhow!("skill activation failed: {}", e))?;
+
+        Ok(ToolOutput::Sync {
+            result: serde_json::json!({
+                "skill": name,
+                "prompt": prompt,
+            }),
+        })
+    }
+}
+
+#[async_trait]
+impl Tool for SkillListTool {
+    fn name(&self) -> &str {
+        "skill_list"
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "skill_list".into(),
+            description: "List all available skills with their descriptions.".into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        }
+    }
+
+    async fn execute(&self, _args: serde_json::Value, _ctx: &ToolContext) -> Result<ToolOutput> {
+        let skills = self.registry.list().await;
+        let list: Vec<serde_json::Value> = skills.iter().map(|s| serde_json::json!({
+            "name": s.name,
+            "description": s.description,
+            "user_invocable": s.user_invocable,
+            "disable_model_invocation": s.disable_model_invocation,
+        })).collect();
+        Ok(ToolOutput::Sync { result: serde_json::Value::Array(list) })
+    }
 }

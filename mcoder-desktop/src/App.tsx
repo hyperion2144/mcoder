@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { WsClient } from '@mcoder/shared/rpc/client.js';
 import { useSessionStore, useMessagesStore } from '@mcoder/shared/store/index.js';
-import { findCommand } from '@mcoder/shared/commands/index.js';
+import { dispatchSlashCommand } from '@mcoder/shared/commands/index.js';
 import { parsePairingString } from '@mcoder/shared/utils/pairing.js';
 import type { SessionMeta } from '@mcoder/shared/rpc/types.js';
 import { useDesktopStore } from './store/index.js';
@@ -340,15 +340,11 @@ export function App() {
 
   const handleSlash = async (cmd: string) => {
     if (!client) return;
-    const parts = cmd.slice(1).split(/\s+/);
-    const cmdDef = findCommand(parts[0]);
-    if (!cmdDef) {
-      msgStore.setError(`unknown command: /${parts[0]}`);
-      return;
-    }
+    // 所有 slash command 转发到服务端分发（commands/mod.rs::CommandDispatcher）
     try {
-      const result = await cmdDef.handler(parts.slice(1), client);
+      const result = await dispatchSlashCommand(cmd, client);
       if (result.error) msgStore.setError(result.error);
+      else msgStore.setError(null);
       if (result.systemMessage) {
         msgStore.addMessage({ role: 'system', content: [{ type: 'text', text: result.systemMessage }] });
       }
