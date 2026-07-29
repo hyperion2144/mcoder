@@ -1,0 +1,68 @@
+[workspace]
+members = ["mcoder"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["mcoder contributors"]
+license = "MIT"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "1"
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono"] }
+tokio-tungstenite = "0.23"
+tungstenite = "0.23"
+futures-util = "0.3"
+async-trait = "0.1"
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+tree-sitter = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-javascript = "0.25"
+tree-sitter-python = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-go = "0.25"
+# P2-7: 扩展语言支持（设计文档 §8.4: "扩展到 20+ 语言"）
+tree-sitter-c = "0.23"
+tree-sitter-cpp = "0.23"
+tree-sitter-java = "0.23"
+tree-sitter-ruby = "0.23"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-bash = "0.23"
+tree-sitter-json = "0.23"
+tree-sitter-css = "0.23"
+tree-sitter-html = "0.23"
+qrcode = "0.14"
+dirs = "5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+regex = "1"
+glob = "0.3"
+libc = "0.2"
+serde_yaml = "0.9"
+# M4: wss 支持（设计文档 §8.6）
+tokio-rustls = "0.26"
+rustls = "0.23"
+rustls-pemfile = "2"
+rcgen = "0.13"
+# M4: Let's Encrypt 自动证书（设计文档 §8.6）
+instant-acme = "0.7"
+# M5: 浏览器工具（设计文档 §8.7）
+headless_chrome = "1"
+# M5: Computer Use（设计文档 §8.7）
+enigo = "0.2"
+screenshots = "0.8"
+image = "0.24"
+base64 = "0.22"
+# M4: HTTP 服务器 gzip 压缩
+flate2 = "1"

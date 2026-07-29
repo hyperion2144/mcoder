@@ -1,0 +1,67 @@
+[package]
+name = "mcoder"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "mcoder"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+clap = { workspace = true }
+toml = { workspace = true }
+sqlx = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tungstenite = { workspace = true }
+futures-util = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+sha2 = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-rust = { workspace = true }
+tree-sitter-javascript = { workspace = true }
+tree-sitter-python = { workspace = true }
+tree-sitter-typescript = { workspace = true }
+tree-sitter-go = { workspace = true }
+# P2-7: 扩展语言支持
+tree-sitter-c = { workspace = true }
+tree-sitter-cpp = { workspace = true }
+tree-sitter-java = { workspace = true }
+tree-sitter-ruby = { workspace = true }
+tree-sitter-c-sharp = { workspace = true }
+tree-sitter-bash = { workspace = true }
+tree-sitter-json = { workspace = true }
+tree-sitter-css = { workspace = true }
+tree-sitter-html = { workspace = true }
+qrcode = { workspace = true }
+dirs = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+rusqlite = { workspace = true }
+regex = { workspace = true }
+glob = { workspace = true }
+libc = { workspace = true }
+serde_yaml = { workspace = true }
+# M4: wss 支持（设计文档 §8.6）
+tokio-rustls = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+rcgen = { workspace = true }
+# M4: Let's Encrypt 自动证书
+instant-acme = { workspace = true }
+# M5: 浏览器工具（设计文档 §8.7）
+headless_chrome = { workspace = true }
+# M5: Computer Use（设计文档 §8.7）
+enigo = { workspace = true }
+screenshots = { workspace = true }
+image = { workspace = true }
+base64 = { workspace = true }
+# M4: HTTP 服务器 gzip 压缩
+flate2 = { workspace = true }

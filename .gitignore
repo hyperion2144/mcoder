@@ -1,0 +1,28 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Node
+node_modules
+dist
+.vite
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs & env
+*.log
+.env
+.env.*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# mcoder runtime state
+.mcoder/
+.mcoder-test/

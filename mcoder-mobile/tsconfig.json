@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "outDir": "./dist",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@mcoder/shared/*": ["../mcoder-tui/src/*"]
+    }
+  },
+  "include": ["src/**/*", "../mcoder-tui/src/**/*"],
+  "exclude": [
+    "../mcoder-tui/src/index.tsx",
+    "../mcoder-tui/src/App.tsx",
+    "../mcoder-tui/src/components/**"
+  ]
+}

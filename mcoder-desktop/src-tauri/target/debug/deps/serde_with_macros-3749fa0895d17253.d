@@ -1,0 +1,8 @@
+/Users/mutou/Library/Application Support/TRAE SOLO CN/ModularData/ai-agent/work-mode-projects/6a676c2a6a798443917c5ce7/mcoder-desktop/src-tauri/target/debug/deps/serde_with_macros-3749fa0895d17253.d: /Users/mutou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.21.0/src/lib.rs /Users/mutou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.21.0/src/apply.rs /Users/mutou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.21.0/src/lazy_bool.rs /Users/mutou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.21.0/src/utils.rs
+
+/Users/mutou/Library/Application Support/TRAE SOLO CN/ModularData/ai-agent/work-mode-projects/6a676c2a6a798443917c5ce7/mcoder-desktop/src-tauri/target/debug/deps/libserde_with_macros-3749fa0895d17253.dylib: /Users/mutou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.21.0/src/lib.rs /Users/mutou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.21.0/src/apply.rs /Users/mutou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.21.0/src/lazy_bool.rs /Users/mutou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.21.0/src/utils.rs
+
+/Users/mutou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.21.0/src/lib.rs:
+/Users/mutou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.21.0/src/apply.rs:
+/Users/mutou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.21.0/src/lazy_bool.rs:
+/Users/mutou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.21.0/src/utils.rs:

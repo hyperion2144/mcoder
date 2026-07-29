@@ -1,0 +1,11 @@
+cargo:rerun-if-changed=permissions
+cargo:PERMISSION_FILES_PATH=/Users/mutou/Library/Application Support/TRAE SOLO CN/ModularData/ai-agent/work-mode-projects/6a676c2a6a798443917c5ce7/mcoder-desktop/src-tauri/target/debug/build/tauri-plugin-shell-442b50c81f8c9f0f/out/tauri-plugin-shell-permission-files
+cargo:rerun-if-env-changed=REMOVE_UNUSED_COMMANDS
+cargo:GLOBAL_SCOPE_SCHEMA_PATH=/Users/mutou/Library/Application Support/TRAE SOLO CN/ModularData/ai-agent/work-mode-projects/6a676c2a6a798443917c5ce7/mcoder-desktop/src-tauri/target/debug/build/tauri-plugin-shell-442b50c81f8c9f0f/out/global-scope.json
+cargo:GLOBAL_API_SCRIPT_PATH=/Users/mutou/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-shell-2.3.5/api-iife.js
+cargo:rustc-check-cfg=cfg(mobile)
+cargo:rustc-check-cfg=cfg(desktop)
+cargo:rustc-cfg=desktop
+cargo:rustc-check-cfg=cfg(desktop)
+cargo:rustc-cfg=desktop
+cargo:rustc-check-cfg=cfg(mobile)

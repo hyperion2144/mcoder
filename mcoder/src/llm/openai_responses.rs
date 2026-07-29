@@ -1,0 +1,362 @@
+// 设计文档 §7.2: 流式响应 struct 为 forward-looking scaffolding
+#![allow(dead_code)]
+
+use crate::llm::retry::{self, RetryError};
+use crate::llm::{LLMAdapter, LLMEvent, LLMResponse, Usage};
+use crate::types::{ContentBlock, Message, ModelConfig, ToolCall, ToolSchema};
+use anyhow::{Context, Result};
+use async_trait::async_trait;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+/// OpenAI Responses API adapter (/v1/responses)
+/// New API with structured input/output items, supports built-in tools
+/// and function calling via the same tool schema.
+pub struct OpenAIResponsesAdapter {
+    config: ModelConfig,
+    client: Client,
+}
+
+impl OpenAIResponsesAdapter {
+    pub fn new(config: ModelConfig) -> Self {
+        Self {
+            config,
+            client: Client::new(),
+        }
+    }
+
+    fn build_url(&self) -> String {
+        format!("{}/responses", self.config.base_url.trim_end_matches('/'))
+    }
+
+    fn build_input(messages: &[Message]) -> Vec<ResponseInputItem> {
+        messages
+            .iter()
+            .flat_map(|msg| {
+                let role = match msg.role {
+                    crate::types::Role::User => "user",
+                    crate::types::Role::Assistant => "assistant",
+                    crate::types::Role::System => "developer",
+                    crate::types::Role::Tool => "user",
+                };
+
+                msg.content.iter().filter_map(move |block| {
+                    match block {
+                        ContentBlock::Text { text } => Some(ResponseInputItem {
+                            role: role.to_string(),
+                            content: vec![ResponseContent {
+                                kind: "input_text".to_string(),
+                                text: text.clone(),
+                            }],
+                        }),
+                        ContentBlock::ToolUse { id: _, name, args } => {
+                            Some(ResponseInputItem {
+                                role: "assistant".to_string(),
+                                content: vec![ResponseContent {
+                                    kind: "output_text".to_string(),
+                                    text: format!("{}({})", name, args),
+                                }],
+                            })
+                        }
+                        ContentBlock::ToolResult { id: _, output } => {
+                            let text = match output {
+                                crate::types::ToolOutput::Sync { result } => result.to_string(),
+                                crate::types::ToolOutput::AsyncTask { status_msg, .. } => status_msg.clone(),
+                                crate::types::ToolOutput::Error { message } => format!("Error: {}", message),
+                            };
+                            Some(ResponseInputItem {
+                                role: "user".to_string(),
+                                content: vec![ResponseContent {
+                                    kind: "input_text".to_string(),
+                                    text,
+                                }],
+                            })
+                        }
+                    }
+                })
+            })
+            .collect()
+    }
+
+    fn build_tools(tools: &[ToolSchema]) -> Vec<ResponsesTool> {
+        tools
+            .iter()
+            .map(|t| ResponsesTool {
+                kind: "function".to_string(),
+                name: t.name.clone(),
+                description: Some(t.description.clone()),
+                parameters: Some(t.parameters.clone()),
+            })
+            .collect()
+    }
+}
+
+#[async_trait]
+impl LLMAdapter for OpenAIResponsesAdapter {
+    fn name(&self) -> &str {
+        "openai"
+    }
+
+    async fn chat(
+        &self,
+        messages: &[Message],
+        tools: &[ToolSchema],
+        config: &ModelConfig,
+    ) -> Result<LLMResponse> {
+        let body = ResponsesRequest {
+            model: config.name.clone(),
+            input: Self::build_input(messages),
+            tools: if tools.is_empty() { None } else { Some(Self::build_tools(tools)) },
+            temperature: config.temperature,
+            max_output_tokens: config.max_tokens,
+            stream: false,
+        };
+        let body_value = serde_json::to_value(&body).context("serializing OpenAI Responses request")?;
+        let url = self.build_url();
+        let api_key = self.config.api_key.clone();
+        let client = self.client.clone();
+
+        retry::with_retry(move || {
+            let client = client.clone();
+            let url = url.clone();
+            let api_key = api_key.clone();
+            let body_value = body_value.clone();
+            async move {
+                let resp = client
+                    .post(&url)
+                    .bearer_auth(&api_key)
+                    .json(&body_value)
+                    .send()
+                    .await
+                    .map_err(RetryError::from)?;
+
+                if !resp.status().is_success() {
+                    let status = resp.status().as_u16();
+                    let retry_after_secs = retry::parse_retry_after(resp.headers());
+                    let text = resp.text().await.unwrap_or_default();
+                    return Err(RetryError::HttpStatus {
+                        status,
+                        body: text,
+                        retry_after_secs,
+                    });
+                }
+
+                let data: ResponsesApiResponse = resp
+                    .json()
+                    .await
+                    .map_err(RetryError::from)?;
+
+                let mut content = String::new();
+                let mut tool_calls = Vec::new();
+
+                for item in data.output.unwrap_or_default() {
+                    match item.kind.as_str() {
+                        "message" => {
+                            if let Some(content_items) = &item.content {
+                                for c in content_items {
+                                    if c.kind == "output_text" {
+                                        content.push_str(&c.text);
+                                    }
+                                }
+                            }
+                        }
+                        "function_call" => {
+                            let args: Value = serde_json::from_str(&item.arguments.clone().unwrap_or_default())
+                                .unwrap_or_else(|_| serde_json::json!({}));
+                            tool_calls.push(ToolCall {
+                                id: item.call_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                                name: item.name.clone().unwrap_or_default(),
+                                args,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+
+                Ok(LLMResponse {
+                    content: if content.is_empty() { None } else { Some(content) },
+                    tool_calls,
+                    usage: data.usage.map(|u| Usage {
+                        prompt_tokens: u.input_tokens,
+                        completion_tokens: u.output_tokens,
+                        total_tokens: u.total_tokens,
+                    }),
+                })
+            }
+        })
+        .await
+    }
+
+    async fn chat_stream(
+        &self,
+        messages: &[Message],
+        tools: &[ToolSchema],
+        config: &ModelConfig,
+        tx: tokio::sync::mpsc::Sender<LLMEvent>,
+    ) -> Result<()> {
+        // Responses API streaming uses SSE with event types
+        let body = ResponsesRequest {
+            model: config.name.clone(),
+            input: Self::build_input(messages),
+            tools: if tools.is_empty() { None } else { Some(Self::build_tools(tools)) },
+            temperature: config.temperature,
+            max_output_tokens: config.max_tokens,
+            stream: true,
+        };
+
+        let resp = self
+            .client
+            .post(self.build_url())
+            .bearer_auth(&self.config.api_key)
+            .json(&body)
+            .send()
+            .await
+            .context("sending OpenAI Responses stream request")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("OpenAI Responses API error {}: {}", status, text);
+        }
+
+        use futures_util::StreamExt;
+        let mut stream = resp.bytes_stream();
+        let mut buffer = String::new();
+        let mut full_content = String::new();
+        let mut tool_calls: Vec<ToolCall> = Vec::new();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(pos) = buffer.find('\n') {
+                let line = buffer[..pos].trim().to_string();
+                buffer.drain(..=pos);
+
+                if line.is_empty() || !line.starts_with("data: ") {
+                    continue;
+                }
+
+                let data = line.trim_start_matches("data: ").trim();
+                if data == "[DONE]" {
+                    break;
+                }
+
+                if let Ok(event) = serde_json::from_str::<ResponsesStreamEvent>(data) {
+                    match event.kind.as_str() {
+                        "response.output_text.delta" => {
+                            if let Some(delta) = event.delta {
+                                full_content.push_str(&delta);
+                                let _ = tx.send(LLMEvent::ContentDelta(delta)).await;
+                            }
+                        }
+                        "response.function_call_arguments.delta" => {
+                            // accumulate tool call args
+                        }
+                        "response.output_item.done" => {
+                            if let Some(item) = event.item {
+                                if item.kind == "function_call" {
+                                    let args: Value = serde_json::from_str(&item.arguments.clone().unwrap_or_default())
+                                        .unwrap_or_else(|_| serde_json::json!({}));
+                                    let tc = ToolCall {
+                                        id: item.call_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                                        name: item.name.clone().unwrap_or_default(),
+                                        args,
+                                    };
+                                    tool_calls.push(tc.clone());
+                                    let _ = tx.send(LLMEvent::ToolCallDone(tc)).await;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        let _ = tx
+            .send(LLMEvent::Done(LLMResponse {
+                content: if full_content.is_empty() { None } else { Some(full_content) },
+                tool_calls,
+                usage: None,
+            }))
+            .await;
+
+        Ok(())
+    }
+}
+
+#[derive(Serialize)]
+struct ResponsesRequest {
+    model: String,
+    input: Vec<ResponseInputItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<ResponsesTool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_output_tokens: Option<u32>,
+    stream: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ResponseInputItem {
+    role: String,
+    content: Vec<ResponseContent>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ResponseContent {
+    #[serde(rename = "type")]
+    kind: String,
+    text: String,
+}
+
+#[derive(Serialize)]
+struct ResponsesTool {
+    #[serde(rename = "type")]
+    kind: String,
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parameters: Option<Value>,
+}
+
+#[derive(Deserialize)]
+struct ResponsesApiResponse {
+    output: Option<Vec<ResponsesOutputItem>>,
+    usage: Option<ResponsesUsage>,
+}
+
+#[derive(Deserialize)]
+struct ResponsesOutputItem {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    content: Option<Vec<ResponseContent>>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    call_id: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ResponsesUsage {
+    input_tokens: u32,
+    output_tokens: u32,
+    total_tokens: u32,
+}
+
+#[derive(Deserialize)]
+struct ResponsesStreamEvent {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    delta: Option<String>,
+    #[serde(default)]
+    item: Option<ResponsesOutputItem>,
+}
