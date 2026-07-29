@@ -10,6 +10,7 @@ use crate::persistence::jsonl::{JsonlSession, SessionMeta};
 use crate::plugin::PluginManager;
 use crate::tools::ToolRegistry;
 use crate::types::{AppConfig, CancellationToken, ContentBlock, Message, ModelConfig, Role};
+use crate::workflow::extract_spawn_subagent;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -883,7 +884,7 @@ impl SessionManager {
                         };
 
                         let success = result.is_ok();
-                        if let Ok(result_msg) = result {
+                        if let Ok(result_msg) = &result {
                             // 检查是否是 AsyncTask 返回
                             let is_async = result_msg.content.iter().any(|b| {
                                 matches!(b, ContentBlock::ToolResult { output, .. } if matches!(output, crate::types::ToolOutput::AsyncTask { .. }))
@@ -891,11 +892,50 @@ impl SessionManager {
 
                             let _ = self.event_tx.send(ServerEvent::Message {
                                 session_id: session_id.to_string(),
-                                message: result_msg,
+                                message: result_msg.clone(),
                             });
 
                             if is_async {
                                 tracing::info!("tool {} returned AsyncTask, agent can continue while it runs in background", tc.name);
+                            }
+
+                            // 自动调度子代理：workflow_update phase_next 返回 spawn_subagent 时
+                            // 自动构造 subagent 工具调用并执行，无需 LLM 主动调用
+                            if tc.name == "workflow_update" {
+                                if let Some(spawn) = extract_spawn_subagent(result_msg) {
+                                    tracing::info!(
+                                        "auto-spawning subagent (role={}) for change {} phase {}",
+                                        spawn.role, spawn.change_id, spawn.phase
+                                    );
+                                    let subagent_call = crate::types::ToolCall {
+                                        id: uuid::Uuid::new_v4().to_string(),
+                                        name: "subagent".into(),
+                                        args: serde_json::json!({
+                                            "op": "spawn",
+                                            "role": spawn.role,
+                                            "task": spawn.prompt,
+                                        }),
+                                    };
+                                    let _ = self.event_tx.send(ServerEvent::ToolCallStart {
+                                        session_id: session_id.to_string(),
+                                        name: "subagent".into(),
+                                    });
+                                    let sub_result = {
+                                        let mut agent = entry.session.lock().await;
+                                        agent.execute_tool(&subagent_call, &ctx).await
+                                    };
+                                    let _ = self.event_tx.send(ServerEvent::ToolCallDone {
+                                        session_id: session_id.to_string(),
+                                        name: "subagent".into(),
+                                        success: sub_result.is_ok(),
+                                    });
+                                    if let Ok(sub_msg) = sub_result {
+                                        let _ = self.event_tx.send(ServerEvent::Message {
+                                            session_id: session_id.to_string(),
+                                            message: sub_msg,
+                                        });
+                                    }
+                                }
                             }
                         }
 

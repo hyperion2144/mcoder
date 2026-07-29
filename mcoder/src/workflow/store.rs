@@ -1,9 +1,9 @@
-// SQLite CRUD 方法 + 序列编号体系
+// SQLite CRUD 方法 + 序列编号体系 + 文件系统 artifact 存储
 use anyhow::Result;
 use rusqlite::params;
 
 use super::types::{ImplStatus, ReviewVerdict, WorkflowPhase, WorkflowProfile};
-use super::WorkflowStore;
+use super::{ArtifactType, WorkflowStore};
 
 impl WorkflowStore {
     /// 从 counters 表取下一个序列号，返回 "前缀-N" 格式的 ID
@@ -370,6 +370,32 @@ impl WorkflowStore {
         Ok(result)
     }
 
+    /// 查询 tasks（含 impl_status 字段），返回五元组
+    /// 用于 tasks_full 查询 op，补全 impl_status 读取路径
+    pub fn get_tasks_with_impl(
+        &self,
+        change_id: &str,
+    ) -> Result<Vec<(String, String, String, u32, Option<String>)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, title, status, sort_order, impl_status FROM tasks WHERE change_id = ?1 ORDER BY sort_order",
+        )?;
+        let rows = stmt.query_map(params![change_id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
     // ============ P2: 补全查询和更新方法 ============
 
     /// 查询 change 关联的所有 spec，返回 (id, title, content, tdd)
@@ -442,6 +468,118 @@ impl WorkflowStore {
             "UPDATE specs SET content = ?1 WHERE id = ?2",
             params![content, spec_id],
         )?;
+        Ok(())
+    }
+
+    // ============ 文件系统存储方法 ============
+    // artifact content 走文件系统（<project>/.mcoder/workflow/），SQLite 只存元数据
+
+    /// workflow 文件系统根目录
+    fn workflow_dir(&self) -> std::path::PathBuf {
+        self.project_dir.join(".mcoder").join("workflow")
+    }
+
+    /// change 目录路径
+    fn change_dir(&self, change_name: &str) -> std::path::PathBuf {
+        self.workflow_dir().join("changes").join(change_name)
+    }
+
+    /// 读取 artifact 文件内容
+    pub fn read_artifact(&self, change_name: &str, artifact_type: &ArtifactType) -> Result<Option<String>> {
+        let path = self.change_dir(change_name).join(artifact_type.relative_path());
+        if !path.exists() {
+            return Ok(None);
+        }
+        let content = std::fs::read_to_string(&path)?;
+        Ok(Some(content))
+    }
+
+    /// 写入 artifact 文件内容
+    pub fn write_artifact(
+        &self,
+        change_name: &str,
+        artifact_type: &ArtifactType,
+        content: &str,
+    ) -> Result<()> {
+        let path = self.change_dir(change_name).join(artifact_type.relative_path());
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, content)?;
+        Ok(())
+    }
+
+    /// 列出活跃变更（changes/ 下的目录名，排除 archive）
+    pub fn list_changes(&self) -> Result<Vec<String>> {
+        let changes_dir = self.workflow_dir().join("changes");
+        if !changes_dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut changes = Vec::new();
+        for entry in std::fs::read_dir(&changes_dir)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name != "archive" {
+                    changes.push(name);
+                }
+            }
+        }
+        changes.sort();
+        Ok(changes)
+    }
+
+    /// 归档变更：移动到 changes/archive/<date>-<name>/
+    pub fn archive_change(&self, change_name: &str) -> Result<()> {
+        let src = self.change_dir(change_name);
+        if !src.exists() {
+            return Err(anyhow::anyhow!("change directory not found: {}", change_name));
+        }
+        let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let dest = self
+            .workflow_dir()
+            .join("changes")
+            .join("archive")
+            .join(format!("{}-{}", date, change_name));
+        std::fs::rename(&src, &dest)?;
+        Ok(())
+    }
+
+    /// 读取全局 spec（specs/<domain>/spec.md）
+    pub fn read_global_spec(&self, domain: &str) -> Result<Option<String>> {
+        let path = self.workflow_dir().join("specs").join(domain).join("spec.md");
+        if !path.exists() {
+            return Ok(None);
+        }
+        let content = std::fs::read_to_string(&path)?;
+        Ok(Some(content))
+    }
+
+    /// 写入全局 spec（specs/<domain>/spec.md）
+    pub fn write_global_spec(&self, domain: &str, content: &str) -> Result<()> {
+        let path = self.workflow_dir().join("specs").join(domain).join("spec.md");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, content)?;
+        Ok(())
+    }
+
+    /// delta spec merge：将 change 的 delta spec 合并到全局 spec
+    pub fn merge_delta_spec(&self, change_name: &str, domain: &str) -> Result<()> {
+        let delta_spec = self
+            .read_artifact(change_name, &ArtifactType::DeltaSpec(domain.to_string()))?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "delta spec not found for change {} domain {}",
+                    change_name,
+                    domain
+                )
+            })?;
+        let global_spec = self.read_global_spec(domain)?.unwrap_or_default();
+        let merged = super::delta_merge::merge_delta_spec(&delta_spec, &global_spec)?;
+        self.write_global_spec(domain, &merged)?;
         Ok(())
     }
 }

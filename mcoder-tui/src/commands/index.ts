@@ -35,7 +35,7 @@ export type MetaCommandResult =
   | { type: 'pair' }
   | { type: 'exit' }
   | { type: 'help' }
-  | { type: 'workflow'; action: string; change_id: string | null; args: string[] };
+  | { type: 'workflow'; action: string; change_id: string | null; args: string[]; prompt: string };
 
 /// 客户端处理结果：告诉调用方需要做什么 UI 动作
 export interface CommandResult {
@@ -316,8 +316,13 @@ async function handleMetaCommand(
     }
 
     case 'workflow': {
-      // /workflow slash command：转发到服务端 workflow 工具
-      const { action, change_id, args } = meta;
+      // /workflow slash command
+      const { action, change_id, args, prompt } = meta;
+      // prompt 非空时直接注入为 system message，让 agent 执行编排步骤
+      if (prompt) {
+        return { systemMessage: prompt };
+      }
+      // list/init 等无 prompt 的命令，走原有的工具调用逻辑
       try {
         let result: any;
         if (action === 'init') {

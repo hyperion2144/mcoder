@@ -158,14 +158,14 @@ impl Tool for WorkflowQueryTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "workflow_query".into(),
-            description: "Query workflow entities. op=roadmaps|milestones|changes|tasks|proposals|designs|specs|reviews|list. Returns lists of entities.".into(),
+            description: "Query workflow entities. op=roadmaps|milestones|changes|tasks|tasks_full|proposals|designs|specs|reviews|list. Returns lists of entities.".into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "op": { "type": "string", "enum": ["roadmaps", "milestones", "changes", "tasks", "proposals", "designs", "specs", "reviews", "list"] },
+                    "op": { "type": "string", "enum": ["roadmaps", "milestones", "changes", "tasks", "tasks_full", "proposals", "designs", "specs", "reviews", "list"] },
                     "roadmap_id": { "type": "string", "description": "milestones: parent roadmap id" },
                     "milestone_id": { "type": "string", "description": "changes: parent milestone id" },
-                    "change_id": { "type": "string", "description": "tasks/proposals/designs/specs/reviews: parent change id" }
+                    "change_id": { "type": "string", "description": "tasks/tasks_full/proposals/designs/specs/reviews: parent change id" }
                 },
                 "required": ["op"]
             }),
@@ -207,6 +207,16 @@ impl Tool for WorkflowQueryTool {
                 let list = ctx.workflow.get_tasks(&change_id)?;
                 let arr: Vec<_> = list.into_iter().map(|(id, title, status, order)| {
                     serde_json::json!({ "id": id, "title": title, "status": status, "order": order })
+                }).collect();
+                Ok(ToolOutput::Sync { result: serde_json::json!({ "tasks": arr }) })
+            }
+            "tasks_full" => {
+                // 含 impl_status 字段的完整 task 查询
+                let change_id: String = serde_json::from_value(args["change_id"].clone())
+                    .context("change_id required for tasks_full")?;
+                let list = ctx.workflow.get_tasks_with_impl(&change_id)?;
+                let arr: Vec<_> = list.into_iter().map(|(id, title, status, order, impl_status)| {
+                    serde_json::json!({ "id": id, "title": title, "status": status, "order": order, "impl_status": impl_status })
                 }).collect();
                 Ok(ToolOutput::Sync { result: serde_json::json!({ "tasks": arr }) })
             }
@@ -267,7 +277,7 @@ impl Tool for WorkflowQueryTool {
                 }
                 Ok(ToolOutput::Sync { result: serde_json::json!({ "roadmaps": arr }) })
             }
-            other => anyhow::bail!("unknown op: {} (use roadmaps|milestones|changes|tasks|proposals|designs|specs|reviews|list)", other),
+            other => anyhow::bail!("unknown op: {} (use roadmaps|milestones|changes|tasks|tasks_full|proposals|designs|specs|reviews|list)", other),
         }
     }
 }
@@ -339,7 +349,17 @@ impl Tool for WorkflowUpdateTool {
                     "hint": hint
                 });
 
-                // P3: TDD 强制 — 进入 apply 阶段且 spec.tdd=true 时，注入 tdd_warning
+                // 注入 spawn_subagent 字段：agent loop 检测到此字段会自动调度子代理
+                if let Some(spawn_hint) = crate::workflow::WorkflowOrchestrator::schedule_for_phase(next, &change_id) {
+                    result["spawn_subagent"] = serde_json::json!({
+                        "role": spawn_hint.role,
+                        "change_id": spawn_hint.change_id,
+                        "phase": spawn_hint.phase,
+                        "prompt": spawn_hint.prompt,
+                    });
+                }
+
+                // P3: TDD 强制 - 进入 apply 阶段且 spec.tdd=true 时，注入 tdd_warning
                 if next == crate::workflow::WorkflowPhase::Apply {
                     if let Ok(Some(spec)) = ctx.workflow.get_spec_for_change(&change_id) {
                         if spec.3 {

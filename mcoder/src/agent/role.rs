@@ -175,7 +175,7 @@ impl RoleRegistry {
         // planner: 规划阶段子代理，只读 + 创建 spec/plan
         self.register(Role {
             name: "planner".into(),
-            system_prompt: "You are a PLANNER sub-agent. Read the codebase, understand requirements, and produce a structured spec/plan via workflow_create (op=spec) and plan_create. Do NOT modify code. Call subagent op=done with the spec/plan id when finished.".into(),
+            system_prompt: crate::workflow::prompts::PLANNER_PROMPT.into(),
             model: None,
             allowed_tools: vec![
                 "read".into(), "read_more".into(), "read_full".into(), "read_original".into(),
@@ -195,7 +195,7 @@ impl RoleRegistry {
         // executor: 执行阶段子代理，可读写 + 运行代码
         self.register(Role {
             name: "executor".into(),
-            system_prompt: "You are an EXECUTOR sub-agent. Implement the approved plan/spec. Use edit/write/bash/code_exec to make changes. Track progress via plan_update. Call subagent op=done with a summary of changes when finished.".into(),
+            system_prompt: crate::workflow::prompts::EXECUTOR_PROMPT.into(),
             model: None,
             allowed_tools: vec![], // 全部工具
             max_tokens: None,
@@ -207,7 +207,7 @@ impl RoleRegistry {
         // reviewer: 审查阶段子代理，只读 + 生成 review artifact
         self.register(Role {
             name: "reviewer".into(),
-            system_prompt: "You are a REVIEWER sub-agent. Read the changes made by the executor, verify correctness against the spec, and produce a review via workflow_create (op=implementation, description=review summary). Do NOT modify code. Call subagent op=done with the review verdict (approved/rejected + reasons).".into(),
+            system_prompt: crate::workflow::prompts::REVIEWER_PROMPT.into(),
             model: None,
             allowed_tools: vec![
                 "read".into(), "read_more".into(), "read_full".into(), "read_original".into(),
