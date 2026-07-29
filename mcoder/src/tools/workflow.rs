@@ -1,6 +1,7 @@
 use crate::tools::Tool;
 use crate::tools::ToolContext;
 use crate::types::{ToolOutput, ToolSchema};
+use crate::workflow::ArtifactType;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -97,7 +98,13 @@ impl Tool for WorkflowCreateTool {
                 let content: String = serde_json::from_value(args["content"].clone())
                     .context("content required for spec")?;
                 let tdd = args["tdd"].as_bool().unwrap_or(false);
-                ctx.workflow.create_spec(&change_id, &title, &content, tdd)?
+                let id = ctx.workflow.create_spec(&change_id, &title, &content, tdd)?;
+                ctx.workflow.write_artifact(
+                    &change_id,
+                    &ArtifactType::DeltaSpec(title.clone()),
+                    &content,
+                )?;
+                id
             }
             "task" => {
                 let change_id: String = serde_json::from_value(args["change_id"].clone())
@@ -117,14 +124,18 @@ impl Tool for WorkflowCreateTool {
                     .context("change_id required for proposal")?;
                 let content: String = serde_json::from_value(args["content"].clone())
                     .context("content required for proposal")?;
-                ctx.workflow.create_proposal(&change_id, &title, &content)?
+                let id = ctx.workflow.create_proposal(&change_id, &title, &content)?;
+                ctx.workflow.write_artifact(&change_id, &ArtifactType::Proposal, &content)?;
+                id
             }
             "design" => {
                 let change_id: String = serde_json::from_value(args["change_id"].clone())
                     .context("change_id required for design")?;
                 let content: String = serde_json::from_value(args["content"].clone())
                     .context("content required for design")?;
-                ctx.workflow.create_design(&change_id, &title, &content)?
+                let id = ctx.workflow.create_design(&change_id, &title, &content)?;
+                ctx.workflow.write_artifact(&change_id, &ArtifactType::Design, &content)?;
+                id
             }
             "review" => {
                 let change_id: String = serde_json::from_value(args["change_id"].clone())

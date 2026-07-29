@@ -317,42 +317,20 @@ async function handleMetaCommand(
 
     case 'workflow': {
       // /workflow slash command
-      const { action, change_id, args, prompt } = meta;
+      const { action, prompt } = meta;
       // prompt 非空时直接注入为 system message，让 agent 执行编排步骤
       if (prompt) {
         return { systemMessage: prompt };
       }
-      // list/init 等无 prompt 的命令，走原有的工具调用逻辑
+      // 仅 list 没有编排 prompt，直接查询工作流概览。
+      if (action !== 'list') {
+        return { error: `workflow action ${action} did not return an orchestration prompt` };
+      }
       try {
-        let result: any;
-        if (action === 'init') {
-          // /workflow init <title>
-          const title = change_id || 'New Roadmap';
-          result = await client.request('tool.call', {
-            name: 'workflow_create',
-            args: { op: 'init', title, description: args.join(' ') || '' },
-          });
-        } else if (action === 'list') {
-          // /workflow list
-          result = await client.request('tool.call', {
-            name: 'workflow_query',
-            args: { op: 'list' },
-          });
-        } else if (action === 'continue' && change_id) {
-          // /workflow continue <change_id> -> phase_next
-          result = await client.request('tool.call', {
-            name: 'workflow_update',
-            args: { op: 'phase_next', change_id },
-          });
-        } else if (['propose', 'plan', 'apply', 'review', 'archive'].includes(action) && change_id) {
-          // /workflow <phase> <change_id> -> phase_set
-          result = await client.request('tool.call', {
-            name: 'workflow_update',
-            args: { op: 'phase_set', change_id, phase: action },
-          });
-        } else {
-          return { error: `usage: /workflow <init|propose|plan|apply|review|archive|continue|list> [change_id]` };
-        }
+        const result = await client.request('tool.call', {
+          name: 'workflow_query',
+          args: { op: 'list' },
+        });
         return { systemMessage: 'workflow: ' + JSON.stringify(result, null, 2) };
       } catch (e: any) {
         return { error: e.message };

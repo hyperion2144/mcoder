@@ -202,12 +202,14 @@ pub fn parse_meta_command(name: &str, args: &[&str]) -> Result<MetaCommandResult
                     "usage: /workflow <init|propose|plan|apply|review|archive|continue|list> [change_id]"
                 );
             }
-            let change_id = args.get(1).map(|s| s.to_string());
-            let rest: Vec<String> = args
-                .get(2..)
-                .unwrap_or(&[])
+            let workflow_args = args.get(1..).unwrap_or(&[]);
+            let change_id_index = workflow_args.iter().position(|arg| *arg != "--fix");
+            let change_id = change_id_index.map(|index| workflow_args[index].to_string());
+            let rest: Vec<String> = workflow_args
                 .iter()
-                .map(|s| s.to_string())
+                .enumerate()
+                .filter(|(index, _)| Some(*index) != change_id_index)
+                .map(|(_, arg)| arg.to_string())
                 .collect();
             let prompt = workflow_prompt(action, change_id.as_deref());
             Ok(MetaCommandResult::Workflow {
