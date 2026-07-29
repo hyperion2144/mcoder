@@ -1,5 +1,6 @@
 # Rust
 /target
+**/target
 **/*.rs.bk
 Cargo.lock.bak
 
@@ -7,6 +8,9 @@ Cargo.lock.bak
 node_modules
 dist
 .vite
+
+# Tauri generated
+mcoder-desktop/src-tauri/gen/schemas/
 
 # OS
 .DS_Store

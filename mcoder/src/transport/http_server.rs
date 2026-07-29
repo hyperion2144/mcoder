@@ -138,10 +138,17 @@ async fn handle_connection_loop(
         // 路由分发
         let response = if path.starts_with("/.well-known/acme-challenge/") {
             handle_acme_challenge(path, &config).await
-        } else if path == "/api/pairing" {
+        } else if path == "/api/pairing" && method == "GET" {
             // P0-1: /api/pairing 不再返回完整 pairing_string（含 token）
             // 仅返回非敏感信息，token 通过带外方式（QR 码、终端显示）传递
             handle_pairing_api(&config)
+        } else if path == "/api/shutdown" && method == "POST" {
+            // 优雅关闭：返回 200 后异步退出进程
+            let resp = HttpResponse::new(200, "application/json", b"{\"ok\":true}".to_vec(), false);
+            // 在发送响应后退出
+            send_response_full(&mut stream, resp, false, &accept_encoding).await?;
+            tracing::info!("shutdown requested via HTTP /api/shutdown, exiting...");
+            std::process::exit(0);
         } else if method == "GET" {
             serve_static_file(path, &config, &accept_encoding).await
         } else {

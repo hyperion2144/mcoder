@@ -49,13 +49,19 @@ enum Commands {
         /// Web 客户端静态文件目录
         #[arg(long)]
         web_dir: Option<String>,
+        /// 后台守护进程模式（detach）：server 在后台运行，日志写入 ~/.mcoder/mcoder.log
+        #[arg(long)]
+        detach: bool,
     },
-    /// Start TUI client (connects to a running server)
+    /// Start TUI client. Auto-starts a local server if none is running.
     Tui {
         #[arg(long, default_value = "ws://127.0.0.1:7654")]
         url: String,
         #[arg(long)]
         token: Option<String>,
+        /// 不要自动拉起 server（仅连接已运行的实例）
+        #[arg(long)]
+        no_spawn: bool,
     },
     /// Show pairing info (QR code + URL)
     Pair {
@@ -66,6 +72,13 @@ enum Commands {
     },
     /// List sessions
     Sessions,
+    /// Stop a running daemon server
+    Stop {
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long, default_value_t = 7654)]
+        port: u16,
+    },
 }
 
 /// 启动 server 的共享逻辑：返回 (WsServer, AppConfig, project_dir)
@@ -277,7 +290,7 @@ async fn start_server_full(
 
 /// 设计文档 §1.1 / §6.13: 嵌入式模式
 /// `mcoder` 命令（无 subcommand）= fork server + 启动 TUI
-/// `mcoder tui` = 仅启动 TUI（连接已运行的 server）
+/// `mcoder tui` = 启动 TUI（若本地 server 未运行则自动拉起）
 fn spawn_tui_process(url: &str, token: &str) -> anyhow::Result<std::process::Child> {
     // 优先使用 bundled 的 mcoder-tui（dist/index.js）
     // 退回到全局安装的 mcoder-tui
@@ -307,6 +320,153 @@ fn spawn_tui_process(url: &str, token: &str) -> anyhow::Result<std::process::Chi
         }
     }
     anyhow::bail!("failed to spawn TUI process; install with `npm i -g @mcoder/tui` or run `npm run build` in mcoder-tui/")
+}
+
+/// 从 ws://host:port URL 中解析 (host, port)
+fn parse_ws_url(url: &str) -> Option<(String, u16)> {
+    let url = url.strip_prefix("ws://").or_else(|| url.strip_prefix("wss://"))?;
+    let url = url.split('?').next().unwrap_or(url);
+    let url = url.strip_prefix('/').unwrap_or(url);
+    let (host, port_str) = url.rsplit_once(':')?;
+    let port: u16 = port_str.parse().ok()?;
+    Some((host.to_string(), port))
+}
+
+/// 检测 server 是否在运行（尝试 TCP 连接）
+async fn is_server_running(host: &str, port: u16) -> bool {
+    use std::net::ToSocketAddrs;
+    let addr = format!("{}:{}", host, port);
+    let addrs: Vec<_> = match addr.to_socket_addrs() {
+        Ok(a) => a.collect(),
+        Err(_) => return false,
+    };
+    for addr in addrs {
+        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
+/// server 锁文件路径：~/.mcoder/server.lock
+fn server_lock_path() -> std::path::PathBuf {
+    crate::config::global_config_dir().join("server.lock")
+}
+
+/// 读取锁文件中的 PID（如果文件存在且进程存活）
+fn read_lock_pid() -> Option<u32> {
+    let path = server_lock_path();
+    let content = std::fs::read_to_string(&path).ok()?;
+    let pid: u32 = content.trim().parse().ok()?;
+    // 检查进程是否存活：kill(pid, 0) 返回 0 表示进程存在
+    if pid > 0 && unsafe { libc::kill(pid as i32, 0) } == 0 {
+        Some(pid)
+    } else {
+        // 进程已死，清理锁文件
+        let _ = std::fs::remove_file(&path);
+        None
+    }
+}
+
+/// 尝试获取 server 锁（原子创建锁文件）
+/// 成功返回 true，失败（锁已被持有）返回 false
+fn try_acquire_server_lock() -> bool {
+    let path = server_lock_path();
+    let parent = path.parent().unwrap_or(std::path::Path::new("."));
+    let _ = std::fs::create_dir_all(parent);
+
+    // 原子创建：O_CREAT | O_EXCL 确保只有一个进程能创建
+    use std::os::unix::fs::OpenOptionsExt;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)  // O_CREAT | O_EXCL
+        .mode(0o644)
+        .open(&path)
+    {
+        Ok(mut f) => {
+            use std::io::Write;
+            let _ = write!(f, "{}", std::process::id());
+            true
+        }
+        Err(_) => {
+            // 锁文件已存在——检查持有者是否存活
+            read_lock_pid().is_none()  // 进程已死 → 锁已释放，可以重试
+        }
+    }
+}
+
+/// 释放 server 锁（删除锁文件）
+fn release_server_lock() {
+    let _ = std::fs::remove_file(server_lock_path());
+}
+
+/// 以守护进程方式启动 server（fork + detach）
+/// 父进程立即退出，子进程在后台运行，日志写入 log_path
+fn spawn_detached_server(host: &str, port: u16) -> anyhow::Result<u32> {
+    let exe = std::env::current_exe()?;
+    let log_dir = crate::config::global_config_dir();
+    std::fs::create_dir_all(&log_dir)?;
+    let log_path = log_dir.join("mcoder.log");
+
+    // 以 nohup 风格 fork：子进程 setsid + 重定向 stdin/stdout/stderr
+    use std::os::unix::process::CommandExt;
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.arg("server")
+        .arg("--host").arg(host)
+        .arg("--port").arg(port.to_string())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(log_file.try_clone()?))
+        .stderr(std::process::Stdio::from(log_file));
+
+    // before_exec: setsid 脱离控制终端
+    unsafe {
+        cmd.pre_exec(|| {
+            // 创建新会话
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let child = cmd.spawn()?;
+    let pid = child.id();
+    // 父进程立即退出，子进程被 init 收养
+    std::mem::forget(child);
+    Ok(pid)
+}
+
+/// 等待 server 就绪（最多 10 秒）
+async fn wait_for_server(host: &str, port: u16) -> bool {
+    for _ in 0..50 {
+        if is_server_running(host, port).await {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    false
+}
+
+/// 向运行中的 server 发送 shutdown 请求
+async fn stop_server(host: &str, port: u16) -> anyhow::Result<()> {
+    let url = format!("http://{}:{}/api/shutdown", host, port + 1);
+    let client = reqwest::Client::new();
+    let resp = client.post(&url).send().await;
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            // 等待进程退出后清理锁文件
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            release_server_lock();
+            Ok(())
+        }
+        Ok(r) => anyhow::bail!("server responded with {}", r.status()),
+        Err(e) => anyhow::bail!("cannot connect to server at {}: {}", url, e),
+    }
 }
 
 #[tokio::main]
@@ -354,33 +514,148 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
 
-        Some(Commands::Server { host, port, domain, email, http_port, web_dir }) => {
-            let (server, _config, _project_dir) = start_server_full(
+        Some(Commands::Server { host, port, domain, email, http_port, web_dir, detach }) => {
+            // --detach: 守护进程模式，fork 子进程后父进程立即退出
+            if detach {
+                // 检查是否已有 server 在运行
+                if is_server_running(&host, port).await {
+                    println!("server already running at {}:{}", host, port);
+                    return Ok(());
+                }
+                let pid = spawn_detached_server(&host, port)?;
+                // 等待子进程就绪
+                if wait_for_server(&host, port).await {
+                    println!("mcoder server started in background (pid: {})", pid);
+                    println!("logs: {}/mcoder.log", crate::config::global_config_dir().display());
+                    println!("stop with: mcoder stop --port {}", port);
+                } else {
+                    eprintln!("warning: server may not have started; check logs at ~/.mcoder/mcoder.log");
+                }
+                return Ok(());
+            }
+
+            // 前台模式：获取锁后启动
+            if !try_acquire_server_lock() {
+                if is_server_running(&host, port).await {
+                    eprintln!("server already running at {}:{}", host, port);
+                    return Ok(());
+                }
+                anyhow::bail!("cannot acquire server lock (another instance may be starting); remove ~/.mcoder/server.lock if stale");
+            }
+
+            let result = start_server_full(
                 &host,
                 port,
                 domain.as_deref(),
                 email.as_deref(),
                 http_port,
                 web_dir.as_deref(),
-            ).await?;
+            ).await;
 
-            // keep running
-            tokio::signal::ctrl_c().await?;
-            println!("\nshutting down...");
-            let _ = server;
-            Ok(())
+            match result {
+                Ok((server, _config, _project_dir)) => {
+                    // keep running
+                    tokio::signal::ctrl_c().await?;
+                    println!("\nshutting down...");
+                    let _ = server;
+                    release_server_lock();
+                    Ok(())
+                }
+                Err(e) => {
+                    release_server_lock();
+                    Err(e)
+                }
+            }
         }
 
-        Some(Commands::Tui { url, token }) => {
-            // 仅启动 TUI，连接到已运行的 server
-            // token 未指定时，从 ~/.mcoder/credentials.toml 读取
+        Some(Commands::Tui { url, token, no_spawn }) => {
+            // TUI 模式：默认自动检测本地 server，未运行则拉起
+            let (host, port) = parse_ws_url(&url)
+                .unwrap_or(("127.0.0.1".into(), 7654));
+            let is_local = host == "127.0.0.1" || host == "localhost" || host == "0.0.0.0";
+
             let token = token.unwrap_or_else(|| {
                 crate::transport::pairing::load_persisted_token()
                     .unwrap_or_else(|| "missing-token".into())
             });
-            let mut child = spawn_tui_process(&url, &token)?;
+
+            // 自动拉起逻辑：本地 URL + server 未运行 + 未禁用 spawn
+            // 多 TUI 并发安全：先检测端口，再检测锁，最后原子获取锁
+            let _server_child: Option<std::process::Child> = if is_local && !no_spawn {
+                if is_server_running(&host, port).await {
+                    None  // 已在运行，直接连接
+                } else if read_lock_pid().is_some() {
+                    // 有其他进程正在启动 server，等待它就绪
+                    println!("waiting for server to start...");
+                    if wait_for_server(&host, port).await {
+                        None
+                    } else {
+                        eprintln!("warning: server start timed out; connecting anyway");
+                        None
+                    }
+                } else {
+                    // 没有锁，尝试获取锁后拉起 server
+                    if !try_acquire_server_lock() {
+                        // 获取锁失败——另一个进程刚抢到了，等待
+                        println!("waiting for server to start...");
+                        if wait_for_server(&host, port).await {
+                            None
+                        } else {
+                            eprintln!("warning: server start timed out; connecting anyway");
+                            None
+                        }
+                    } else {
+                        // 获取锁成功，以 detach 方式启动 server
+                        println!("starting server at {}...", url);
+                        let pid = spawn_detached_server(&host, port)?;
+                        if wait_for_server(&host, port).await {
+                            println!("server ready (pid: {})", pid);
+                            // detach 的 server 独立运行，TUI 退出后不关闭
+                            // 锁由 server 子进程管理，但这里我们 fork 的是 detach 模式
+                            // server 子进程不会自己获取锁，所以锁由当前进程持有
+                            // 但当前进程退出后锁会残留——需要 server 子进程在退出时清理
+                            // 简化方案：detach 的 server 不用锁，靠端口检测去重
+                            release_server_lock();
+                        } else {
+                            eprintln!("warning: server failed to start in time");
+                            release_server_lock();
+                        }
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            let mut child = match spawn_tui_process(&url, &token) {
+                Ok(c) => c,
+                Err(e) => {
+                    return Err(e);
+                }
+            };
             let _ = child.wait();
             Ok(())
+        }
+
+        Some(Commands::Stop { host, port }) => {
+            // 优先尝试 HTTP /api/shutdown 端点
+            match stop_server(&host, port).await {
+                Ok(()) => {
+                    println!("server at {}:{} stopped", host, port);
+                    Ok(())
+                }
+                Err(_) => {
+                    // fallback：通过端口查找进程并 kill
+                    eprintln!("cannot reach server API, trying pkill...");
+                    let _ = std::process::Command::new("pkill")
+                        .arg("-f")
+                        .arg(format!("mcoder.*--port {}", port))
+                        .status();
+                    release_server_lock();
+                    println!("sent kill signal to processes on port {}", port);
+                    Ok(())
+                }
+            }
         }
 
         Some(Commands::Pair { host, port }) => {
