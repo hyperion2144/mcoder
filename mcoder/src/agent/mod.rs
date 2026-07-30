@@ -158,24 +158,34 @@ impl AgentSession {
 
     /// 设计文档 §3.5: 注入 role 特定上下文
     /// 例如 plan role 注入当前 plan 状态，execute role 注入 todo 状态
-    /// 路径与 plan.rs 一致：.mcoder/plans/plan.json 和 .mcoder/plans/todo.json
-    pub async fn inject_role_context(&mut self) -> Result<()> {
-        let plans_dir = crate::config::project_config_dir(self.session.project_path())
-            .join("plans");
+    /// Phase 4: plan 改用 SessionStateStore pending_plan（per-session），不再读项目级 plan.json
+    pub async fn inject_role_context(
+        &mut self,
+        session_state: &crate::persistence::session_state::SessionStateStore,
+    ) -> Result<()> {
+        let session_id = self.session.id().to_string();
         match self.current_role.as_str() {
             "plan" | "execute" => {
-                // 注入当前 plan 状态
-                let plan_path = plans_dir.join("plan.json");
-                if let Ok(content) = tokio::fs::read_to_string(&plan_path).await {
-                    let msg = Message::system(format!("[current plan]\n{}", content));
+                // 注入当前 plan 状态（per-session SQLite）
+                if let Some(rec) = session_state.get_pending_plan(&session_id).await {
+                    let body = serde_json::to_string_pretty(&rec.content).unwrap_or_default();
+                    let state_label = format!("{:?}", rec.state);
+                    let msg = Message::system(format!("[current plan: {}]\n{}", state_label, body));
                     self.add_message(msg)?;
                 }
             }
             "goal" | "loop" => {
-                // 注入 todo 状态
-                let todo_path = plans_dir.join("todo.json");
-                if let Ok(content) = tokio::fs::read_to_string(&todo_path).await {
-                    let msg = Message::system(format!("[current todos]\n{}", content));
+                // 注入 todo 状态（per-session，来源 SessionStateStore / SQLite）
+                // 已废弃旧版 .mcoder/plans/todo.json 文件读取（不兼容旧数据）
+                let items = session_state.list_todos(&session_id).await.unwrap_or_default();
+                if !items.is_empty() {
+                    let summary = crate::persistence::session_state::TodoSummary::from_items(&items);
+                    let body = serde_json::to_string_pretty(&items).unwrap_or_default();
+                    let header = format!(
+                        "[current todos] {} total · {} pending · {} in_progress · {} completed · {} cancelled",
+                        summary.total, summary.pending, summary.in_progress, summary.completed, summary.cancelled,
+                    );
+                    let msg = Message::system(format!("{}\n{}", header, body));
                     self.add_message(msg)?;
                 }
             }
@@ -214,21 +224,25 @@ impl AgentSession {
             Some(r) => r,
             None => return false,
         };
-        let plans_dir = crate::config::project_config_dir(self.session.project_path())
-            .join("plans");
+        // Phase 4: plan 来源改为 per-session SQLite pending_plan（不再读项目级 plan.json）
         match role.loop_condition.as_deref() {
             Some("plan_created") => {
-                // plan role: 检查 plan.json 是否存在
-                let plan_path = plans_dir.join("plan.json");
-                tokio::fs::metadata(&plan_path).await.is_ok()
+                // plan role: 检查 pending_plan（DB）是否存在
+                if let Some(store) = crate::persistence::session_state::SessionStateStore::for_session(self.session.id()).await {
+                    if store.get_pending_plan(self.session.id()).await.is_some() {
+                        return true;
+                    }
+                }
+                false
             }
             Some("plan_all_done") => {
                 // execute role: 检查所有 plan steps 是否 done
-                let plan_path = plans_dir.join("plan.json");
-                if let Ok(content) = tokio::fs::read_to_string(&plan_path).await {
-                    if let Ok(plan) = serde_json::from_str::<serde_json::Value>(&content) {
-                        if let Some(steps) = plan["steps"].as_array() {
-                            return steps.iter().all(|s| s["status"] == "done" || s["status"] == "skipped");
+                if let Some(store) = crate::persistence::session_state::SessionStateStore::for_session(self.session.id()).await {
+                    if let Some(rec) = store.get_pending_plan(self.session.id()).await {
+                        if let Ok(plan) = serde_json::from_value::<serde_json::Value>(rec.content) {
+                            if let Some(steps) = plan["steps"].as_array() {
+                                return steps.iter().all(|s| s["status"] == "done" || s["status"] == "skipped");
+                            }
                         }
                     }
                 }

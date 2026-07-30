@@ -1,15 +1,24 @@
 // 设计文档 §8.6.2: 消息列表
 // 触摸友好的消息展示，支持文本、工具调用、工具结果
 // 工具结果超长可折叠/展开
+// ask_user 工具：内联渲染 AskCard（移动端触摸友好）
 
 import React, { useEffect, useRef, useState } from 'react';
 import type { Message } from '@mcoder/shared/rpc/types.js';
+import { AskCard } from '@mcoder/shared/ask/index.js';
+import { ASK_USER_TOOL } from '@mcoder/shared/ask/types.js';
+import { ToolCard } from '@mcoder/shared/toolCard/ToolCardHtml.js';
 
 interface Props {
   messages: Message[];
   streaming: boolean;
   error: string | null;
   pendingCount: number;
+  client: any | null;
+  currentSessionId: string | null;
+  onError?: (m: string) => void;
+  /** 按 tool_use id 索引的 result（来自消息流全局配对） */
+  resultsById?: Map<string, any>;
 }
 
 // 简单 markdown 行内渲染：`code` → <code>，**bold** → <strong>
@@ -37,28 +46,7 @@ function renderInline(text: string): React.ReactNode[] {
   return nodes;
 }
 
-// 工具结果折叠组件
-function ToolResult({ output }: { output: any }) {
-  const [expanded, setExpanded] = useState(false);
-  const outputStr = typeof output === 'string' ? output : JSON.stringify(output, null, 2);
-  const isLong = outputStr.length > 200;
-  const preview = isLong ? outputStr.slice(0, 200) : outputStr;
-  return (
-    <div className="msg-tool-result">
-      <pre className="tool-output">
-        {expanded ? outputStr : preview}
-        {isLong && !expanded && <span className="tool-output-ellipsis">…</span>}
-      </pre>
-      {isLong && (
-        <button className="tool-output-toggle" onClick={() => setExpanded(!expanded)}>
-          {expanded ? '收起' : `展开 (${outputStr.length})`}
-        </button>
-      )}
-    </div>
-  );
-}
-
-export function MessageList({ messages, streaming, error, pendingCount }: Props) {
+export function MessageList({ messages, streaming, error, pendingCount, client, currentSessionId, onError, resultsById }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -76,14 +64,30 @@ export function MessageList({ messages, streaming, error, pendingCount }: Props)
       );
     }
     if (block.type === 'tool_use') {
+      if (block.name === ASK_USER_TOOL && client && currentSessionId) {
+        return (
+          <AskCard
+            key={i}
+            ask_id={block.id || ''}
+            tool_call_id={block.id || ''}
+            session_id={currentSessionId}
+            client={client}
+            onError={onError}
+          />
+        );
+      }
+      const result = block.id && resultsById ? resultsById.get(block.id) || null : null;
       return (
-        <div key={i} className="msg-tool-use">
-          <span className="tool-name">{block.name}</span>
-        </div>
+        <ToolCard
+          key={i}
+          block={block}
+          resultBlock={result}
+        />
       );
     }
     if (block.type === 'tool_result') {
-      return <ToolResult key={i} output={block.output} />;
+      // tool_result 由 ToolCard 内联显示，不单独渲染
+      return null;
     }
     return null;
   };

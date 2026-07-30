@@ -35,6 +35,10 @@ use std::sync::Arc;
 pub struct ToolContext {
     /// 当前会话 ID
     pub session_id: String,
+    /// 当前 LLM ToolCall.id（由 session_manager 注入）
+    /// 工具如 ask_user 需要把它转发给客户端，保证 tool_use.id ↔ ask tool_call_id 一致
+    /// None 表示非 LLM 驱动的直接调用（如 tool.call RPC、test hook）
+    pub tool_call_id: Option<String>,
     /// 会话的工作目录（项目根路径）
     pub project_path: std::path::PathBuf,
     /// 项目配置目录 = project_path/.mcoder
@@ -57,6 +61,10 @@ pub struct ToolContext {
     pub task_manager: Arc<crate::agent::async_tasks::TaskManager>,
     /// 工作流存储
     pub workflow: Arc<crate::workflow::WorkflowStore>,
+    /// 会话状态存储（todo 等 per-session state，绑 session_id，模型不可跨 session）
+    pub session_state: Arc<crate::persistence::session_state::SessionStateStore>,
+    /// 服务端事件总线（用于工具广播 TodoUpdated 等）
+    pub event_tx: tokio::sync::broadcast::Sender<crate::session_manager::ServerEvent>,
     /// 取消令牌
     pub cancellation: crate::types::CancellationToken,
 }
@@ -101,14 +109,26 @@ impl ToolRegistry {
     pub async fn execute(&self, call: &ToolCall, ctx: &ToolContext) -> Result<ToolOutput> {
         let tool = self.tools.get(&call.name)
             .ok_or_else(|| anyhow::anyhow!("tool not found: {}", call.name))?;
-        tool.execute(call.args.clone(), ctx).await
+        // 透传 call.id：让 ctx.tool_call_id 反映真实 LLM ToolCall.id
+        let mut ctx_with_id = ctx.clone();
+        if ctx_with_id.tool_call_id.is_none() {
+            ctx_with_id.tool_call_id = Some(call.id.clone());
+        }
+        tool.execute(call.args.clone(), &ctx_with_id).await
     }
 }
 
 /// 构建无状态工具集（所有依赖通过 ToolContext 注入，不再在构造时绑定 project）
-/// 返回 (registry, subagent_tool) - subagent_tool 需在 registry 构建后调用 set_dependencies
+/// 返回 (registry, subagent_tool, ask_user_tool, ask_registry) - subagent_tool 需在 registry 构建后调用 set_dependencies
+/// ask_user_tool 需在 SessionManager 创建后调用 set_event_tx
+/// ask_registry 由 SessionManager 持有，用于 RPC 端 ask.pending/ask.answer/ask.cancel
 /// 设计文档 §8.5: SubagentTool 使用 late binding 解决循环依赖
-pub fn build_full_registry() -> (ToolRegistry, Arc<subagent::SubagentTool>) {
+pub fn build_full_registry() -> (
+    ToolRegistry,
+    Arc<subagent::SubagentTool>,
+    Arc<crate::ask_user::AskUserTool>,
+    Arc<crate::ask_user::AskRegistry>,
+) {
     let mut reg = ToolRegistry::new();
 
     // ===== 文件工具族（无状态，从 ctx 取 project_dir/journal）=====
@@ -147,6 +167,7 @@ pub fn build_full_registry() -> (ToolRegistry, Arc<subagent::SubagentTool>) {
     // ===== Plan / Todo（无状态，从 ctx 取 project_dir）=====
     reg.register(Arc::new(plan::PlanCreateTool));
     reg.register(Arc::new(plan::PlanUpdateTool));
+    reg.register(Arc::new(plan::PlanQueryTool));
     reg.register(Arc::new(plan::TodoTool));
 
     // ===== 代码执行（无状态，从 ctx 取）=====
@@ -184,7 +205,19 @@ pub fn build_full_registry() -> (ToolRegistry, Arc<subagent::SubagentTool>) {
     // ===== Computer Use 工具集（设计文档 §8.7 M5，无状态）=====
     reg.register_all(crate::computer_use::build_computer_use_tools());
 
-    (reg, subagent_tool)
+    // ===== AskUser 工具（late binding：event_tx 在 SessionManager 创建后注入）=====
+    let ask_registry = Arc::new(crate::ask_user::AskRegistry::with_store_resolver(
+        |session_id: String| async move {
+            crate::persistence::session_state::SessionStateStore::for_session(&session_id)
+                .await
+                .map(Arc::new)
+                .ok_or_else(|| anyhow::anyhow!("cannot open session_state for {}", session_id))
+        },
+    ));
+    let ask_user_tool = Arc::new(crate::ask_user::AskUserTool::new(ask_registry.clone()));
+    reg.register(ask_user_tool.clone() as SharedTool);
+
+    (reg, subagent_tool, ask_user_tool, ask_registry)
 }
 
 // ==================== Skill 工具实现 ====================

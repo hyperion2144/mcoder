@@ -13,7 +13,9 @@ const RECONNECT_BASE_DELAY_MS = 1_000;
 
 export interface ReconnectOptions {
   sessionId?: string;
-  onReconnect?: () => void;
+  onReconnect?: (snapshot?: unknown) => void;
+  /// Phase 5c: 拿到 reconnect 拿到的最新消息数（用于 hydrate 增量 append）
+  getCurrentMessageCount?: () => number;
 }
 
 /// 抽象的传输层接口（平台无关）
@@ -32,6 +34,8 @@ export class WsClient {
   private reqId = 0;
   private pending = new Map<number, ResponseHandler>();
   private notifHandlers: NotificationHandler[] = [];
+  /** notification 去重键：method + (主要 id 字段)。已用过的丢弃。 */
+  private seenNotifications = new Set<string>();
   private onConnect: () => void;
   private onDisconnect: () => void;
   private heartbeatTimer: any | null = null;
@@ -69,6 +73,12 @@ export class WsClient {
   /// 设计文档 §5.2: 连接握手
   connect(): Promise<void> {
     this.intentionallyClosed = false;
+    // 每次连接建立时清空去重缓存：
+    // - 重连后可以重新接收同一 ask 的 pending；
+    // - 二次 review（issue 9）：不要依赖 seenNotifications 持久去重来保证消息正确性。
+    //   Ask 通知由 store 幂等保护（setPendingIdempotent）；服务端真实的 Message
+    //   事件按 server 顺序到达，客户端不要私自丢弃。
+    this.seenNotifications.clear();
     return new Promise((resolve, reject) => {
       let authResolved = false;
       this.transport = this.transportFactory(this.url, {
@@ -100,8 +110,17 @@ export class WsClient {
               }
             } else if (msg.method) {
               const notif = msg as JsonRpcNotification;
-              for (const h of this.notifHandlers) {
-                h(notif);
+              // 二次 review（issue 9）：
+              // 不再用客户端持久去重阻挡消息流 —— 这会让重连/网络抖动期间
+              // 服务端的真实 Message 事件被错误丢弃，导致消息历史不完整。
+              // Ask 相关通知的幂等由 store 内部保证
+              // （setPendingIdempotent / setSubmissionIfMatch / clearPendingByIds）。
+              for (const h of this.notifHandlers.slice()) {
+                try {
+                  h(notif);
+                } catch {
+                  /* swallow handler errors */
+                }
               }
             }
           } catch {}
@@ -118,6 +137,31 @@ export class WsClient {
         },
       });
     });
+  }
+
+  /// 生成 notification 去重键
+  private notificationKey(notif: JsonRpcNotification): string {
+    const m = notif.method;
+    const p = notif.params || {};
+    // 用 method + 关键 id 字段构造 key
+    if (m === 'session.ask_pending' || m === 'session.ask_answered' || m === 'session.ask_cancelled') {
+      const sid = (p as any).session_id || '';
+      const aid = (p as any).ask_id || '';
+      const tcid = (p as any).tool_call_id || '';
+      return `${m}|${sid}|${aid}|${tcid}`;
+    }
+    if (m === 'message') {
+      const sid = (p as any).session_id || '';
+      const msg = (p as any).message || {};
+      return `${m}|${sid}|${msg.role || ''}|${JSON.stringify(msg.content || [])}`;
+    }
+    if (m === 'tool_call_start' || m === 'tool_call_done') {
+      const sid = (p as any).session_id || '';
+      const name = (p as any).name || '';
+      return `${m}|${sid}|${name}`;
+    }
+    // 全局事件：直接以 method 去重
+    return `${m}|`;
   }
 
   /// 设计文档 §5.6: 客户端每 30s 发 ping
@@ -153,12 +197,22 @@ export class WsClient {
 
   private async doReconnect(): Promise<void> {
     await this.connect();
+    let snapshot: unknown = undefined;
     if (this.reconnectOpts.sessionId) {
       try {
-        await this.request('session.attach', { session_id: this.reconnectOpts.sessionId });
-      } catch {}
+        // Phase 5c: 重新 attach 拿 snapshot，**仅在同 session 时**用 offset
+        // 增量 hydrate，避免重连瞬间闪旧消息
+        const params: Record<string, unknown> = { session_id: this.reconnectOpts.sessionId };
+        const cur = this.reconnectOpts.getCurrentMessageCount?.();
+        if (typeof cur === 'number' && cur > 0) {
+          params.offset = cur;
+        }
+        snapshot = await this.request('session.attach', params);
+      } catch {
+        // ignore — 调用方按需 fallback
+      }
     }
-    this.reconnectOpts.onReconnect?.();
+    this.reconnectOpts.onReconnect?.(snapshot);
   }
 
   setReconnectSession(sessionId: string | undefined) {
@@ -188,9 +242,23 @@ export class WsClient {
     this.notifHandlers.push(handler);
   }
 
+  /** 取消订阅（issue 6）：返回 unsubscribe 函数 */
+  offNotification(handler: NotificationHandler): void {
+    const idx = this.notifHandlers.indexOf(handler);
+    if (idx >= 0) this.notifHandlers.splice(idx, 1);
+  }
+
+  /** 移除所有 notification handler；用于 client 重连或销毁时清理 */
+  clearNotificationHandlers(): void {
+    this.notifHandlers.length = 0;
+  }
+
   close() {
     this.intentionallyClosed = true;
     this.stopHeartbeat();
+    this.clearNotificationHandlers();
+    this.pending.clear();
+    this.seenNotifications.clear();
     try { this.transport?.close(); } catch {}
   }
 }

@@ -94,7 +94,7 @@ impl BashTool {
         let task_manager = ctx.task_manager.clone();
         let cmd_for_msg = cmd.clone();
 
-        let task_id = task_manager.spawn("bash", async move {
+        let task_id = task_manager.spawn_compat("bash", async move {
             let batch_id = journal.begin_batch(&project_dir, "bash")
                 .map_err(|e| e.to_string())?;
 
@@ -116,7 +116,7 @@ impl BashTool {
                 "files_changed": changed.len(),
                 "batch_id": batch_id,
             }).to_string())
-        }).await;
+        }).await?;
 
         Ok(ToolOutput::AsyncTask {
             task_id: task_id.clone(),

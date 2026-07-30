@@ -10,7 +10,13 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.tsx",
-    "test": "echo \"no tests yet\""
+    "test": "node --import tsx test-todo-summary.mjs && node --import tsx test-ask.mjs && node --import tsx test-session-snapshot.ts && node --import tsx test-resume-state.ts && node --import tsx test-phase5c-resume.ts && node --import tsx test-phase5c-hydrate.ts",
+    "test:ask": "node --import tsx test-ask.mjs",
+    "test:todo": "node --import tsx test-todo-summary.mjs",
+    "test:snapshot": "node --import tsx test-session-snapshot.ts",
+    "test:resume": "node --import tsx test-resume-state.ts",
+    "test:phase5c-resume": "node --import tsx test-phase5c-resume.ts",
+    "test:phase5c-hydrate": "node --import tsx test-phase5c-hydrate.ts"
   },
   "dependencies": {
     "ink": "^5.0.0",

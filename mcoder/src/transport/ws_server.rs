@@ -227,15 +227,16 @@ where
                                         let _ = server.session_mgr.detach_client(old).await;
                                     }
                                     // attach 新 session（会从 jsonl 重放若不在内存）
+                                    // Phase 2: 返回统一 SessionSnapshot；messages 仍按 offset 增量，
+                                    // 其它字段始终为 session 当前全量最新值
                                     match server.session_mgr.attach_session_with_offset(&sid, offset).await {
-                                        Ok(msgs) => {
+                                        Ok(snapshot) => {
                                             let _ = server.session_mgr.attach_client(&sid).await;
                                             attached_session = Some(sid.clone());
-                                            let resp = JsonRpcResponse::ok(req.id, serde_json::json!({
+                                            let resp = JsonRpcResponse::ok(req.id, serde_json::to_value(&snapshot).unwrap_or(serde_json::json!({
                                                 "session_id": sid,
-                                                "messages": msgs,
                                                 "attached": true
-                                            }));
+                                            })));
                                             if let Ok(json) = serde_json::to_string(&resp) {
                                                 let _ = write.send(Message::Text(json)).await;
                                             }
@@ -251,7 +252,7 @@ where
                                     }
                                 }
                             }
-                            let resp = handle_request(req, &server.session_mgr).await;
+                            let resp = handle_request(req, &server.session_mgr, &attached_session).await;
                             if let Ok(json) = serde_json::to_string(&resp) {
                                 let _ = write.send(Message::Text(json)).await;
                             }
@@ -325,10 +326,46 @@ where
                             })),
                             Some(session_id),
                         ),
-                        ServerEvent::SessionDone { session_id, reason } => (
+                        ServerEvent::SessionDone { session_id, reason, unfinished_todos } => (
                             make_notification("session.done", serde_json::json!({
                                 "session_id": session_id,
-                                "reason": reason
+                                "reason": reason,
+                                "unfinished_todos": unfinished_todos,
+                            })),
+                            Some(session_id),
+                        ),
+                        ServerEvent::TodoUpdated { session_id, todos, summary } => (
+                            make_notification("session.todo_updated", serde_json::json!({
+                                "session_id": session_id,
+                                "todos": todos,
+                                "summary": summary,
+                            })),
+                            Some(session_id),
+                        ),
+                        ServerEvent::AskPending { session_id, ask_id, tool_call_id, request } => (
+                            make_notification("session.ask_pending", serde_json::json!({
+                                "session_id": session_id,
+                                "ask_id": ask_id,
+                                "tool_call_id": tool_call_id,
+                                "request": request,
+                            })),
+                            Some(session_id),
+                        ),
+                        ServerEvent::AskAnswered { session_id, ask_id, tool_call_id, submission, result } => (
+                            make_notification("session.ask_answered", serde_json::json!({
+                                "session_id": session_id,
+                                "ask_id": ask_id,
+                                "tool_call_id": tool_call_id,
+                                "submission": submission,
+                                "result": result,
+                            })),
+                            Some(session_id),
+                        ),
+                        ServerEvent::AskCancelled { session_id, ask_id, tool_call_id } => (
+                            make_notification("session.ask_cancelled", serde_json::json!({
+                                "session_id": session_id,
+                                "ask_id": ask_id,
+                                "tool_call_id": tool_call_id,
                             })),
                             Some(session_id),
                         ),
@@ -361,7 +398,11 @@ where
     Ok(())
 }
 
-async fn handle_request(req: JsonRpcRequest, mgr: &Arc<SessionManager>) -> JsonRpcResponse {
+async fn handle_request(
+    req: JsonRpcRequest,
+    mgr: &Arc<SessionManager>,
+    attached_session: &Option<String>,
+) -> JsonRpcResponse {
     match req.method.as_str() {
         "ping" => JsonRpcResponse::ok(req.id, serde_json::json!("pong")),
 
@@ -443,6 +484,26 @@ async fn handle_request(req: JsonRpcRequest, mgr: &Arc<SessionManager>) -> JsonR
             }
         }
 
+        // ===== Phase 3: session.resume =====
+        // 决策：unfinished todos / blocked / cancelled / failed → Start；
+        // running / waiting_for_user → Conflict；无工作 → NoWork
+        // 详见 SessionManager::resume_session 文档
+        "session.resume" => {
+            let params = req.params.unwrap_or_default();
+            let session_id = params["session_id"].as_str().unwrap_or("");
+            if session_id.is_empty() {
+                return JsonRpcResponse::err(
+                    req.id,
+                    -1,
+                    "missing 'session_id' for session.resume".to_string(),
+                );
+            }
+            match mgr.resume_session(session_id).await {
+                Ok(result) => JsonRpcResponse::ok(req.id, result),
+                Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+            }
+        }
+
         // ===== Mode / Role =====
         "session.mode.set" => {
             let params = req.params.unwrap_or_default();
@@ -482,6 +543,52 @@ async fn handle_request(req: JsonRpcRequest, mgr: &Arc<SessionManager>) -> JsonR
             }
         }
 
+        // ===== AskUser RPC =====
+        "ask.pending" => {
+            let params = req.params.unwrap_or_default();
+            let session_id = params["session_id"].as_str().unwrap_or("");
+            // 终审修复 #14 + Phase 5c：caller 必须 attach 到 session
+            if session_id.is_empty() {
+                return JsonRpcResponse::err(
+                    req.id,
+                    -32602,
+                    "session_id required for ask.pending (caller must be attached to a session)".to_string(),
+                );
+            }
+            // 校验 attached_session == session_id（防止越权读取）
+            if let Err(reason) = check_attached_session(attached_session, session_id) {
+                return JsonRpcResponse::err(req.id, -32602, reason);
+            }
+            match mgr.peek_ask(session_id).await {
+                Some(pending) => JsonRpcResponse::ok(req.id, pending),
+                None => JsonRpcResponse::ok(req.id, serde_json::json!({"pending": null})),
+            }
+        }
+
+        "ask.answer" => {
+            let params = req.params.unwrap_or_default();
+            let session_id = params["session_id"].as_str().unwrap_or("");
+            let ask_id = params["ask_id"].as_str().unwrap_or("");
+            // submission 可以是对象 {cancelled, answers} 或 null（cancelled）
+            let submission: crate::ask_user::AskSubmission = match params.get("submission") {
+                Some(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
+                None => crate::ask_user::AskSubmission { cancelled: true, ..Default::default() },
+            };
+            match mgr.answer_ask(session_id, ask_id, submission).await {
+                Ok(result) => JsonRpcResponse::ok(req.id, result),
+                Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+            }
+        }
+
+        "ask.cancel" => {
+            let params = req.params.unwrap_or_default();
+            let session_id = params["session_id"].as_str().unwrap_or("");
+            match mgr.cancel_ask(session_id).await {
+                Ok(result) => JsonRpcResponse::ok(req.id, result.unwrap_or(serde_json::json!({"cancelled": false}))),
+                Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+            }
+        }
+
         // ===== Tools =====
         "tool.call" => {
             let params = req.params.unwrap_or_default();
@@ -491,6 +598,10 @@ async fn handle_request(req: JsonRpcRequest, mgr: &Arc<SessionManager>) -> JsonR
 
             if session_id.is_empty() {
                 return JsonRpcResponse::err(req.id, -1, "missing 'session_id' for tool.call".to_string());
+            }
+            // Phase 5c: 校验 attached_session == session_id
+            if let Err(reason) = check_attached_session(attached_session, session_id) {
+                return JsonRpcResponse::err(req.id, -32602, reason);
             }
 
             match mgr.call_tool(session_id, tool_name, tool_args).await {
@@ -506,16 +617,50 @@ async fn handle_request(req: JsonRpcRequest, mgr: &Arc<SessionManager>) -> JsonR
 
         // ===== Task =====
         "task.list" => {
-            let tasks = mgr.list_tasks().await;
+            // 终审修复 #16 + Phase 5c: 强制 session_id；caller 必须 attach 到 session 才可调用
+            let params = req.params.clone().unwrap_or_default();
+            let session_id = params["session_id"].as_str().unwrap_or("");
+            if session_id.is_empty() {
+                return JsonRpcResponse::err(
+                    req.id,
+                    -32602,
+                    "session_id required for task.list (caller must be attached to a session)".to_string(),
+                );
+            }
+            // 校验 attached_session == session_id
+            if let Err(reason) = check_attached_session(attached_session, session_id) {
+                return JsonRpcResponse::err(req.id, -32602, reason);
+            }
+            let tasks = mgr.list_tasks_for_session(session_id).await;
             JsonRpcResponse::ok(req.id, serde_json::json!(tasks))
         }
 
         "task.cancel" => {
-            let params = req.params.unwrap_or_default();
+            // 终审修复 #16 + Phase 5c: 强制 session_id；不再走跨会话兼容路径
+            let params = req.params.clone().unwrap_or_default();
             let task_id = params["task_id"].as_str().unwrap_or("");
-            match mgr.cancel_task(task_id).await {
+            let session_id = params["session_id"].as_str().unwrap_or("");
+            if session_id.is_empty() {
+                return JsonRpcResponse::err(
+                    req.id,
+                    -32602,
+                    "session_id required for task.cancel (caller must be attached to a session)".to_string(),
+                );
+            }
+            if task_id.is_empty() {
+                return JsonRpcResponse::err(
+                    req.id,
+                    -32602,
+                    "task_id required for task.cancel".to_string(),
+                );
+            }
+            // 校验 attached_session == session_id
+            if let Err(reason) = check_attached_session(attached_session, session_id) {
+                return JsonRpcResponse::err(req.id, -32602, reason);
+            }
+            match mgr.cancel_task_for_session(session_id, task_id).await {
                 Ok(_) => JsonRpcResponse::ok(req.id, serde_json::json!({"cancelled": true})),
-                Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+                Err(e) => JsonRpcResponse::err(req.id, -403, e.to_string()),
             }
         }
 
@@ -591,4 +736,40 @@ async fn handle_request(req: JsonRpcRequest, mgr: &Arc<SessionManager>) -> JsonR
 pub fn make_notification(method: &str, params: serde_json::Value) -> String {
     let notif = JsonRpcNotification::new(method, Some(params));
     serde_json::to_string(&notif).unwrap_or_default()
+}
+
+// ==================== Phase 5c: attached_session 校验 ====================
+//
+// 把"caller 是否 attach 到指定 session"的判定抽成纯函数，便于单测。
+// 返回 `Result<(), String>`：Ok 表示放行；Err 表示拒绝（带拒绝原因）。
+//
+// 规则：
+// 1. caller 未 attach（None）→ 拒（session-scoped RPC 必传 attached）
+// 2. param session_id 与 attached 不一致 → 拒
+// 3. param session_id 为空 → 放行（非 session-scoped RPC，不走该 helper）
+pub fn check_attached_session(
+    attached_session: &Option<String>,
+    param_session_id: &str,
+) -> Result<(), String> {
+    // 1. caller 必须 attach
+    let attached = match attached_session.as_deref() {
+        Some(s) => s,
+        None => {
+            return Err(format!(
+                "caller not attached to any session; refusing session-scoped RPC"
+            ));
+        }
+    };
+    // 2. param 为空：放行（让外层 caller 决定走哪条分支）
+    if param_session_id.is_empty() {
+        return Ok(());
+    }
+    // 3. 必须匹配
+    if attached != param_session_id {
+        return Err(format!(
+            "caller attached to '{}' but params.session_id='{}' (cross-session denied)",
+            attached, param_session_id
+        ));
+    }
+    Ok(())
 }

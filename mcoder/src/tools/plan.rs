@@ -15,6 +15,11 @@ pub struct PlanCreateTool;
 /// 设计文档 §4.7: plan_update({ step_id, status, note? })
 pub struct PlanUpdateTool;
 
+/// 设计文档 §4.7: plan_query() — 读取当前 session 的 plan 状态
+/// 包含 state（pending/approved/rejected/edited）、content（steps）、decided_at_ms
+/// 注意：plan 是 per-session 存在 pending_plan 表里；本工具只读，不修改
+pub struct PlanQueryTool;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanStep {
     pub id: u32,
@@ -120,14 +125,75 @@ impl Tool for PlanCreateTool {
             created_at: now.clone(),
             updated_at: now,
         };
-        save_plan(&ctx.project_dir, &plan)?;
+        // Phase 4: 写到 per-session SQLite pending_plan（不再写项目级 plan.json）
+        let plan_id = format!("plan-{}", uuid::Uuid::new_v4());
+        let content_json = serde_json::to_value(&plan)
+            .context("serialize plan for pending_plan table")?;
+        ctx.session_state
+            .create_pending_plan(&ctx.session_id, &plan_id, content_json, chrono::Utc::now().timestamp_millis())
+            .await
+            .map_err(|e| anyhow::anyhow!("plan_create: persist pending_plan failed: {}", e))?;
+        // loop_state=waiting_for_user
+        ctx.session_state
+            .set_session_state(&ctx.session_id, "waiting_for_user", Some("plan_pending"))
+            .await
+            .map_err(|e| anyhow::anyhow!("plan_create: set_session_state failed: {}", e))?;
 
         Ok(ToolOutput::Sync { result: serde_json::json!({
             "created": true,
             "step_count": steps.len(),
             "steps": steps,
-            "path": plan_path(&ctx.project_dir).display().to_string()
+            "plan_id": plan_id,
         }) })
+    }
+}
+
+#[async_trait]
+impl Tool for PlanQueryTool {
+    fn name(&self) -> &str { "plan_query" }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "plan_query".into(),
+            description: "Read the current session's plan (state + steps + decision timestamp). \
+                         Returns null if no plan has been created yet.".into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {},
+            }),
+        }
+    }
+
+    async fn execute(&self, _args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let rec = match ctx.session_state.get_pending_plan(&ctx.session_id).await {
+            Some(r) => r,
+            None => {
+                return Ok(ToolOutput::Sync {
+                    result: serde_json::json!({
+                        "plan": null,
+                        "exists": false,
+                    }),
+                });
+            }
+        };
+        let state_str = match rec.state {
+            crate::persistence::session_state::PendingPlanState::Pending => "pending",
+            crate::persistence::session_state::PendingPlanState::Approved => "approved",
+            crate::persistence::session_state::PendingPlanState::Edited => "edited",
+            crate::persistence::session_state::PendingPlanState::Rejected => "rejected",
+        };
+        Ok(ToolOutput::Sync {
+            result: serde_json::json!({
+                "plan": {
+                    "plan_id": rec.plan_id,
+                    "state": state_str,
+                    "content": rec.content,
+                    "created_at_ms": rec.created_at_ms,
+                    "decided_at_ms": rec.decided_at_ms,
+                },
+                "exists": true,
+            }),
+        })
     }
 }
 
@@ -156,8 +222,26 @@ impl Tool for PlanUpdateTool {
         let status: String = serde_json::from_value(args["status"].clone())?;
         let note: Option<String> = args["note"].as_str().map(|s| s.to_string());
 
-        let mut plan = load_plan(&ctx.project_dir)?
+        // Phase 4: 从 per-session SQLite pending_plan 读取并回写
+        let rec = ctx
+            .session_state
+            .get_pending_plan(&ctx.session_id)
+            .await
             .context("no plan exists. Use plan_create first.")?;
+
+        // 终审修复 #7: 仅 pending plan 可改；approved/rejected/edited 后 step 状态应通过
+        // 完成事件流同步，绝不允许在 plan 已决议后篡改 step。
+        use crate::persistence::session_state::PendingPlanState;
+        if rec.state != PendingPlanState::Pending {
+            anyhow::bail!(
+                "plan_update rejected: plan is in terminal state {:?}; \
+                 use the live execution flow instead of mutating past plans",
+                rec.state
+            );
+        }
+
+        let mut plan: Plan = serde_json::from_value(rec.content.clone())
+            .context("plan_update: pending_plan.content parse failed")?;
 
         let mut found = false;
         for step in plan.steps.iter_mut() {
@@ -174,7 +258,13 @@ impl Tool for PlanUpdateTool {
         }
 
         plan.updated_at = chrono::Utc::now().to_rfc3339();
-        save_plan(&ctx.project_dir, &plan)?;
+        let content_json = serde_json::to_value(&plan)
+            .context("plan_update: serialize plan")?;
+        // 仅更新 content，state 保持原样（plan_update 是执行期改 step 状态，不是用户决议）
+        ctx.session_state
+            .update_pending_plan_content(&ctx.session_id, content_json)
+            .await
+            .map_err(|e| anyhow::anyhow!("plan_update: persist failed: {}", e))?;
 
         // 统计进度
         let total = plan.steps.len();
@@ -197,40 +287,47 @@ impl Tool for PlanUpdateTool {
     }
 }
 
-// ==================== Todo 工具 ====================
+// ==================== Todo 工具（per-session, SQLite-backed）====================
+//
+// 取代旧版：项目级 .mcoder/plans/todo.json（不兼容旧数据）
+// 数据存放在 per-project 的 todos.db (todos 表)，按 session_id 严格隔离
+// ToolContext.session_state 由 SessionManager 自动注入（绑 session_id）
+// 模型不可指定其他 session；任何操作都只影响当前 ctx.session_id
+
+use crate::persistence::session_state::{
+    TodoInput, TodoSummary, PRIORITY_MEDIUM,
+    STATUS_PENDING,
+    VALID_PRIORITIES, VALID_STATUSES,
+};
 
 pub struct TodoTool;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct TodoItem {
-    id: String,
+#[derive(Debug, Deserialize)]
+struct TodoAddArgs {
     content: String,
-    status: String,
+    #[serde(default = "default_medium_priority")]
     priority: String,
+    #[serde(default = "default_pending_status")]
+    status: String,
 }
 
-impl TodoTool {
-    fn todo_path(project_dir: &PathBuf) -> PathBuf {
-        project_dir.join("plans").join("todo.json")
-    }
+#[derive(Debug, Deserialize)]
+struct TodoUpdateArgs {
+    id: String,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    priority: Option<String>,
+}
 
-    fn load(project_dir: &PathBuf) -> Result<Vec<TodoItem>> {
-        let path = Self::todo_path(project_dir);
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-        let content = std::fs::read_to_string(&path)?;
-        Ok(serde_json::from_str(&content).unwrap_or_default())
-    }
+fn default_medium_priority() -> String { PRIORITY_MEDIUM.into() }
+fn default_pending_status() -> String { STATUS_PENDING.into() }
 
-    fn save(project_dir: &PathBuf, items: &[TodoItem]) -> Result<()> {
-        let path = Self::todo_path(project_dir);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&path, serde_json::to_string_pretty(items)?)?;
-        Ok(())
-    }
+/// 把底层 sqlx::Error 转为 anyhow::Error 并附上当前 session_id 上下文
+fn wrap_db_err(ctx: &ToolContext, op: &str, e: sqlx::Error) -> anyhow::Error {
+    anyhow::anyhow!("todo.{} failed for session {}: {}", op, ctx.session_id, e)
 }
 
 #[async_trait]
@@ -240,15 +337,37 @@ impl Tool for TodoTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "todo".into(),
-            description: "Manage todo list. action=list|add|update|remove. status=pending|in_progress|done. priority=high|medium|low.".into(),
+            description: "Manage todo list scoped to the current session. \
+                         action=list|replace|add|update|remove|clear_completed. \
+                         status=pending|in_progress|completed|cancelled. \
+                         priority=high|medium|low. \
+                         Only one todo may be in_progress at a time; \
+                         a snapshot is broadcast to clients after every change.".into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["list", "add", "update", "remove"] },
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "replace", "add", "update", "remove", "clear_completed"],
+                        "description": "Required. list=read; replace=set whole list; add/update/remove mutate single items; clear_completed removes completed."
+                    },
                     "id": { "type": "string", "description": "update/remove: item id" },
-                    "content": { "type": "string", "description": "add: todo text" },
-                    "status": { "type": "string", "enum": ["pending", "in_progress", "done"] },
-                    "priority": { "type": "string", "enum": ["high", "medium", "low"], "default": "medium" }
+                    "content": { "type": "string", "description": "add/update: todo text (replace: per-item content)" },
+                    "status": { "type": "string", "enum": VALID_STATUSES, "description": "add/update: status; replace: per-item status" },
+                    "priority": { "type": "string", "enum": VALID_PRIORITIES, "default": "medium" },
+                    "items": {
+                        "type": "array",
+                        "description": "replace: full todo list [{content,status,priority}]; order in array defines stable sort order",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "content": { "type": "string" },
+                                "status": { "type": "string", "enum": VALID_STATUSES },
+                                "priority": { "type": "string", "enum": VALID_PRIORITIES, "default": "medium" }
+                            },
+                            "required": ["content"]
+                        }
+                    }
                 },
                 "required": ["action"]
             }),
@@ -258,52 +377,101 @@ impl Tool for TodoTool {
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let action: String = serde_json::from_value(args["action"].clone())
             .or_else(|_| serde_json::from_value(args["op"].clone()))?;
-        let mut items = Self::load(&ctx.project_dir)?;
+
+        let store = &ctx.session_state;
+        let session_id = &ctx.session_id;
 
         match action.as_str() {
-            "add" => {
-                let content: String = serde_json::from_value(args["content"].clone())
-                    .context("content required for add")?;
-                let priority = args["priority"].as_str().unwrap_or("medium").to_string();
-                let id = format!("td-{}", chrono::Utc::now().timestamp_millis());
-                let item = TodoItem {
-                    id: id.clone(),
-                    content,
-                    status: "pending".into(),
-                    priority,
-                };
-                items.push(item.clone());
-                Self::save(&ctx.project_dir, &items)?;
-                Ok(ToolOutput::Sync { result: serde_json::json!({ "added": item }) })
-            }
             "list" => {
+                let items = store.list_todos(session_id).await.map_err(|e| wrap_db_err(ctx, "list", e))?;
+                let summary = TodoSummary::from_items(&items);
                 Ok(ToolOutput::Sync { result: serde_json::json!({
                     "items": items,
-                    "total": items.len(),
-                    "pending": items.iter().filter(|i| i.status == "pending").count(),
-                    "in_progress": items.iter().filter(|i| i.status == "in_progress").count(),
-                    "completed": items.iter().filter(|i| i.status == "done").count(),
+                    "summary": summary,
+                }) })
+            }
+            "add" => {
+                let parsed: TodoAddArgs = serde_json::from_value(args.clone())
+                    .context("todo.add: invalid args, need {content, priority?, status?}")?;
+                let input = TodoInput::new(parsed.content, parsed.status, parsed.priority);
+                let record = store.add_todo(session_id, input).await.map_err(|e| wrap_db_err(ctx, "add", e))?;
+                let _ = self.broadcast(ctx, &record.id).await;
+                Ok(ToolOutput::Sync { result: serde_json::json!({
+                    "added": record,
                 }) })
             }
             "update" => {
-                let id: String = serde_json::from_value(args["id"].clone())?;
-                for item in items.iter_mut() {
-                    if item.id == id {
-                        if let Some(s) = args["status"].as_str() { item.status = s.into(); }
-                        if let Some(p) = args["priority"].as_str() { item.priority = p.into(); }
-                        if let Some(c) = args["content"].as_str() { item.content = c.into(); }
-                    }
-                }
-                Self::save(&ctx.project_dir, &items)?;
-                Ok(ToolOutput::Sync { result: serde_json::json!({ "updated": id }) })
+                let parsed: TodoUpdateArgs = serde_json::from_value(args.clone())
+                    .context("todo.update: invalid args, need {id, content?, status?, priority?}")?;
+                let record = store.update_todo(
+                    session_id,
+                    &parsed.id,
+                    parsed.content.as_deref(),
+                    parsed.status.as_deref(),
+                    parsed.priority.as_deref(),
+                ).await.map_err(|e| wrap_db_err(ctx, "update", e))?;
+                let _ = self.broadcast(ctx, &record.id).await;
+                Ok(ToolOutput::Sync { result: serde_json::json!({
+                    "updated": record,
+                }) })
             }
             "remove" | "delete" => {
-                let id: String = serde_json::from_value(args["id"].clone())?;
-                items.retain(|i| i.id != id);
-                Self::save(&ctx.project_dir, &items)?;
-                Ok(ToolOutput::Sync { result: serde_json::json!({ "deleted": id }) })
+                let id: String = serde_json::from_value(args["id"].clone())
+                    .context("todo.remove: missing id")?;
+                let removed = store.remove_todo(session_id, &id).await.map_err(|e| wrap_db_err(ctx, "remove", e))?;
+                if removed {
+                    let _ = self.broadcast(ctx, &id).await;
+                }
+                Ok(ToolOutput::Sync { result: serde_json::json!({
+                    "removed": id,
+                    "existed": removed,
+                }) })
             }
-            other => anyhow::bail!("unknown action: {} (use list|add|update|remove)", other),
+            "clear_completed" => {
+                let n = store.clear_completed_todos(session_id).await.map_err(|e| wrap_db_err(ctx, "clear_completed", e))?;
+                let _ = self.broadcast(ctx, "").await;
+                Ok(ToolOutput::Sync { result: serde_json::json!({
+                    "cleared_completed": n,
+                }) })
+            }
+            "replace" => {
+                // items: array of {content, status?, priority?}
+                let raw = args.get("items").cloned()
+                    .ok_or_else(|| anyhow::anyhow!("todo.replace: missing 'items'"))?;
+                let inputs_raw: Vec<serde_json::Value> = serde_json::from_value(raw)
+                    .context("todo.replace: items must be an array")?;
+                let mut inputs: Vec<TodoInput> = Vec::with_capacity(inputs_raw.len());
+                for (i, v) in inputs_raw.iter().enumerate() {
+                    let content = v.get("content").and_then(|x| x.as_str())
+                        .ok_or_else(|| anyhow::anyhow!("todo.replace: items[{}].content required", i))?;
+                    let status = v.get("status").and_then(|x| x.as_str()).unwrap_or(STATUS_PENDING);
+                    let priority = v.get("priority").and_then(|x| x.as_str()).unwrap_or(PRIORITY_MEDIUM);
+                    inputs.push(TodoInput::new(content.to_string(), status.to_string(), priority.to_string()));
+                }
+                let records = store.replace_todos(session_id, inputs).await.map_err(|e| wrap_db_err(ctx, "replace", e))?;
+                let _ = self.broadcast(ctx, "").await;
+                Ok(ToolOutput::Sync { result: serde_json::json!({
+                    "replaced": true,
+                    "count": records.len(),
+                    "items": records,
+                }) })
+            }
+            other => anyhow::bail!("unknown action: {} (use list|replace|add|update|remove|clear_completed)", other),
         }
+    }
+}
+
+impl TodoTool {
+    /// 广播 TodoUpdated；广播失败仅 warn，不影响工具调用本身
+    async fn broadcast(&self, ctx: &ToolContext, _changed_id: &str) -> Result<()> {
+        let items = ctx.session_state.list_todos(&ctx.session_id).await
+            .map_err(|e| wrap_db_err(ctx, "broadcast.list", e))?;
+        let summary = TodoSummary::from_items(&items);
+        let _ = ctx.event_tx.send(crate::session_manager::ServerEvent::TodoUpdated {
+            session_id: ctx.session_id.clone(),
+            todos: items,
+            summary,
+        });
+        Ok(())
     }
 }

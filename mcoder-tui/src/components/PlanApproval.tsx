@@ -24,8 +24,8 @@ export function PlanApproval({ client }: Props) {
         .then(() => setPendingPlan(null))
         .catch(() => {});
     } else if (input === 'n') {
-      // reject
-      client.request('session.reject', { session_id: sid, plan_id: pendingPlan.id || '' })
+      // 终审修复 #12：reject 通过 session.approve action=reject 提交（与 server 字段统一）
+      client.request('session.approve', { session_id: sid, plan_id: pendingPlan.id || '', action: 'reject' })
         .then(() => setPendingPlan(null))
         .catch(() => {});
     } else if (input === 'e') {

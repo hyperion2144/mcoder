@@ -13,6 +13,8 @@
 import type { WsClient } from '../rpc/client.js';
 import { useSessionStore, useMessagesStore } from '../store/index.js';
 import { generateQrCode } from '../utils/pairing.js';
+import { useAskStore } from '../ask/store.js';
+import { hydrateSnapshot, type SessionSnapshot } from '../rpc/sessionSnapshot.js';
 
 /// 服务端返回的 DispatchResult（对应 commands/mod.rs::DispatchResult）
 export type DispatchResult =
@@ -182,19 +184,42 @@ async function handleMetaCommand(
           return { error: e.message };
         }
       } else if (action === 'open' && meta.session_id) {
+        const targetSid = meta.session_id;
         try {
-          const result = await client.request('session.attach', {
-            session_id: meta.session_id,
+          // Phase 2: 直接用 SessionSnapshot hydrate，不再单独 ask.pending / session.mode.get
+          const snapshot = await client.request('session.attach', {
+            session_id: targetSid,
+          }) as SessionSnapshot;
+          client.setReconnectSession(targetSid);
+          hydrateSnapshot({
+            sessionId: targetSid,
+            snapshot,
+            store: {
+              setCurrentSessionId: (id) => useSessionStore.getState().setCurrentSession(id),
+              setMessages: (m) => useMessagesStore.getState().setMessages(m),
+              setRole: (r) => useSessionStore.getState().setRole(r),
+              setModel: (m) => useSessionStore.getState().setModel(m),
+              setProjectPath: (p) => useSessionStore.getState().setProjectPath(p),
+              setContextUsage: (used, _w) => useSessionStore.getState().setContextUsage(used, useSessionStore.getState().contextWindow || 0),
+              setPendingPlan: (p) => useSessionStore.getState().setPendingPlan(p),
+              setPendingTodos: (t) => useSessionStore.getState().setPendingTodos(t),
+              setBackgroundTasks: (t) => useSessionStore.getState().setBackgroundTasks(t),
+              setPendingAskFromSnapshot: (ask) => {
+                const askStore = useAskStore.getState();
+                if (ask === null) {
+                  askStore.clearSession(targetSid);
+                  return;
+                }
+                askStore.setPendingAskFromSnapshot(ask);
+              },
+              clearAskSession: (sid) => useAskStore.getState().clearSession(sid),
+              replaceTodosFromSnapshot: (_t) => {
+                // setPendingTodos 已替换全部
+              },
+            },
           });
-          sessionStore.setCurrentSession(meta.session_id);
-          client.setReconnectSession(meta.session_id);
-          msgStore.setMessages(result.messages || []);
-          try {
-            const roleResp = await client.request('session.mode.get', {
-              session_id: meta.session_id,
-            });
-            sessionStore.setRole(roleResp.role);
-          } catch {}
+          useSessionStore.getState().setLoopState(snapshot.session.loop_state, snapshot.session.stop_reason);
+          useSessionStore.getState().setCanResume(snapshot.can_resume);
           return {};
         } catch (e: any) {
           return { error: e.message };

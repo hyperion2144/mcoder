@@ -102,7 +102,7 @@ impl Tool for TaskTool {
             "cancel" => {
                 let id: String = serde_json::from_value(args["id"].clone())
                     .context("id required for cancel")?;
-                let ok = ctx.task_manager.cancel(&id).await;
+                let ok = ctx.task_manager.cancel(&id).await?;
                 Ok(ToolOutput::Sync { result: serde_json::json!({
                     "cancelled": ok,
                     "id": id

@@ -3,6 +3,10 @@ name = "mcoder"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+name = "mcoder_lib"
+path = "src/lib.rs"
+
 [[bin]]
 name = "mcoder"
 path = "src/main.rs"

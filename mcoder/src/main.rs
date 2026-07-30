@@ -1,26 +1,11 @@
-mod agent;
-// 设计文档 §8.7 M5: 浏览器工具（headless Chrome 自测）
-mod browser;
-// 设计文档 §8.7 M5: Computer Use（桌面级自测）
-mod computer_use;
-mod code_graph;
-mod commands;
-mod config;
-// 设计文档 §8.4.3: DAP 调试子系统
-mod debug;
-mod llm;
-mod lsp;
-mod memory;
-mod persistence;
-mod plugin;
-mod session_manager;
-mod skills;
-mod tools;
-mod transport;
-mod tree_sitter;
-mod types;
-mod utils;
-mod workflow;
+// mcoder binary - main.rs 仅做 CLI 入口
+// 实际模块由 src/lib.rs 声明（lib + bin 模式），保证 integration tests 能访问
+#[allow(unused_imports)]
+use mcoder_lib::{
+    agent, ask_user, browser, code_graph, commands, computer_use, config, debug, llm, lsp, memory,
+    persistence, plugin, session_manager, skills, tools, transport, tree_sitter, types, utils,
+    workflow,
+};
 
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
@@ -149,8 +134,8 @@ async fn start_server_full(
     // 设计文档 §8.3.3: 从配置加载 hooks（shell 命令钩子）
     plugins.load_hooks_from_config(&app_config.hooks).await?;
 
-    // Initialize async task manager（用于后台执行长任务和子代理）
-    let task_manager = Arc::new(agent::async_tasks::TaskManager::new());
+    // Phase 5: TaskManager 改为 per-session（不再全局）；SessionManager 内部按需创建
+    // 这里不再创建全局 task_manager
 
     // 设计文档 §3.4: 初始化 RoleRegistry 并合并配置
     let mut role_registry = agent::role::RoleRegistry::new();
@@ -168,7 +153,7 @@ async fn start_server_full(
     let _lsp_manager = lsp::LspManager::new(project.clone());
 
     // Build tools with all dependencies
-    let (mut tools_reg, subagent_tool) = tools::build_full_registry();
+    let (mut tools_reg, subagent_tool, ask_user_tool, ask_registry) = tools::build_full_registry();
 
     // 设计文档 §8.3.4: 加载 skills（全局 ~/.mcoder/skills/ + 项目 .mcoder/skills/）
     // Skill = 能力扩展包（文件夹 + SKILL.md），支持渐进式披露
@@ -249,18 +234,29 @@ async fn start_server_full(
         tools,
         app_config.clone(),
         plugins.clone(),
-        task_manager,
         role_registry,
         experience_store,
         mcp_manager,
         command_dispatcher,
+        ask_registry.clone(),
     );
+
+    // ask_user 工具：late binding 注入 event_tx（在 SessionManager 创建后）
+    ask_user_tool.set_event_tx(mgr.event_tx());
 
     // 设计文档 §8.3.3: 触发 OnStart hook（server 启动时）
     let _ = plugins.run_hooks(
         crate::plugin::HookPoint::OnStart,
         crate::plugin::HookContext::new(crate::plugin::HookPoint::OnStart, ""),
     ).await;
+
+    // P1-5: 启动时枚举所有项目，遍历 session_state.db
+    // mark_orphans_interrupted：把上一次服务周期没来得及终态化的 queued/running
+    // task 原子转为 interrupted。attach 仍兜底（load_session_from_jsonl → get_or_create_task_manager
+    // 也会调一次）。
+    if let Err(e) = mgr.mark_startup_orphans().await {
+        tracing::warn!("startup orphan sweep failed: {}", e);
+    }
 
     // 设计文档 §8.6: HTTP 服务器 + TLS 决策
     // P1-2: 统一流程：先决定配置 → 启动 HTTP → 决定 TLS 来源 → 启动 WS

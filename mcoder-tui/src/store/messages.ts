@@ -14,6 +14,8 @@ interface MessagesState {
 
   setMessages: (m: Message[]) => void;
   addMessage: (m: Message) => void;
+  /// Phase 5c: 增量追加 messages（不替换；用于重连/增量 hydrate）
+  appendMessages: (msgs: Message[]) => void;
   setStreaming: (v: boolean) => void;
   setError: (e: string | null) => void;
   toggleToolCallExpand: (id: string) => void;
@@ -33,6 +35,38 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 
   setMessages: (m) => set({ messages: m }),
   addMessage: (m) => set((st) => ({ messages: [...st.messages, m] })),
+  appendMessages: (msgs) =>
+    set((st) => {
+      if (!msgs || msgs.length === 0) return st;
+      // Phase 5c: 用简单 fingerprint 去重，防止重连把同一 ToolResult 推两遍
+      const fp = (m: Message) => {
+        if (!m || !m.content) return `${m?.role || ''}#empty`;
+        const parts: string[] = [];
+        for (const b of m.content) {
+          if ((b as any).type === 'text') {
+            parts.push(`t:${(b as any).text}`);
+          } else if ((b as any).type === 'tool_use') {
+            const t = b as any;
+            parts.push(`u:${t.id || ''}:${t.name || ''}:${JSON.stringify(t.args || {})}`);
+          } else if ((b as any).type === 'tool_result') {
+            const t = b as any;
+            parts.push(`r:${t.id || ''}:${JSON.stringify(t.output || {})}`);
+          } else {
+            parts.push(`x:${JSON.stringify(b)}`);
+          }
+        }
+        return `${m.role || ''}|${parts.join('|')}`;
+      };
+      const existing = new Set(st.messages.map(fp));
+      const toAdd: Message[] = [];
+      for (const m of msgs) {
+        if (!existing.has(fp(m))) {
+          toAdd.push(m);
+        }
+      }
+      if (toAdd.length === 0) return st;
+      return { messages: [...st.messages, ...toAdd] };
+    }),
   setStreaming: (v) => set({ streaming: v }),
   setError: (e) => set({ error: e }),
   toggleToolCallExpand: (id) => set((st) => {

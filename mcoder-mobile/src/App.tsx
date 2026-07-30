@@ -8,6 +8,11 @@ import { WsClient } from '@mcoder/shared/rpc/client.js';
 import { useSessionStore, useMessagesStore } from '@mcoder/shared/store/index.js';
 import { dispatchSlashCommand } from '@mcoder/shared/commands/index.js';
 import { parsePairingString } from '@mcoder/shared/utils/pairing.js';
+import { AskCard, useAskStore } from '@mcoder/shared/ask/index.js';
+import { hasToolUse } from '@mcoder/shared/ask/messages.js';
+import { ASK_USER_TOOL } from '@mcoder/shared/ask/types.js';
+import { hydrateSnapshot, type SessionSnapshot } from '@mcoder/shared/rpc/sessionSnapshot.js';
+import { clearSessionUiState } from '@mcoder/shared/store/clearSessionUiState.js';
 import { NetworkMonitor } from './network.js';
 import { PairingScreen } from './components/PairingScreen.js';
 import { Drawer } from './components/Drawer.js';
@@ -16,6 +21,8 @@ import { InputBar } from './components/InputBar.js';
 import { StatusBar } from './components/StatusBar.js';
 import { ProjectList } from './components/ProjectList.js';
 import { SessionTabs } from './components/SessionTabs.js';
+import { TodoSummaryBar } from './components/TodoSummaryBar.js';
+import { ResumeBar } from './components/ResumeBar.js';
 
 // 设计文档 §6.2/§6.7: Plan 审批 + Todo 显示（移动端触摸友好版）
 function MobilePlanPanel({
@@ -124,6 +131,39 @@ const prefs = {
   },
 };
 
+// Phase 5c: 构造 hydrateSnapshot 需要的 store 注入（reconnect 复用 attach 的逻辑）
+function buildHydrateStore() {
+  const sessionStore = useSessionStore.getState();
+  const msgStore = useMessagesStore.getState();
+  return {
+    setCurrentSessionId: (id: string) => sessionStore.setCurrentSession(id),
+    setMessages: (m: any[]) => msgStore.setMessages(m),
+    appendMessages: (m: any[]) => msgStore.appendMessages(m),
+    getMessages: () => msgStore.messages,
+    setRole: (r: string) => sessionStore.setRole(r),
+    setModel: (m: string) => sessionStore.setModel(m),
+    setProjectPath: (p: string) => sessionStore.setProjectPath(p),
+    setContextUsage: (used: number, _w: number) =>
+      sessionStore.setContextUsage(used, sessionStore.contextWindow || 0),
+    setPendingPlan: (p: any) => sessionStore.setPendingPlan(p),
+    setPendingTodos: (t: any[]) => sessionStore.setPendingTodos(t),
+    setBackgroundTasks: (t: any[]) => sessionStore.setBackgroundTasks(t),
+    setPendingAskFromSnapshot: (ask: any) => {
+      const askStore = useAskStore.getState();
+      if (ask === null) {
+        const cur = useSessionStore.getState().currentSessionId;
+        if (cur) askStore.clearSession(cur);
+        return;
+      }
+      askStore.setPendingAskFromSnapshot(ask);
+    },
+    clearAskSession: (sid: string) => useAskStore.getState().clearSession(sid),
+    replaceTodosFromSnapshot: (_todos: any[]) => {
+      // setPendingTodos 已替换全部，无需额外 replace
+    },
+  };
+}
+
 export function App() {
   const [client, setClient] = useState<WsClient | null>(null);
   const [pairing, setPairing] = useState<string>('');
@@ -177,6 +217,27 @@ export function App() {
     );
     setClient(c);
 
+    // Phase 5c: 注册 reconnect handler，断线重连后用 offset 增量 hydrate
+    (c as any).reconnectOpts = {
+      sessionId: undefined, // 由 setReconnectSession 设置
+      onReconnect: (snapshot: unknown) => {
+        if (!snapshot) return;
+        const sid = useSessionStore.getState().currentSessionId;
+        if (!sid) return;
+        try {
+          hydrateSnapshot({
+            sessionId: sid,
+            snapshot: snapshot as SessionSnapshot,
+            currentMessageCount: useMessagesStore.getState().messages.length,
+            store: buildHydrateStore(),
+          });
+        } catch (e: any) {
+          msgStore.setError(`reconnect hydrate failed: ${e.message}`);
+        }
+      },
+      getCurrentMessageCount: () => useMessagesStore.getState().messages.length,
+    };
+
     try {
       await c.connect();
       setPairing(pairingStr);
@@ -200,7 +261,7 @@ export function App() {
     }
 
     // 通知处理
-    c.onNotification((notif) => {
+    const notifHandler = (notif: any) => {
       switch (notif.method) {
         case 'message':
           msgStore.addMessage(notif.params.message);
@@ -217,12 +278,72 @@ export function App() {
         case 'session.todo_updated':
           sessionStore.setPendingTodos(notif.params.todos);
           break;
+        case 'session.ask_pending': {
+          // 二次 review（issue 6/9）：仅更新 store；仅当消息流中无对应 tool_use 时才追加
+          const p = notif.params;
+          useAskStore.getState().setPendingIdempotent({
+            ask_id: p.ask_id,
+            tool_call_id: p.tool_call_id,
+            session_id: p.session_id,
+            request: p.request,
+            created_at: Date.now(),
+          });
+          if (!hasToolUse(msgStore.messages, p.tool_call_id)) {
+            msgStore.addMessage({
+              role: 'assistant',
+              content: [{ type: 'tool_use', id: p.tool_call_id, name: ASK_USER_TOOL, args: p.request }],
+            });
+          }
+          break;
+        }
+        case 'session.ask_answered': {
+          const p = notif.params;
+          const ok = useAskStore.getState().setSubmissionIfMatch(
+            p.session_id,
+            p.ask_id,
+            p.tool_call_id,
+            p.submission,
+          );
+          if (ok) {
+            const haveResult = msgStore.messages.some((m) =>
+              m.content.some(
+                (b: any) => b.type === 'tool_result' && b.id === p.tool_call_id,
+              ),
+            );
+            if (!haveResult) {
+              msgStore.addMessage({
+                role: 'tool',
+                content: [{ type: 'tool_result', id: p.tool_call_id, output: p.result }],
+              });
+            }
+          }
+          break;
+        }
+        case 'session.ask_cancelled': {
+          // 校验 ask_id + tool_call_id 后清空 pending（issue 8）
+          const p = notif.params;
+          if (p && p.ask_id && p.tool_call_id) {
+            useAskStore.getState().clearPendingByIds(
+              p.session_id,
+              p.ask_id,
+              p.tool_call_id,
+            );
+          }
+          break;
+        }
+        case 'session.done':
+          sessionStore.setLoopState('stopped', notif.params.reason);
+          sessionStore.setCanResume(true);
+          msgStore.setStreaming(false);
+          break;
         case 'error':
           msgStore.setError(notif.params.message);
           msgStore.setStreaming(false);
           break;
       }
-    });
+    };
+    c.onNotification(notifHandler);
+    // 注意：connect 通常只在 App 挂载时调用一次；offNotification 由 disconnect() / close() 处理
   }, []);
 
   // 启动时尝试自动连接
@@ -244,18 +365,64 @@ export function App() {
     } catch {}
   }, [client]);
 
-  // attach 到指定会话并加载消息
+  // attach 到指定会话并加载消息：调用 session.attach 拿 SessionSnapshot，再用 hydrateSnapshot hydrate
+  // Phase 2: 不再单独调 ask.pending / todo.list / task.list —— 全部来自 snapshot
+  // Phase 5c: 切 session 前先 clearSessionUiState 旧 session 避免闪旧 Todo/Plan/Ask
   const attachSession = useCallback(async (id: string) => {
     if (!client) return;
+    // Phase 5c: 切 session 时先清掉旧 session 的 UI
+    if (sessionStore.currentSessionId && sessionStore.currentSessionId !== id) {
+      clearSessionUiState({ sessionId: sessionStore.currentSessionId });
+    }
     try {
-      const result = await client.request('session.attach', { session_id: id });
-      sessionStore.setCurrentSession(id);
+      const snapshot = await client.request('session.attach', { session_id: id }) as SessionSnapshot;
       client.setReconnectSession(id);
-      msgStore.setMessages(result.messages || []);
+      hydrateSnapshot({
+        sessionId: id,
+        snapshot,
+        store: {
+          setCurrentSessionId: (sid) => sessionStore.setCurrentSession(sid),
+          setMessages: (m) => msgStore.setMessages(m),
+          appendMessages: (m) => msgStore.appendMessages?.(m),
+          getMessages: () => msgStore.messages,
+          setRole: (r) => sessionStore.setRole(r),
+          setModel: (m) => sessionStore.setModel(m),
+          setProjectPath: (p) => sessionStore.setProjectPath(p),
+          setContextUsage: (used, _window) => sessionStore.setContextUsage(used, sessionStore.contextWindow || 0),
+          setPendingPlan: (p) => sessionStore.setPendingPlan(p),
+          setPendingTodos: (t) => sessionStore.setPendingTodos(t),
+          setBackgroundTasks: (t) => sessionStore.setBackgroundTasks(t),
+          setPendingAskFromSnapshot: (ask) => {
+            const askStore = useAskStore.getState();
+            if (ask === null) {
+              askStore.clearSession(id);
+              return;
+            }
+            askStore.setPendingAskFromSnapshot(ask);
+          },
+          clearAskSession: (sid) => {
+            useAskStore.getState().clearSession(sid);
+          },
+          replaceTodosFromSnapshot: (_todos) => {
+            // setPendingTodos 已替换全部
+          },
+        },
+      });
+      // 同步 loop_state / can_resume（由 hydrateSnapshot 不在 store 上的字段）
+      sessionStore.setLoopState(snapshot.session.loop_state, snapshot.session.stop_reason);
+      sessionStore.setCanResume(snapshot.can_resume);
+      // 若 snapshot 带 pending ask 且消息流中没有 tool_use，补一条占位 assistant message
+      const ask = snapshot.pending_ask;
+      if (ask && !hasToolUse(msgStore.messages, ask.tool_call_id)) {
+        msgStore.addMessage({
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: ask.tool_call_id, name: ASK_USER_TOOL, args: ask.request }],
+        });
+      }
     } catch (e: any) {
       msgStore.setError(e.message);
     }
-  }, [client]);
+  }, [client, sessionStore, msgStore]);
 
   // 进入项目：设置 currentProject，打开该项目所有会话为 tab，自动 attach 第一个（最新）
   const enterProject = useCallback(async (projectPath: string) => {
@@ -317,6 +484,8 @@ export function App() {
       if (newTabs.length > 0) {
         await attachSession(newTabs[0]);
       } else {
+        // Phase 5c: 切换 session 时调用 clearSessionUiState 避免闪旧 Todo/Plan/Resume/Ask/Tasks
+        clearSessionUiState({ sessionId: id });
         sessionStore.setCurrentSession(null);
         msgStore.setMessages([]);
       }
@@ -328,6 +497,8 @@ export function App() {
     setView('projects');
     setCurrentProject(null);
     setOpenTabs([]);
+    // Phase 5c: 返回项目选择前清掉旧 session 的 UI（防止再进入时闪旧 Todo/Plan/Ask）
+    clearSessionUiState({ sessionId: sessionStore.currentSessionId ?? undefined });
     sessionStore.setCurrentSession(null);
     msgStore.setMessages([]);
   }, [sessionStore, msgStore]);
@@ -354,8 +525,16 @@ export function App() {
   const sendMessage = useCallback(async (content: string) => {
     if (!client || !content.trim()) return;
 
-    // 弱网检测：离线时排队
+    // issue 9: 离线 pending answer 不作为普通消息重发
+    // 若 session 当前有 pending Ask，则此文本本应作为 ask answer 提交
+    // 离线时不应排进普通消息队列（否则恢复后会创建新 loop，污染上下文）
     if (networkStatus === 'offline') {
+      const sid = sessionStore.currentSessionId;
+      const hasPendingAsk = sid && useAskStore.getState().pending[sid];
+      if (hasPendingAsk) {
+        msgStore.setError('当前有 ask 等待回答，请先在 ask 卡片上交互；离线消息会丢失');
+        return;
+      }
       setPendingQueue((q) => [...q, content]);
       msgStore.addMessage({
         role: 'system',
@@ -387,7 +566,13 @@ export function App() {
     try {
       await client.request('sessions.send', { session_id: sid, content });
     } catch (e: any) {
-      // 发送失败，排队重试
+      // 发送失败，排队重试（但 ask answer 不入队，见上面）
+      const hasPendingAsk = sid ? useAskStore.getState().pending[sid] : null;
+      if (hasPendingAsk) {
+        msgStore.setError('当前有 ask 等待回答，请先在 ask 卡片上交互；离线消息会丢失');
+        msgStore.setStreaming(false);
+        return;
+      }
       setPendingQueue((q) => [...q, content]);
       msgStore.setError(`send failed (queued): ${e.message}`);
       msgStore.setStreaming(false);
@@ -432,6 +617,8 @@ export function App() {
   }, [handleSlash, sendMessage]);
 
   // 断开连接
+  // 终审修复 #17：断开连接时同时清 ask store，避免残留卡片
+  // Phase 5c: 改用 clearSessionUiState({ clearAll: true }) 统一清理
   const disconnect = useCallback(() => {
     client?.close();
     setClient(null);
@@ -440,7 +627,18 @@ export function App() {
     setCurrentProject(null);
     setOpenTabs([]);
     sessionStore.reset();
-    msgStore.setMessages([]);
+    // Phase 5c: 统一 helper 清理 ask / todo / plan / task / messages
+    try {
+      clearSessionUiState({ clearAll: true });
+    } catch (e) {
+      console.warn('mobile disconnect: clearSessionUiState failed', e);
+    }
+    // 兼容旧路径：resetAll 仍调用以兜底
+    try {
+      useAskStore.getState().resetAll();
+    } catch (e) {
+      console.warn('mobile disconnect: ask store reset failed', e);
+    }
     prefs.remove('mcoder_pairing');
   }, [client]);
 
@@ -523,7 +721,27 @@ export function App() {
         streaming={msgStore.streaming}
         error={msgStore.error}
         pendingCount={pendingQueue.length}
+        client={client}
+        currentSessionId={sessionStore.currentSessionId}
+        onError={(m) => msgStore.setError(m)}
+        resultsById={(() => {
+          const m = new Map<string, any>();
+          for (const msg of msgStore.messages) {
+            for (const block of (msg?.content || [])) {
+              if (block.type === 'tool_result' && block.id && !m.has(block.id)) {
+                m.set(block.id, block);
+              }
+            }
+          }
+          return m;
+        })()}
       />
+
+      {/* Todo 摘要条（消息区下方、输入框上方）；全部完成时隐藏 */}
+      <TodoSummaryBar />
+
+      {/* Phase 3: Resume 入口（固定状态提示附近；非模态） */}
+      <ResumeBar client={client} sessionId={sessionStore.currentSessionId} />
 
       <InputBar
         onSubmit={onSubmit}

@@ -101,7 +101,7 @@ impl CodeExecTool {
         let task_manager = ctx.task_manager.clone();
         let lang_for_msg = lang.clone();
 
-        let task_id = task_manager.spawn("code_exec", async move {
+        let task_id = task_manager.spawn_compat("code_exec", async move {
             let batch_id = journal.begin_batch(&project_dir, &format!("code_exec:{}", lang))
                 .map_err(|e| e.to_string())?;
 
@@ -123,7 +123,7 @@ impl CodeExecTool {
                 "files_changed": changed.len(),
                 "batch_id": batch_id,
             }).to_string())
-        }).await;
+        }).await?;
 
         Ok(ToolOutput::AsyncTask {
             task_id: task_id.clone(),

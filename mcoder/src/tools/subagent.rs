@@ -200,7 +200,7 @@ impl Tool for SubagentTool {
                 let sa_ctx = ctx.clone();
 
                 // 通过 TaskManager spawn 注册子代理任务
-                let task_id = task_manager.spawn("subagent", async move {
+                let task_id = task_manager.spawn_compat("subagent", async move {
                     let run_fut = run_subagent(
                         Arc::new(runtime),
                         tasks_map.clone(),
@@ -253,7 +253,7 @@ impl Tool for SubagentTool {
                     } else {
                         Err("subagent task disappeared".into())
                     }
-                }).await;
+                }).await?;
 
                 Ok(ToolOutput::AsyncTask {
                     task_id,

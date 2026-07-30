@@ -1,20 +1,24 @@
 // 设计文档 §6.3: components/InputBox.tsx - 输入框
 // 支持：多行输入、@文件补全、历史记录导航
+// ask 模式下不写普通历史（issue 9）
 
 import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import { useState, useEffect } from 'react';
 import { useMessagesStore, useUiStore } from '../store/index.js';
+import { useAskStore } from '../ask/store.js';
 
 interface Props {
   value: string;
   onChange: (v: string) => void;
   onSubmit: (v: string) => void;
+  placeholder?: string;
 }
 
-export function InputBox({ value, onChange, onSubmit }: Props) {
+export function InputBox({ value, onChange, onSubmit, placeholder }: Props) {
   const { navigateHistory, addInputHistory, resetHistory } = useMessagesStore();
   const { setFileCompletions, navigateFileCompletion, fileCompletions, fileCompletionIndex } = useUiStore();
+  const askStore = useAskStore();
   const [showFileCompletions, setShowFileCompletions] = useState(false);
 
   // 设计文档 §6.8: @ 触发文件路径补全
@@ -39,6 +43,10 @@ export function InputBox({ value, onChange, onSubmit }: Props) {
       const histVal = navigateHistory('down');
       if (histVal !== null) onChange(histVal);
     } else if (key.return) {
+      // issue 9: ask 模式下不写普通历史（数字键 / note 不应污染上下箭头历史）
+      const sid = (askStore as any);
+      const askMode = Object.values(sid.askInputMode || {}).some(Boolean);
+      if (askMode) return;
       if (value.trim()) {
         addInputHistory(value);
       }
@@ -64,7 +72,7 @@ export function InputBox({ value, onChange, onSubmit }: Props) {
           value={value}
           onChange={onChange}
           onSubmit={onSubmit}
-          placeholder="type a message or /help for commands"
+          placeholder={placeholder || "type a message or /help for commands"}
         />
       </Box>
     </Box>

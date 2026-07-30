@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import type { SessionMeta, Message } from '../rpc/types.js';
+import type { SessionSnapshotTask } from '../rpc/sessionSnapshot.js';
 
 interface SessionState {
   connected: boolean;
@@ -19,7 +20,11 @@ interface SessionState {
   filesChanged: number;
   pendingPlan: any | null;
   pendingTodos: any[] | null;
-  backgroundTasks: any[] | null;
+  backgroundTasks: SessionSnapshotTask[] | null;
+  // Phase 2: 统一 SessionSnapshot 用
+  loopState: string;
+  stopReason: string | null;
+  canResume: boolean;
 
   setConnected: (v: boolean) => void;
   setSessions: (s: SessionMeta[]) => void;
@@ -34,7 +39,9 @@ interface SessionState {
   setFilesChanged: (n: number) => void;
   setPendingPlan: (p: any | null) => void;
   setPendingTodos: (t: any[] | null) => void;
-  setBackgroundTasks: (t: any[] | null) => void;
+  setBackgroundTasks: (t: SessionSnapshotTask[] | null) => void;
+  setLoopState: (state: string, reason: string | null) => void;
+  setCanResume: (v: boolean) => void;
   reset: () => void;
 }
 
@@ -55,6 +62,9 @@ export const useSessionStore = create<SessionState>((set) => ({
   pendingPlan: null,
   pendingTodos: null,
   backgroundTasks: null,
+  loopState: 'idle',
+  stopReason: null,
+  canResume: true,
 
   setConnected: (v) => set({ connected: v }),
   setSessions: (s) => set({ sessions: s }),
@@ -70,6 +80,8 @@ export const useSessionStore = create<SessionState>((set) => ({
   setPendingPlan: (p) => set({ pendingPlan: p }),
   setPendingTodos: (t) => set({ pendingTodos: t }),
   setBackgroundTasks: (t) => set({ backgroundTasks: t }),
+  setLoopState: (state, reason) => set({ loopState: state, stopReason: reason }),
+  setCanResume: (v) => set({ canResume: v }),
   reset: () => set({
     currentSessionId: null,
     currentSessionTitle: '',
