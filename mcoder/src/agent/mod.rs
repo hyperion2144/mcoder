@@ -379,6 +379,17 @@ impl AgentSession {
         if new_tokens_after > token_threshold {
             self.aggressive_compact(cfg);
         }
+
+        // After compaction, re-inject workflow context
+        let project_path = self.session.project_path();
+        let workflow_config = project_path.join(".mcoder").join("workflow").join("config.yaml");
+        if workflow_config.exists() {
+            if let Some(compact) = crate::workflow::context::build_compact_context(project_path) {
+                if let Err(e) = self.add_message(Message::system(compact)) {
+                    tracing::warn!("post-compaction workflow context re-injection failed: {}", e);
+                }
+            }
+        }
     }
 
     /// 估算单条消息的 token 数（每 4 字符 ≈ 1 token）
@@ -462,7 +473,7 @@ impl AgentSession {
         // 包含文件路径的文本块，让模型知道图片存在并可调用 view_image 工具理解图片。
         // 仅取 root->current_head_id 路径上的消息（消息树分支隔离）
         let path_messages = self.messages_along_head_path();
-        let messages_for_llm: Vec<Message> = if !self.model_config.supports_image() {
+        let mut messages_for_llm: Vec<Message> = if !self.model_config.supports_image() {
             path_messages.iter().map(|m| {
                 let needs_filter = m.content.iter().any(|b| matches!(b, ContentBlock::Image { .. }));
                 if !needs_filter {
@@ -487,6 +498,24 @@ impl AgentSession {
         } else {
             path_messages
         };
+
+        // Per-turn workflow state injection
+        let project_path = self.session.project_path();
+        let workflow_config = project_path.join(".mcoder").join("workflow").join("config.yaml");
+        if workflow_config.exists() {
+            if let Some(state) = crate::workflow::context::read_workflow_state(project_path) {
+                if state.has_config {
+                    let state_line = format!(
+                        "[workflow state] milestone={} phase={} active_change={} next={}",
+                        state.milestone.as_ref().map(|(_, n)| n.as_str()).unwrap_or("-"),
+                        state.phase.as_ref().map(|(_, n)| n.as_str()).unwrap_or("-"),
+                        state.active_change.as_ref().map(|(n, s)| format!("{}({})", n, s)).unwrap_or("-".to_string()),
+                        state.next_action.as_deref().unwrap_or("-"),
+                    );
+                    messages_for_llm.push(Message::system(state_line));
+                }
+            }
+        }
 
         let resp = self.llm.chat(&messages_for_llm, &schemas, &self.model_config)
             .await

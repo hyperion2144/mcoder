@@ -24,6 +24,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use tokio::sync::RwLock;
 
+pub mod workflow_prompts;
+
 /// Slash command 定义（从 .md 文件加载）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandDef {
@@ -199,10 +201,10 @@ pub fn parse_meta_command(name: &str, args: &[&str]) -> Result<MetaCommandResult
         "tree" => Ok(MetaCommandResult::Tree),
         "workflow" => {
             let action = args.first().copied().unwrap_or("list");
-            let valid = ["init", "propose", "plan", "apply", "review", "archive", "continue", "list"];
+            let valid = ["init", "propose", "plan", "apply", "review", "archive", "continue", "loop", "list"];
             if !valid.contains(&action) {
                 anyhow::bail!(
-                    "usage: /workflow <init|propose|plan|apply|review|archive|continue|list> [change_id]"
+                    "usage: /workflow <init|propose|plan|apply|review|archive|continue|loop|list> [change_id]"
                 );
             }
             let workflow_args = args.get(1..).unwrap_or(&[]);
@@ -231,190 +233,22 @@ pub fn parse_meta_command(name: &str, args: &[&str]) -> Result<MetaCommandResult
 /// 提示词基于 blueprint（specworkflow）的 workflow 模板，适配 mcoder 的工具名和路径：
 /// - `bp/changes/<name>/` -> `.mcoder/workflow/changes/<name>/`
 /// - `bp/specs/` -> `.mcoder/workflow/specs/`
-/// - `bp map` -> `graph_query` / `graph_file_symbols`
+/// - `bp map` -> `graph_search` / `graph_file_symbols`
 /// - `bp commit` -> `bash git add ... && git commit`
 ///
 /// `list` action 返回空字符串（由服务端直接查询并返回结果）。
 fn workflow_prompt(action: &str, change_id: Option<&str>) -> String {
-    let name = change_id.unwrap_or("<name>");
     match action {
-        "init" => r#"You are the orchestrator. Initialize the workflow project structure.
-
-### Steps
-1. Create directory structure: .mcoder/workflow/{specs,changes,conventions}
-2. Write .mcoder/workflow/config.yaml with profile and tech stack
-3. Write .mcoder/workflow/conventions/coding.md with coding conventions
-4. Suggest: /workflow propose <change-name>
-"#.to_string(),
-
-        "propose" => format!(r#"You are the orchestrator. Create a change proposal.
-
-### Input
-- Change name: {name} (kebab-case)
-
-### Steps
-1. Risk assessment: Trivial/Light/Standard/Critical
-   - Auto-assess based on the user's described scope.
-   - If Trivial or Light: skip Step 2 (grill), go directly to Step 3 with a minimal proposal.
-   - If Standard or Critical: continue to Step 2.
-2. Grill the user on requirements (skip if Trivial/Light) (RELENTLESS - do NOT skip)
-   - Ask ONE question at a time. Wait for the answer. Do not batch.
-   - Always provide a recommended answer when one exists.
-   - Walk every branch: Problem, Scope, Deliverables, Approach, Edge cases, Dependencies, Constraints.
-   - Do NOT proceed until you can describe every deliverable without guessing.
-3. Technical research (skip if Trivial/Light)
-   - Read relevant source files referenced in discussion.
-   - Use graph_query / graph_file_symbols to analyze existing patterns and call-sites.
-   - Use web_search for anything unresolved.
-4. Create .mcoder/workflow/changes/{name}/proposal.md with:
-   - ## Intent (problem, why now)
-   - ## Scope (In/Out)
-   - ## Deliverables (PR-N with behavior, rationale, acceptance)
-   - ## Approach
-5. Commit: bash git add .mcoder/workflow/changes/{name}/ && git commit -m "docs(proposal): {name}"
-6. Suggest: /workflow plan {name}
-"#),
-
-        "plan" => format!(r#"You are the orchestrator - dispatch sub-agents; do not do their work yourself.
-
-### Input
-- Change name: {name}
-- Change directory: .mcoder/workflow/changes/{name}/
-
-### Prerequisites
-- proposal.md exists in change directory and is not a template
-
-### Steps
-1. Resolve change name and paths
-   - If change name is empty: list .mcoder/workflow/changes/ for active changes (exclude archive/).
-2. Classify change (lightweight vs full)
-   - Lightweight: ALL deliverables are config/docs/refactor/scaffolding (no new behavior)
-   - Full: any deliverable introduces new behavior
-3. If FULL: dispatch planner sub-agent via subagent tool (op=spawn, role=planner)
-   - Planner reads: proposal.md, .mcoder/workflow/specs/<domain>/spec.md, .mcoder/workflow/conventions/coding.md
-   - Planner queries codebase via graph_query / graph_file_symbols for module structure and dependencies
-   - Planner performs impact analysis and writes ## Impact Analysis section in design.md
-   - Planner produces: design.md (DS-N), tasks.md (T-N), delta specs (specs/<domain>/spec.md), context.jsonl
-   If LIGHTWEIGHT: fill design.md and tasks.md (1 wave) directly, no delta specs needed.
-4. Review planner output across 5 dimensions:
-   - Implementability (can executor build it without guessing?)
-   - Design Correctness (architecture internally consistent?)
-   - Decision Completeness (all real technical choices recorded?)
-   - Impact Completeness (all downstream effects found?)
-   - File Manifest Consistency (every file traces to a component?)
-   If ANY fails: re-dispatch planner with structured feedback. Repeat until all pass.
-5. Verify traceability: PR->DS->T->spec (no orphans)
-   - Every PR-N in proposal.md referenced by at least one DS-N in design.md
-   - Every DS-N referenced by at least one T-N in tasks.md
-   - Every type:behavior task has spec_ref pointing to delta spec
-6. Commit: bash git add .mcoder/workflow/changes/{name}/ && git commit -m "docs(plan): design + tasks + delta specs"
-7. Suggest: /workflow apply {name}
-"#),
-
-        "apply" => format!(r#"You are the orchestrator - dispatch sub-agents; do not do their work yourself.
-
-### Input
-- Change name: {name}
-- Change directory: .mcoder/workflow/changes/{name}/
-
-### Prerequisites
-- design.md exists and is not a template
-- tasks.md exists, has at least 1 wave, checkboxes are unchecked (normal mode)
-- Delta specs exist for each affected domain
-
-### Steps
-1. Resolve change name and paths
-   - If change name is empty: use the most recently planned change.
-2. Classify change (lightweight vs full)
-   - Lightweight: ALL tasks are type:config|docs|refactor|scaffolding (no type:behavior)
-   - Full: any type:behavior task
-3. Wave analysis (Full mode)
-   - Parse tasks.md into waves (## Wave N sections), keep wave order.
-   - Build inter-wave dependency graph from depends_on fields.
-   - File manifest overlap check: waves modifying the SAME file cannot run concurrently.
-4. For each wave: dispatch executor sub-agent via subagent tool (op=spawn, role=executor)
-   - Executor reads: tasks.md, design.md, delta specs, .mcoder/workflow/conventions/coding.md
-   - Executor implements TDD: RED (failing test) -> GREEN (minimal impl) -> REFACTOR
-   - Executor commits each task atomically
-   - Do NOT inject file contents into the dispatch prompt - executor has read access.
-   If LIGHTWEIGHT: implement tasks yourself one by one, commit each, mark [x] with commit hash.
-5. After each wave: verify git log, git diff, tests pass
-   - Check git log --oneline for new commits
-   - Check tasks.md: tasks marked [x] with commit hash annotation
-   - Run wave's tests: confirm pass
-   - If any task missing commit: re-dispatch with specific feedback.
-6. After all waves: run full build + test suite
-7. Suggest: /workflow review {name}
-"#),
-
-        "review" => format!(r#"You are the orchestrator - dispatch sub-agents; do not do their work yourself.
-
-### Input
-- Change name: {name}
-- Change directory: .mcoder/workflow/changes/{name}/
-
-### Prerequisites
-- Code is implemented (tasks.md has [x] entries with commit hashes)
-- Build check and test suite pass
-
-### Steps
-1. Resolve change name and paths
-   - If change name is empty: use the most recently applied change.
-2. Pre-review: run build + test suite (must pass before review)
-   - If build or tests fail: do NOT dispatch reviewer. Suggest /workflow apply --fix {name}.
-3. Classify change (lightweight vs full)
-   - Lightweight (all non-behavior tasks, no delta specs): orchestrator does a quick review directly.
-   - Full (any behavior task, has delta specs): dispatch reviewer sub-agent.
-4. If FULL: dispatch reviewer sub-agent via subagent tool (op=spawn, role=reviewer)
-   - Reviewer reads: proposal.md, design.md, tasks.md, delta specs, .mcoder/workflow/specs/<domain>/spec.md, source code
-   - Reviewer performs triple review: spec compliance + code quality + goal achievement
-   - Reviewer writes review.md with issues (R-N/Q-N/G-N/D-N) and verdict
-5. Read review.md and route:
-   - PASS (zero issues) -> suggest /workflow archive {name}
-   - FAIL (D-issues) -> suggest /workflow plan --fix {name}
-   - NEEDS_REVISION (R/Q/G issues) -> suggest /workflow apply --fix {name}
-"#),
-
-        "archive" => format!(r#"You are the orchestrator. Archive a completed change.
-
-### Input
-- Change name: {name}
-- Change directory: .mcoder/workflow/changes/{name}/
-
-### Prerequisites
-- review.md exists and Overall Verdict is PASS
-- No unresolved issues in review.md ## Issues section
-
-### Steps
-1. Verify review verdict is PASS
-   - If not PASS: suggest /workflow apply --fix {name}
-2. Merge delta specs into global specs:
-   - For each domain in changes/{name}/specs/: merge ADDED/MODIFIED/REMOVED into .mcoder/workflow/specs/<domain>/spec.md
-   - If merge conflict: resolve in the delta spec and re-merge.
-3. Move change directory to archive: .mcoder/workflow/changes/archive/<date>-{name}/
-4. Update .mcoder/workflow/roadmap.md if proposal has ## Roadmap Reference
-5. Commit: bash git add .mcoder/workflow/ && git commit -m "archive: {name} - specs merged"
-6. Suggest: /workflow continue
-"#),
-
-        "continue" => r#"You are the orchestrator. Auto-detect current progress and suggest next step.
-
-### Steps
-1. List active changes in .mcoder/workflow/changes/ (exclude archive/)
-   - If multiple exist, ask the user which one.
-2. For each change, check artifact existence:
-   - No proposal.md -> suggest /workflow propose <name>
-   - proposal.md exists, no design.md -> suggest /workflow plan <name>
-   - design.md exists, tasks not all [x] -> suggest /workflow apply <name>
-   - All tasks [x], no review.md -> suggest /workflow review <name>
-   - review.md PASS -> suggest /workflow archive <name>
-3. If no active changes -> suggest /workflow propose <new-name>
-"#.to_string(),
-
-        // list: server-side execution, no prompt needed
-        "list" => String::new(),
-
-        _ => String::new(),
+        "init" => crate::commands::workflow_prompts::init_prompt(),
+        "propose" => crate::commands::workflow_prompts::propose_prompt(change_id.unwrap_or("")),
+        "plan" => crate::commands::workflow_prompts::plan_prompt(change_id.unwrap_or(""), false),
+        "apply" => crate::commands::workflow_prompts::apply_prompt(change_id.unwrap_or(""), false),
+        "review" => crate::commands::workflow_prompts::review_prompt(change_id.unwrap_or(""), false),
+        "archive" => crate::commands::workflow_prompts::archive_prompt(change_id.unwrap_or("")),
+        "continue" => crate::commands::workflow_prompts::continue_prompt(),
+        "loop" => crate::commands::workflow_prompts::loop_prompt(),
+        "list" => "Use workflow(action=list) to list all changes.".to_string(),
+        other => format!("unknown workflow action: {}", other),
     }
 }
 

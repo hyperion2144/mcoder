@@ -153,7 +153,7 @@ impl Tool for SubagentTool {
         match op.as_str() {
             "spawn" => {
                 let role = args["role"].as_str().unwrap_or("subagent").to_string();
-                let task: String = serde_json::from_value(args["task"].clone())
+                let mut task: String = serde_json::from_value(args["task"].clone())
                     .context("task required for spawn")?;
                 let max_iters_override: Option<u32> = args["max_iters"].as_u64().map(|n| n as u32);
                 let timeout_override: Option<u32> = args["timeout"].as_u64().map(|n| n as u32);
@@ -188,6 +188,63 @@ impl Tool for SubagentTool {
                     error: None,
                 };
                 self.tasks.lock().await.insert(id.clone(), entry);
+
+                // Sub-agent dispatch: inject role-specific workflow context if active
+                let project_path = ctx.project_path.clone();
+                let workflow_config = project_path.join(".mcoder").join("workflow").join("config.yaml");
+                if workflow_config.exists() {
+                    match role.as_str() {
+                        "planner" => {
+                            // Inject roadmap state
+                            if let Some(state) = crate::workflow::context::read_workflow_state(&project_path) {
+                                task.push_str(&format!(
+                                    "\n\n[workflow state] milestone={} phase={} active_change={} next={}\n",
+                                    state.milestone.as_ref().map(|(_, n)| n.as_str()).unwrap_or("-"),
+                                    state.phase.as_ref().map(|(_, n)| n.as_str()).unwrap_or("-"),
+                                    state.active_change.as_ref().map(|(n, s)| format!("{}({})", n, s)).unwrap_or_else(|| "-".to_string()),
+                                    state.next_action.as_deref().unwrap_or("-"),
+                                ));
+                            }
+                        }
+                        "executor" => {
+                            // Inject context.jsonl rows for the active change
+                            if let Some(state) = crate::workflow::context::read_workflow_state(&project_path) {
+                                if let Some((change_name, _)) = &state.active_change {
+                                    let context_jsonl = project_path.join(".mcoder")
+                                        .join("workflow").join("changes")
+                                        .join(change_name).join("context.jsonl");
+                                    if context_jsonl.exists() {
+                                        if let Ok(rows) = std::fs::read_to_string(&context_jsonl) {
+                                            task.push_str(&format!("\n\n[context.jsonl]\n{}\n", rows));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        "reviewer" => {
+                            // Inject invariants (context.jsonl reasons) + tasks.md
+                            if let Some(state) = crate::workflow::context::read_workflow_state(&project_path) {
+                                if let Some((change_name, _)) = &state.active_change {
+                                    let change_dir = project_path.join(".mcoder")
+                                        .join("workflow").join("changes").join(change_name);
+                                    let context_jsonl = change_dir.join("context.jsonl");
+                                    if context_jsonl.exists() {
+                                        if let Ok(rows) = std::fs::read_to_string(&context_jsonl) {
+                                            task.push_str(&format!("\n\n[invariants from context.jsonl]\n{}\n", rows));
+                                        }
+                                    }
+                                    let tasks_md = change_dir.join("tasks.md");
+                                    if tasks_md.exists() {
+                                        if let Ok(content) = std::fs::read_to_string(&tasks_md) {
+                                            task.push_str(&format!("\n\n[tasks.md]\n{}\n", content));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
 
                 let tasks_map = self.tasks.clone();
                 let task_manager = ctx.task_manager.clone();

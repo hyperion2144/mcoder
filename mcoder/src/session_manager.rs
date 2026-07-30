@@ -872,6 +872,9 @@ impl SessionManager {
             message: user_msg,
         });
 
+        // Inject workflow context if configured (session_start hook)
+        let _ = self.inject_workflow_context(session_id, &entry).await;
+
         let mgr = self.clone();
         let sid = session_id.to_string();
         let entry_clone = entry.clone();
@@ -965,6 +968,9 @@ impl SessionManager {
             session_id: session_id.to_string(),
             message: user_msg,
         });
+
+        // Inject workflow context if configured (session_start hook)
+        let _ = self.inject_workflow_context(session_id, &entry).await;
 
         let mgr = self.clone();
         let sid = session_id.to_string();
@@ -1235,6 +1241,9 @@ impl SessionManager {
             message: resumed_msg,
         });
 
+        // Inject workflow context if configured (session_start hook on resume)
+        let _ = self.inject_workflow_context(session_id, &entry).await;
+
         // 6. 持久化 loop_state=running（覆盖之前的 stopped/stop_reason 字段）
         self.persist_loop_state(session_id, "running", None).await;
 
@@ -1375,6 +1384,29 @@ impl SessionManager {
             session_id: session_id.to_string(),
             message: msg,
         });
+        Ok(())
+    }
+
+    /// Inject workflow context if configured (session_start hook)
+    async fn inject_workflow_context(&self, session_id: &str, entry: &Arc<SessionEntry>) -> Result<()> {
+        let project_path = {
+            let agent = entry.session.lock().await;
+            agent.session.project_path().to_path_buf()
+        };
+        let workflow_config = project_path.join(".mcoder").join("workflow").join("config.yaml");
+        if !workflow_config.exists() {
+            return Ok(());
+        }
+        if let Some(compact) = crate::workflow::context::build_compact_context(&project_path) {
+            let wf_msg = crate::types::Message::system(compact);
+            let mut agent = entry.session.lock().await;
+            agent.add_message(wf_msg.clone())?;
+            drop(agent);
+            let _ = self.event_tx.send(ServerEvent::Message {
+                session_id: session_id.to_string(),
+                message: wf_msg,
+            });
+        }
         Ok(())
     }
 

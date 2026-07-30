@@ -10,6 +10,9 @@ mod orchestrator;
 mod phase;
 pub mod prompts;
 mod store;
+pub mod templates;
+pub mod context;
+pub mod continue_;
 mod traceability;
 mod types;
 

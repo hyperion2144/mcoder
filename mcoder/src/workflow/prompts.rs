@@ -30,7 +30,7 @@ You are NOT a code writer. You produce the blueprint that executors follow. The 
 - `.mcoder/workflow/conventions/coding.md` - coding standards
 - `.mcoder/workflow/config.yaml` - project config (profile, tech stack context)
 - **Code graph queries** (run on demand):
-  - `graph_query` with a name - find symbols (functions, classes, structs) by substring match; start here for overview and keyword search
+  - `graph_search` with a name - find symbols (functions, classes, structs) by substring match; start here for overview and keyword search
   - `graph_file_symbols` with a path - list all symbols in a file (exports, imports at file level)
   - `graph_index` with a path - index a file or directory into the code graph (run after file changes to update)
 - Existing codebase (you can read source files)
@@ -91,7 +91,7 @@ After reading, assess whether you can produce a **detailed, executable** design 
 
 Before designing, research the technical landscape. Use ALL available tools:
 
-1. **Codebase structure** - Run `graph_query` with module/symbol names for overview. Run `graph_file_symbols` on files to understand their structure. Use `grep` to find who depends on modules you are changing.
+1. **Codebase structure** - Run `graph_search` with module/symbol names for overview. Run `graph_file_symbols` on files to understand their structure. Use `grep` to find who depends on modules you are changing.
 2. **Existing patterns** - Read source files to see what patterns/libraries are already used. Check `package.json` for dependencies. Use `grep` to find similar implementations.
 3. **Library/framework documentation** - Use the `context7` MCP tool to fetch current docs for any library/framework you plan to use (React, Express, Zod, etc.). Do NOT rely on training data - it may be outdated.
 4. **Web research** - Use `web_search` for anything context7 does not cover: new libraries, API changes, best practices, migration guides, security advisories.
@@ -124,13 +124,13 @@ After establishing the structure, fill it following these principles:
 #### Impact Analysis
 
 Before designing components, perform impact analysis using code graph queries:
-1. Run `graph_query` with names for symbol/module overview
+1. Run `graph_search` with names for symbol/module overview
 2. Run `graph_file_symbols` on files you will modify to understand their structure
 3. Use `grep` to find who depends on the symbols/modules you are changing
 
 Write `## Impact Analysis` section in design.md listing:
 - **Direct Impacts**: files being modified and what changes
-- **Indirect Impacts**: callers/dependents that may need updates (from `grep` and `graph_query`)
+- **Indirect Impacts**: callers/dependents that may need updates (from `grep` and `graph_search`)
 - **Test Impacts**: existing tests that may break
 
 #### Component Decomposition (DS-N)
@@ -379,7 +379,7 @@ You MUST read these files yourself (do NOT expect content to be injected):
 - **specs/<domain>/spec.md** - read delta specs for domains referenced by your tasks' spec_ref
 - **.mcoder/workflow/conventions/coding.md** - read coding conventions
 - **Code graph queries** (run on demand):
-  - `graph_query` with a name - find symbols by substring match (overview, search)
+  - `graph_search` with a name - find symbols by substring match (overview, search)
   - `graph_file_symbols` with a path - list all symbols in a file (exports, imports at file level)
   - `graph_index` with a path - index a file or directory into the code graph (run after file changes)
 - **Existing source code** - read any source file you need

@@ -407,7 +407,95 @@ const BUILTIN_SKILLS: &[(&str, &str)] = &[
     ("debug", include_str!("builtin/debug.md")),
     ("simplify", include_str!("builtin/simplify.md")),
     ("explain", include_str!("builtin/explain.md")),
+    ("workflow", WORKFLOW_SKILL_BODY),
 ];
+
+/// workflow skill 内容：方法论 + 工具使用指引（AI 自主激活后按此推进）
+const WORKFLOW_SKILL_BODY: &str = r#"---
+name: workflow
+description: Spec-driven change management for large features and refactors. Use when the user describes a multi-step change, wants design before implementation, or needs structured project management with proposals, design docs, task tracking, and review gates.
+when_to_use: "implement a feature", "refactor a module", "build a system", "large change", "workflow", "proposal", "design review"
+allowed_tools:
+  - read
+  - write
+  - edit
+  - bash
+  - grep
+  - graph_search
+  - graph_relations
+  - graph_file_symbols
+  - graph_index
+  - workflow
+  - subagent
+  - skill_use
+  - todo
+  - ask_user
+---
+
+You are now in spec-driven workflow mode.
+
+## Lifecycle
+
+propose -> plan -> apply -> review -> archive
+
+| Step | What | Who | Artifacts |
+|------|------|-----|-----------|
+| propose | Grill user on requirements, write proposal | You + user | proposal.md |
+| plan | Design, decompose tasks, write delta specs | Planner sub-agent | design.md, tasks.md, specs/ |
+| apply | Implement tasks via TDD | Executor sub-agents | Code + commits |
+| review | Triple review: spec, quality, goal | Reviewer sub-agent | review.md |
+| archive | Merge specs, update roadmap | You via workflow(action=finalize) | Specs merged |
+
+## How to proceed
+
+1. Call `workflow(action=continue)` to detect current state. It returns the next step name, the change name, AND the full step-by-step instructions for that step. Follow those instructions directly.
+2. If you already know which step to do (e.g. user said "do the review"), call `workflow(action=step, name=<step>, change=<change>)` to get that step's full instructions.
+3. After completing a step, call `workflow(action=continue, change=<change>)` again to get the next step's instructions.
+4. Repeat until the change is archived.
+
+## Tools
+
+- `workflow(action=continue, change=<name>)` -- detect state, return next step + full instructions
+- `workflow(action=step, name=propose|plan|apply|review|archive, change=<name>, fix=true|false)` -- get full instructions for a specific step
+- `workflow(action=template, type=proposal|design|tasks|spec|review)` -- get document template
+- `workflow(action=finalize, name=<change>)` -- execute archive (merge specs, move to archive)
+- `workflow(action=state, change=<name>)` -- query workflow state
+- `workflow(action=list)` -- list active changes (use when multiple changes exist)
+
+## Sub-agent dispatch
+
+- Planner: `subagent(op=spawn, role=planner)` -- produces design + tasks + delta specs
+- Executor: `subagent(op=spawn, role=executor)` -- implements tasks via TDD
+- Reviewer: `subagent(op=spawn, role=reviewer)` -- triple review
+
+## Code graph
+
+- `graph_search(action=symbol, pattern="")` -- module overview
+- `graph_search(action=symbol, pattern="<name>")` -- find symbol
+- `graph_relations(direction=callers, symbol="<module>")` -- impact analysis
+- `graph_relations(direction=callees, symbol="<module>")` -- dependencies
+- `graph_index(path=".")` -- rebuild graph
+
+## Review routing
+
+| Verdict | Issues | Next step |
+|---------|--------|-----------|
+| PASS | None | archive |
+| FAIL | D (design) | plan (fix=true) |
+| NEEDS_REVISION | R/Q/G (implementation) | apply (fix=true) |
+
+## Parallel changes
+
+When multiple changes are active, always pass `change=<name>` to workflow actions. Use `workflow(action=list)` to see all active changes.
+
+## Guardrails
+
+- Never skip review.
+- Never archive without PASS.
+- Dispatch sub-agents, don't do their work yourself.
+- Fetch templates before writing artifacts.
+- Use `graph_relations(direction=callers)` for impact analysis before designing.
+"#;
 
 /// 构建 SkillRegistry 并加载所有 skills
 pub async fn build_registry(

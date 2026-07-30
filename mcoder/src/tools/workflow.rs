@@ -19,11 +19,11 @@ impl Tool for WorkflowTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "workflow".into(),
-            description: "Manage workflow entities (roadmap/milestone/change/spec/task/implementation). action=create: create entities. action=query: query entities. action=update: update status/phase. Blueprint-style project management with 5-phase cycle (propose->plan->apply->review->archive).".into(),
+            description: "Manage workflow entities and operations. Actions: create/query/update (entity CRUD), init (initialize .mcoder/workflow/), finalize (archive a reviewed change), continue (detect next step + return full instructions), step (get full instructions for a specific step), state (read workflow state), list (list changes and spec domains), template (get document template), context (build step context), stats (execution statistics). Blueprint-style project management with 5-phase cycle (propose->plan->apply->review->archive).".into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["create", "query", "update"], "description": "Operation to perform" },
+                    "action": { "type": "string", "enum": ["create", "query", "update", "init", "finalize", "continue", "step", "state", "list", "template", "context", "stats"], "description": "Workflow action" },
                     "op": { "type": "string", "enum": ["init", "roadmap", "milestone", "change", "spec", "task", "implementation", "proposal", "design", "review", "roadmaps", "milestones", "changes", "tasks", "tasks_full", "proposals", "designs", "specs", "reviews", "list", "task_status", "phase_next", "phase_set", "roadmap_status", "milestone_status", "change_status", "impl_status", "spec_content"], "description": "Sub-operation (varies by action)" },
                     "profile": { "type": "string", "enum": ["lite", "standard"], "description": "create init/roadmap: workflow profile, default standard" },
                     "roadmap_id": { "type": "string", "description": "create milestone / query milestones / update roadmap_status: parent roadmap id" },
@@ -40,7 +40,12 @@ impl Tool for WorkflowTool {
                     "order": { "type": "integer", "description": "create milestone/task: sort order, default 0" },
                     "verdict": { "type": "string", "enum": ["pass", "fail", "needs_work"], "description": "create review: verdict, default needs_work" },
                     "status": { "type": "string", "enum": ["todo", "in_progress", "done", "blocked", "draft", "active", "completed", "archived", "cancelled"], "description": "update task_status/impl_status/roadmap_status/milestone_status/change_status: new status" },
-                    "phase": { "type": "string", "enum": ["propose", "plan", "apply", "review", "archive"], "description": "update phase_set: target phase" }
+                    "phase": { "type": "string", "enum": ["propose", "plan", "apply", "review", "archive"], "description": "update phase_set: target phase" },
+                    "type": { "type": "string", "description": "[template] Template type: proposal|design|tasks|spec|review|roadmap|config|global-spec" },
+                    "step": { "type": "string", "description": "[context] Workflow step: plan|apply|review|archive" },
+                    "change": { "type": "string", "description": "[context/finalize/continue/step] Change name" },
+                    "name": { "type": "string", "description": "[finalize] Change name to archive. [step] Step name: init|propose|plan|apply|review|archive" },
+                    "fix": { "type": "boolean", "description": "[step] Fix mode (read review.md issues), default false" }
                 },
                 "required": ["action"]
             }),
@@ -53,7 +58,19 @@ impl Tool for WorkflowTool {
             "create" => Self::create(&args, ctx).await,
             "query" => Self::query(&args, ctx).await,
             "update" => Self::update(&args, ctx).await,
-            other => anyhow::bail!("unknown action: {} (use create|query|update)", other),
+            "init" => Self::init_workflow_dir(&args, ctx).await,
+            "finalize" => Self::finalize_change(&args, ctx).await,
+            "continue" => Self::continue_workflow(&args, ctx).await,
+            "step" => Self::step_workflow(&args, ctx).await,
+            "state" => Self::state_workflow(&args, ctx).await,
+            "list" => Self::list_workflow(&args, ctx).await,
+            "template" => Self::template_workflow(&args, ctx).await,
+            "context" => Self::context_workflow(&args, ctx).await,
+            "stats" => Self::stats_workflow(&args, ctx).await,
+            other => anyhow::bail!(
+                "unknown action: {} (use create|query|update|init|finalize|continue|state|list|template|context|stats)",
+                other
+            ),
         }
     }
 }
@@ -430,5 +447,411 @@ impl WorkflowTool {
             }
             other => anyhow::bail!("unknown op: {} (use task_status|phase_next|phase_set|roadmap_status|milestone_status|change_status|impl_status|spec_content)", other),
         }
+    }
+
+    // ===== New workflow actions =====
+
+    /// action=init: Initialize .mcoder/workflow/ directory structure
+    async fn init_workflow_dir(_args: &Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let workflow_dir = ctx.project_dir.join("workflow");
+
+        // Create directories
+        std::fs::create_dir_all(workflow_dir.join("specs"))?;
+        std::fs::create_dir_all(workflow_dir.join("changes"))?;
+        std::fs::create_dir_all(workflow_dir.join("changes").join("archive"))?;
+        std::fs::create_dir_all(workflow_dir.join("conventions"))?;
+
+        // Write config.yaml (don't overwrite if exists)
+        let config_path = workflow_dir.join("config.yaml");
+        if !config_path.exists() {
+            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+            let project_name = ctx
+                .project_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "project".to_string());
+            let config_content = crate::workflow::templates::CONFIG_TEMPLATE
+                .replace("{{date}}", &today)
+                .replace("{{project-name}}", &project_name);
+            std::fs::write(&config_path, &config_content)?;
+        }
+
+        // Write empty conventions/coding.md (don't overwrite if exists)
+        let coding_path = workflow_dir.join("conventions").join("coding.md");
+        if !coding_path.exists() {
+            std::fs::write(
+                &coding_path,
+                "# Coding Conventions\n\n<!-- Add project coding conventions here -->\n",
+            )?;
+        }
+
+        // Write empty roadmap.md (don't overwrite if exists)
+        let roadmap_path = workflow_dir.join("roadmap.md");
+        if !roadmap_path.exists() {
+            std::fs::write(&roadmap_path, "# Roadmap\n\n<!-- Define project milestones here -->\n")?;
+        }
+
+        Ok(ToolOutput::Sync {
+            result: serde_json::json!({
+                "initialized": true,
+                "workflow_dir": workflow_dir.to_string_lossy(),
+                "created": [
+                    "specs/", "changes/", "changes/archive/", "conventions/",
+                    "config.yaml", "conventions/coding.md", "roadmap.md"
+                ]
+            }),
+        })
+    }
+
+    /// action=finalize: Archive a reviewed change (merge delta specs, move to archive)
+    async fn finalize_change(args: &Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let name: String = serde_json::from_value(args["name"].clone())
+            .context("name required for finalize")?;
+        let workflow_dir = ctx.project_dir.join("workflow");
+        let change_dir = workflow_dir.join("changes").join(&name);
+
+        if !change_dir.exists() {
+            anyhow::bail!("change directory not found: {}", change_dir.display());
+        }
+
+        // Verify review.md exists and verdict is PASS
+        let review_path = change_dir.join("review.md");
+        if !review_path.exists() {
+            anyhow::bail!(
+                "review.md not found for change '{}', cannot finalize without PASS review",
+                name
+            );
+        }
+        let review_content = std::fs::read_to_string(&review_path)?;
+        let mut has_pass = false;
+        for line in review_content.lines() {
+            let trimmed = line.trim();
+            if let Some(after) = trimmed.strip_prefix("## Overall Verdict:") {
+                if after.trim().starts_with("PASS") {
+                    has_pass = true;
+                    break;
+                }
+            }
+        }
+        if !has_pass {
+            anyhow::bail!(
+                "review verdict is not PASS for change '{}', cannot finalize",
+                name
+            );
+        }
+
+        // Merge delta specs into global specs
+        let change_specs_dir = change_dir.join("specs");
+        let mut merged_domains = Vec::new();
+        if change_specs_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&change_specs_dir) {
+                for entry in entries.flatten() {
+                    if let Ok(ft) = entry.file_type() {
+                        if ft.is_dir() {
+                            let domain = entry.file_name().to_string_lossy().to_string();
+                            let delta_path = change_specs_dir.join(&domain).join("spec.md");
+                            if delta_path.exists() {
+                                let delta_content = std::fs::read_to_string(&delta_path)?;
+                                let global_spec_dir = workflow_dir.join("specs").join(&domain);
+                                std::fs::create_dir_all(&global_spec_dir)?;
+                                let global_spec_path = global_spec_dir.join("spec.md");
+                                let global_content = if global_spec_path.exists() {
+                                    std::fs::read_to_string(&global_spec_path)?
+                                } else {
+                                    delta_content.clone()
+                                };
+                                let merged = crate::workflow::merge_delta_spec(
+                                    &delta_content,
+                                    &global_content,
+                                )?;
+                                std::fs::write(&global_spec_path, &merged)?;
+                                merged_domains.push(domain);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Move changes/<name>/ to changes/archive/<date>-<name>/
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let archive_name = format!("{}-{}", today, name);
+        let archive_dir = workflow_dir
+            .join("changes")
+            .join("archive")
+            .join(&archive_name);
+        std::fs::rename(&change_dir, &archive_dir)?;
+
+        // Update roadmap.md if proposal has a Roadmap Reference section
+        let mut roadmap_updated = false;
+        let archived_proposal = archive_dir.join("proposal.md");
+        if archived_proposal.exists() {
+            if let Ok(proposal_content) = std::fs::read_to_string(&archived_proposal) {
+                if proposal_content.contains("## Roadmap Reference") {
+                    let roadmap_path = workflow_dir.join("roadmap.md");
+                    if roadmap_path.exists() {
+                        if let Ok(roadmap_content) = std::fs::read_to_string(&roadmap_path) {
+                            // Find the change name in the roadmap and mark it as [x]
+                            let unchecked = format!("- [ ] {}", name);
+                            let checked = format!("- [x] {}", name);
+                            if roadmap_content.contains(&unchecked) {
+                                let updated_roadmap = roadmap_content.replace(&unchecked, &checked);
+                                let _ = std::fs::write(&roadmap_path, &updated_roadmap);
+                                roadmap_updated = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(ToolOutput::Sync {
+            result: serde_json::json!({
+                "finalized": true,
+                "change": name,
+                "archived_to": format!("changes/archive/{}", archive_name),
+                "merged_domains": merged_domains,
+                "roadmap_updated": roadmap_updated,
+                "hint": "consider running graph_index(path=\".\") to refresh the code graph"
+            }),
+        })
+    }
+
+    /// action=continue: Detect workflow state and return next step + full instructions
+    async fn continue_workflow(args: &Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let change_name: Option<String> = args["change"].as_str().map(|s| s.to_string());
+        let next_step = crate::workflow::continue_::determine_next_step(
+            &ctx.project_path,
+            change_name.as_deref(),
+        );
+
+        match next_step {
+            Some(step) => {
+                let change = step.change_name.as_deref().unwrap_or("");
+                let fix = step.action.contains("fix");
+                let action_clean = if step.action.ends_with(" --fix") {
+                    &step.action[..step.action.len() - 6]
+                } else {
+                    &step.action
+                };
+
+                let instructions = Self::get_step_prompt(&action_clean, change, fix);
+
+                Ok(ToolOutput::Sync {
+                    result: serde_json::json!({
+                        "action": step.action,
+                        "change": step.change_name,
+                        "reason": step.reason,
+                        "instructions": instructions,
+                    }),
+                })
+            }
+            None => Ok(ToolOutput::Sync {
+                result: serde_json::json!({
+                    "action": "unknown",
+                    "reason": "Could not determine next step. Use workflow(action=list) to see active changes, or workflow(action=step, name=<step>, change=<name>) to get instructions for a specific step."
+                }),
+            }),
+        }
+    }
+
+    /// action=step: Get full instructions for a specific step
+    async fn step_workflow(args: &Value, _ctx: &ToolContext) -> Result<ToolOutput> {
+        let step_name = args.get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing 'name' for action=step (use propose|plan|apply|review|archive|init)"))?;
+        let change = args.get("change")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let fix = args.get("fix")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let instructions = Self::get_step_prompt(step_name, change, fix);
+
+        Ok(ToolOutput::Sync {
+            result: serde_json::json!({
+                "step": step_name,
+                "change": change,
+                "fix": fix,
+                "instructions": instructions,
+            }),
+        })
+    }
+
+    /// 根据 action 名获取对应的编排步骤提示词
+    fn get_step_prompt(action: &str, change: &str, fix: bool) -> String {
+        match action {
+            "init" => crate::commands::workflow_prompts::init_prompt(),
+            "propose" => crate::commands::workflow_prompts::propose_prompt(change),
+            "plan" => crate::commands::workflow_prompts::plan_prompt(change, fix),
+            "apply" => crate::commands::workflow_prompts::apply_prompt(change, fix),
+            "review" => crate::commands::workflow_prompts::review_prompt(change, fix),
+            "archive" => crate::commands::workflow_prompts::archive_prompt(change),
+            "continue" => crate::commands::workflow_prompts::continue_prompt(),
+            "loop" => crate::commands::workflow_prompts::loop_prompt(),
+            other => format!("[workflow] unknown step '{}': use init|propose|plan|apply|review|archive", other),
+        }
+    }
+
+    /// action=state: Return workflow state as JSON
+    async fn state_workflow(_args: &Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let state = crate::workflow::context::read_workflow_state(&ctx.project_path);
+        match state {
+            Some(s) => {
+                let result = serde_json::to_value(&s)?;
+                Ok(ToolOutput::Sync { result })
+            }
+            None => Ok(ToolOutput::Sync {
+                result: serde_json::json!({
+                    "initialized": false,
+                    "hint": "Run workflow(action=init) to initialize"
+                }),
+            }),
+        }
+    }
+
+    /// action=list: List active changes and spec domains
+    async fn list_workflow(_args: &Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let workflow_dir = ctx.project_dir.join("workflow");
+
+        // Scan changes/ (exclude archive/)
+        let mut changes = Vec::new();
+        let changes_dir = workflow_dir.join("changes");
+        if changes_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&changes_dir) {
+                for entry in entries.flatten() {
+                    if let Ok(ft) = entry.file_type() {
+                        if ft.is_dir() {
+                            let name = entry.file_name().to_string_lossy().to_string();
+                            if name == "archive" {
+                                continue;
+                            }
+                            let change_dir = entry.path();
+                            let stage =
+                                crate::workflow::continue_::detect_change_stage(&change_dir);
+                            changes.push(serde_json::json!({
+                                "name": name,
+                                "stage": stage.as_str()
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+        changes.sort_by(|a, b| {
+            a["name"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["name"].as_str().unwrap_or(""))
+        });
+
+        // Scan specs/
+        let mut spec_domains = Vec::new();
+        let specs_dir = workflow_dir.join("specs");
+        if specs_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&specs_dir) {
+                for entry in entries.flatten() {
+                    if let Ok(ft) = entry.file_type() {
+                        if ft.is_dir() {
+                            spec_domains.push(entry.file_name().to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
+        }
+        spec_domains.sort();
+
+        Ok(ToolOutput::Sync {
+            result: serde_json::json!({
+                "changes": changes,
+                "spec_domains": spec_domains
+            }),
+        })
+    }
+
+    /// action=template: Return a document template
+    async fn template_workflow(args: &Value, _ctx: &ToolContext) -> Result<ToolOutput> {
+        let type_name: String = serde_json::from_value(args["type"].clone()).context(
+            "type required for template (proposal|design|tasks|spec|review|roadmap|config|global-spec)",
+        )?;
+
+        match crate::workflow::templates::get_template(&type_name) {
+            Some(template) => Ok(ToolOutput::Sync {
+                result: serde_json::json!({
+                    "type": type_name,
+                    "template": template
+                }),
+            }),
+            None => anyhow::bail!(
+                "unknown template type: {} (use proposal|design|tasks|spec|review|roadmap|config|global-spec)",
+                type_name
+            ),
+        }
+    }
+
+    /// action=context: Return context for a workflow step
+    async fn context_workflow(args: &Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let step: String = serde_json::from_value(args["step"].clone())
+            .context("step required for context (plan|apply|review|archive)")?;
+        let change_name: Option<String> = args["change"].as_str().map(|s| s.to_string());
+
+        let context_str = crate::workflow::context::build_full_context(
+            &ctx.project_path,
+            &step,
+            change_name.as_deref(),
+        );
+
+        match context_str {
+            Some(c) => Ok(ToolOutput::Sync {
+                result: serde_json::json!({
+                    "step": step,
+                    "change": change_name,
+                    "context": c
+                }),
+            }),
+            None => Ok(ToolOutput::Sync {
+                result: serde_json::json!({
+                    "step": step,
+                    "change": change_name,
+                    "context": "",
+                    "hint": "No context available. Initialize workflow first."
+                }),
+            }),
+        }
+    }
+
+    /// action=stats: Return execution statistics
+    async fn stats_workflow(_args: &Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let meta_dir = ctx.project_path.join(".meta");
+        let mut stats = serde_json::json!({
+            "meta_dir_exists": meta_dir.exists()
+        });
+
+        if meta_dir.exists() {
+            let mut file_count = 0u32;
+            if let Ok(entries) = std::fs::read_dir(&meta_dir) {
+                for entry in entries.flatten() {
+                    if entry.path().is_file() {
+                        file_count += 1;
+                    }
+                }
+            }
+            stats["meta_file_count"] = serde_json::json!(file_count);
+
+            let reviewer_history = meta_dir.join("reviewer-history.json");
+            if reviewer_history.exists() {
+                stats["has_reviewer_history"] = serde_json::json!(true);
+            }
+        }
+
+        // Include workflow state summary
+        if let Some(state) = crate::workflow::context::read_workflow_state(&ctx.project_path) {
+            stats["active_change"] = serde_json::json!(state.active_change);
+            stats["pending_changes_count"] = serde_json::json!(state.pending_changes.len());
+            stats["spec_domains"] = serde_json::json!(state.spec_domains);
+        }
+
+        Ok(ToolOutput::Sync { result: stats })
     }
 }
