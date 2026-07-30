@@ -596,6 +596,28 @@ impl McpManager {
         Ok(tools)
     }
 
+    /// 列出所有已连接 server 及其工具定义
+    pub async fn list_all_tools(&self) -> Vec<(String, Vec<McpToolDef>)> {
+        let clients = self.clients.read().await;
+        let mut result = Vec::new();
+        for (name, client) in clients.iter() {
+            let tools = client.list_tools().await;
+            result.push((name.clone(), tools));
+        }
+        result
+    }
+
+    /// 调用指定 server 上的工具
+    pub async fn call_tool(&self, server: &str, tool: &str, args: &Value) -> Result<Value> {
+        let client = {
+            let clients = self.clients.read().await;
+            clients.get(server)
+                .cloned()
+                .ok_or_else(|| anyhow!("MCP server '{}' not found", server))?
+        };
+        client.call_tool(tool, args).await
+    }
+
     /// 关闭所有 MCP server
     pub async fn shutdown_all(&self) {
         let clients: Vec<Arc<McpClient>> = self.clients.read().await.values().cloned().collect();

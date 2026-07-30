@@ -64,13 +64,13 @@ fn compact_one(msg: &Message, cfg: &CompactConfig) -> Message {
             }
         }
     }
-    Message { role: msg.role, content: new_content }
+    Message { id: msg.id.clone(), parent_id: msg.parent_id.clone(), role: msg.role, content: new_content, usage: msg.usage.clone(), display_only: msg.display_only }
 }
 
 pub struct AgentSession {
     pub session: JsonlSession,
     pub messages: Vec<Message>,
-    pub model_config: ModelConfig,
+    pub model_config: Arc<ModelConfig>,
     pub llm: SharedLLM,
     pub tools: Arc<ToolRegistry>,
     pub max_iters: u32,
@@ -78,18 +78,23 @@ pub struct AgentSession {
     pub current_role: String,
     /// role 注册表引用（用于切换 role 和获取 system prompt）
     pub role_registry: Arc<role::RoleRegistry>,
+    /// 累计 usage（跨轮次累加，用于 context 占用估算与 cost 展示）
+    pub cumulative_usage: crate::llm::Usage,
+    /// 当前消息树分支末端消息 id（None=空会话；发新消息时作为 parent_id）
+    pub current_head_id: Option<String>,
 }
 
 impl AgentSession {
     pub fn new(
         session: JsonlSession,
-        model_config: ModelConfig,
+        model_config: Arc<ModelConfig>,
         llm: SharedLLM,
         tools: Arc<ToolRegistry>,
         max_iters: u32,
         role_registry: Arc<role::RoleRegistry>,
     ) -> Self {
         let messages = session.read_all().unwrap_or_default();
+        let current_head_id = session.current_head_id().map(|s| s.to_string());
         Self {
             session,
             messages,
@@ -99,19 +104,59 @@ impl AgentSession {
             max_iters,
             current_role: "default".into(),
             role_registry,
+            cumulative_usage: crate::llm::Usage::default(),
+            current_head_id,
         }
     }
 
-    pub fn add_message(&mut self, msg: Message) -> Result<()> {
+    pub fn add_message(&mut self, mut msg: Message) -> Result<()> {
+        // 消息树：parent_id 未显式设置时，用 current_head_id 作为上游
+        if msg.parent_id.is_none() {
+            msg.parent_id = self.current_head_id.clone();
+        }
+        let msg_id = msg.id.clone();
+        // 先持久化 JSONL（失败则整体回滚）
         self.session.append(&msg)?;
+        // 再持久化 head_id（失败则 meta.json 仍为旧值，与内存一致）
+        self.session.update_head_id(&msg_id)?;
+        // 两步持久化都成功后才更新内存
         self.messages.push(msg);
+        self.current_head_id = Some(msg_id);
         Ok(())
+    }
+
+    /// 返回 root->current_head_id 路径上的消息（消息树分支隔离）。
+    /// 用于 run_once 调用 LLM 前筛选当前分支；messages 保留全树供 tree 视图/兄弟分支 checkout。
+    /// m12: 过滤掉 `display_only=true` 的消息（仅展示给 UI，不送入 LLM 上下文）
+    pub fn messages_along_head_path(&self) -> Vec<Message> {
+        let head_id = match &self.current_head_id {
+            Some(id) => id.clone(),
+            None => return Vec::new(),
+        };
+        let by_id: std::collections::HashMap<&str, &Message> =
+            self.messages.iter().map(|m| (m.id.as_str(), m)).collect();
+        let target = match by_id.get(head_id.as_str()) {
+            Some(m) => *m,
+            None => return self.messages.clone(), // head 不在内存（异常），兜底返回全部
+        };
+        let mut path: Vec<&Message> = Vec::new();
+        let mut cur = Some(target);
+        while let Some(m) = cur {
+            path.push(m);
+            cur = m.parent_id.as_deref().and_then(|pid| by_id.get(pid).copied());
+        }
+        path.reverse();
+        path.into_iter()
+            .filter(|m| !m.display_only)
+            .cloned()
+            .collect()
     }
 
     /// 只读访问 model_config（用于 compact 阈值计算）
     pub fn model_config(&self) -> &ModelConfig {
         &self.model_config
     }
+
 
     /// 切换 role（设计文档 §3.4: /mode plan, /mode goal 等）
     pub fn switch_role(&mut self, role_name: &str) -> Result<()> {
@@ -136,23 +181,37 @@ impl AgentSession {
     }
 
     /// 刷新 system prompt（基于当前 role）
+    /// 结构：静态段（Identity + Principles + Extensions + AGENTS.md）+ 会话段（Date/Platform/CWD/Git）
+    /// 插入两条 system 消息：静态段和会话段，便于 LLM 适配器对静态段做 cache_control
     fn refresh_system_prompt(&mut self) {
         let role_prompt = self.role_registry.get(&self.current_role)
             .map(|r| r.system_prompt.clone())
             .unwrap_or_default();
-        let prompt = if role_prompt.is_empty() {
-            default_system_prompt()
+
+        let project_path = self.session.project_path();
+        let agents_md = load_agents_md(project_path);
+        let static_segment = default_system_prompt(&self.model_config, agents_md.as_deref());
+        let session_segment = build_session_segment(project_path);
+
+        // role_prompt 合并到静态段前面（role_prompt 也属于可缓存的静态内容）
+        let static_text = if role_prompt.is_empty() {
+            static_segment
         } else {
-            format!("{}\n\n{}", role_prompt, default_system_prompt())
+            format!("{}\n\n{}", role_prompt, static_segment)
         };
 
-        // 移除旧的 system prompt（如果第一条是 system）
-        if self.messages.first().map(|m| m.role == Role::System).unwrap_or(false) {
+        // 移除旧的 system prompt（可能有多条 system 消息在开头）
+        while self.messages.first().map(|m| m.role == Role::System).unwrap_or(false) {
             self.messages.remove(0);
         }
-        let msg = Message::system(prompt);
-        if let Ok(()) = self.session.append(&msg) {
-            self.messages.insert(0, msg);
+        // 插入静态段和会话段两条 system 消息
+        let static_msg = Message::system(static_text);
+        let session_msg = Message::system(session_segment);
+        if let Ok(()) = self.session.append(&static_msg) {
+            self.messages.insert(0, static_msg);
+        }
+        if let Ok(()) = self.session.append(&session_msg) {
+            self.messages.insert(1, session_msg);
         }
     }
 
@@ -333,6 +392,7 @@ impl AgentSession {
                 ContentBlock::ToolResult { output, .. } => {
                     serde_json::to_string(output).map(|s| s.len()).unwrap_or(0)
                 }
+                ContentBlock::Image { .. } => 1000, // 图片估算 1000 token
             })
             .sum();
         chars / 4 + 1 // 至少 1 token
@@ -383,7 +443,7 @@ impl AgentSession {
         );
     }
 
-    pub async fn run_once(&mut self) -> Result<Option<Message>> {
+    pub async fn run_once(&mut self) -> Result<(Option<Message>, Option<crate::llm::Usage>)> {
         // 设计文档 §3.5: 根据 role 的 allowed_tools 过滤工具列表
         let all_schemas = self.tools.list_schemas();
         let schemas: Vec<_> = if let Some(role) = self.role_registry.get(&self.current_role) {
@@ -398,15 +458,94 @@ impl AgentSession {
             all_schemas
         };
 
-        let resp = self.llm.chat(&self.messages, &schemas, &self.model_config)
+        // 非视觉模型图片过滤：若当前模型不支持图片输入，将 ContentBlock::Image 替换为
+        // 包含文件路径的文本块，让模型知道图片存在并可调用 view_image 工具理解图片。
+        // 仅取 root->current_head_id 路径上的消息（消息树分支隔离）
+        let path_messages = self.messages_along_head_path();
+        let messages_for_llm: Vec<Message> = if !self.model_config.supports_image() {
+            path_messages.iter().map(|m| {
+                let needs_filter = m.content.iter().any(|b| matches!(b, ContentBlock::Image { .. }));
+                if !needs_filter {
+                    return m.clone();
+                }
+                let mut new_content = Vec::with_capacity(m.content.len());
+                for b in &m.content {
+                    match b {
+                        ContentBlock::Image { path, media_type } => {
+                            new_content.push(ContentBlock::Text {
+                                text: format!(
+                                    "[image: {} ({}). Use the image tool with action=view and this path to analyze the image.]",
+                                    path, media_type
+                                ),
+                            });
+                        }
+                        _ => new_content.push(b.clone()),
+                    }
+                }
+                Message { id: m.id.clone(), parent_id: m.parent_id.clone(), role: m.role, content: new_content, usage: m.usage.clone(), display_only: m.display_only }
+            }).collect()
+        } else {
+            path_messages
+        };
+
+        let resp = self.llm.chat(&messages_for_llm, &schemas, &self.model_config)
             .await
             .context("LLM call failed")?;
 
         self.process_response(resp)
     }
 
-    fn process_response(&mut self, resp: LLMResponse) -> Result<Option<Message>> {
-        let LLMResponse { content, tool_calls, .. } = resp;
+    /// 检测 image 工具（action=send）调用结果，若返回 image_sent 标记，
+    /// 则创建并追加一条含 ContentBlock::Image 的 assistant 消息到会话，
+    /// 返回该消息供调用方广播给客户端展示。
+    pub fn maybe_create_image_message(&mut self, call: &ToolCall, result_msg: &Message) -> Option<Message> {
+        if call.name != "image" {
+            return None;
+        }
+        // 从 ToolResult 中提取 image_sent 标记
+        for block in &result_msg.content {
+            if let ContentBlock::ToolResult { output, .. } = block {
+                if let crate::types::ToolOutput::Sync { result } = output {
+                    if result.get("type").and_then(|v| v.as_str()) == Some("image_sent") {
+                        let image_path = result.get("image_path").and_then(|v| v.as_str()).unwrap_or("");
+                        let media_type = result.get("media_type").and_then(|v| v.as_str()).unwrap_or("image/png");
+                        let caption = result.get("caption").and_then(|v| v.as_str()).unwrap_or("");
+
+                        let mut blocks = Vec::new();
+                        if !caption.is_empty() {
+                            blocks.push(ContentBlock::Text { text: caption.to_string() });
+                        }
+                        blocks.push(ContentBlock::Image {
+                            path: image_path.to_string(),
+                            media_type: media_type.to_string(),
+                        });
+
+                        // m12: 这条消息只用于 UI 展示图片，LLM 不应该再看到
+                        // （否则下一轮 LLM 会以为这是它自己输出的图片，进入死循环）
+                        let mut img_msg = Message::new(Role::Assistant, blocks);
+                        img_msg.display_only = true;
+                        if self.add_message(img_msg.clone()).is_ok() {
+                            return Some(img_msg);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn process_response(&mut self, resp: LLMResponse) -> Result<(Option<Message>, Option<crate::llm::Usage>)> {
+        let LLMResponse { content, tool_calls, usage } = resp;
+
+        // 累加 usage（若存在）
+        let last_usage = usage.clone();
+        if let Some(u) = &usage {
+            self.cumulative_usage.prompt_tokens = self.cumulative_usage.prompt_tokens.saturating_add(u.prompt_tokens);
+            self.cumulative_usage.completion_tokens = self.cumulative_usage.completion_tokens.saturating_add(u.completion_tokens);
+            self.cumulative_usage.total_tokens = self.cumulative_usage.total_tokens.saturating_add(u.total_tokens);
+            self.cumulative_usage.cache_read_input_tokens = self.cumulative_usage.cache_read_input_tokens.saturating_add(u.cache_read_input_tokens);
+            self.cumulative_usage.cache_creation_input_tokens = self.cumulative_usage.cache_creation_input_tokens.saturating_add(u.cache_creation_input_tokens);
+        }
 
         let mut blocks: Vec<ContentBlock> = Vec::new();
         if let Some(text) = &content {
@@ -423,67 +562,273 @@ impl AgentSession {
         }
 
         if blocks.is_empty() {
-            return Ok(None);
+            return Ok((None, last_usage));
         }
 
-        let msg = Message { role: Role::Assistant, content: blocks };
+        let msg = Message::new(Role::Assistant, blocks);
+        let msg = msg.with_usage(last_usage.clone());
         self.add_message(msg.clone())?;
-        Ok(Some(msg))
+        Ok((Some(msg), last_usage))
     }
 
-    pub async fn execute_tool(&mut self, call: &ToolCall, ctx: &crate::tools::ToolContext) -> Result<Message> {
+    pub async fn execute_tool(&mut self, call: &ToolCall, ctx: &crate::tools::ToolContext) -> Result<Vec<Message>> {
+        // C3: 在执行前检查取消，避免半提交状态
+        if ctx.cancellation.is_cancelled() {
+            let msg = Message::new(Role::Tool, vec![ContentBlock::ToolResult {
+                id: call.id.clone(),
+                output: ToolOutput::Error { message: "cancelled before execution".into() },
+            }]);
+            return Ok(vec![msg]);
+        }
+
         let output = match self.tools.execute(call, ctx).await {
             Ok(out) => out,
             Err(e) => ToolOutput::Error { message: e.to_string() },
         };
 
-        let msg = Message {
-            role: Role::Tool,
-            content: vec![ContentBlock::ToolResult {
+        // C3: 工具执行后再次检查取消
+        if ctx.cancellation.is_cancelled() {
+            let msg = Message::new(Role::Tool, vec![ContentBlock::ToolResult {
+                id: call.id.clone(),
+                output: ToolOutput::Error { message: "cancelled after execution".into() },
+            }]);
+            self.add_message(msg.clone())?;
+            return Ok(vec![msg]);
+        }
+
+        // 检测图片 read 结果：若工具返回的 Sync result 中含 {"type":"image", ...}，
+        // 则根据主模型是否支持图片输入走不同分支。
+        // 注：data_url 已移除（C1），ContentBlock::Image 只需 path + media_type，
+        // 各 LLM adapter 会自己读文件再 base64 编码。
+        let mut image_info: Option<(String, String, Option<String>)> = None;
+        if let ToolOutput::Sync { result } = &output {
+            if result.get("type").and_then(|v| v.as_str()) == Some("image") {
+                let path = result.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let media_type = result.get("media_type").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let description = result.get("description")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string());
+                if !path.is_empty() && !media_type.is_empty() {
+                    image_info = Some((path, media_type, description));
+                }
+            }
+        }
+
+        // 非图片工具走原路径
+        let Some((path, media_type, description)) = image_info else {
+            let msg = Message::new(Role::Tool, vec![ContentBlock::ToolResult {
                 id: call.id.clone(),
                 output,
-            }],
+            }]);
+            self.add_message(msg.clone())?;
+            return Ok(vec![msg]);
         };
-        self.add_message(msg.clone())?;
-        Ok(msg)
+
+        if self.model_config.supports_image() {
+            // M4: 主模型支持图片时 description 永远为 None（read_image 跳过了视觉模型调用），
+            // 所以 compact_result 不包含 description，img_msg 也不带描述文本。
+            // C2: 先构造两条消息，用单次 add_message 分别提交；
+            // 若第二条失败，第一条已持久化，此时追加一条 error tool_result 作为补偿，
+            // 让下一轮 LLM 调用知道图片未附加。
+            let compact_result = serde_json::json!({
+                "type": "image",
+                "path": path,
+                "media_type": media_type,
+                "width": output.get_field("width"),
+                "height": output.get_field("height"),
+                "size_bytes": output.get_field("size_bytes"),
+                "note": "image displayed in next user message",
+            });
+            let tool_msg = Message::new(Role::Tool, vec![ContentBlock::ToolResult {
+                id: call.id.clone(),
+                output: ToolOutput::Sync { result: compact_result },
+            }]);
+
+            let img_msg = Message::new(Role::User, vec![
+                ContentBlock::Text {
+                    text: format!("[image from read: {}]", path),
+                },
+                ContentBlock::Image {
+                    path: path.clone(),
+                    media_type: media_type.clone(),
+                },
+            ]);
+
+            // C2: 原子性 -- 先提交 tool_msg，再提交 img_msg。
+            // 若 img_msg 失败，追加补偿消息。
+            self.add_message(tool_msg.clone())?;
+            if let Err(e) = self.add_message(img_msg.clone()) {
+                tracing::error!("failed to persist image message for {}: {}", path, e);
+                let compensation = Message::new(Role::Tool, vec![ContentBlock::ToolResult {
+                    id: call.id.clone(),
+                    output: ToolOutput::Error {
+                        message: format!("image attachment failed: {}", e),
+                    },
+                }]);
+                let _ = self.add_message(compensation);
+                return Ok(vec![tool_msg]);
+            }
+            Ok(vec![tool_msg, img_msg])
+        } else if let Some(desc) = description {
+            // 主模型不支持但视觉模型有描述：把描述作为工具结果文本返回
+            let new_output = ToolOutput::Sync {
+                result: serde_json::json!({
+                    "type": "image",
+                    "description": desc,
+                    "note": "vision model described this image; main model cannot see images"
+                }),
+            };
+            let msg = Message::new(Role::Tool, vec![ContentBlock::ToolResult {
+                id: call.id.clone(),
+                output: new_output,
+            }]);
+            self.add_message(msg.clone())?;
+            Ok(vec![msg])
+        } else {
+            // M5: 都没法处理 -- 保留元信息 + 提示主模型可调用 image 工具重试
+            let new_output = ToolOutput::Sync {
+                result: serde_json::json!({
+                    "type": "image",
+                    "path": path,
+                    "media_type": media_type,
+                    "note": "image read but no vision model available. You cannot see this image. Use image tool action=view with this path to retry, or skip this image."
+                }),
+            };
+            let msg = Message::new(Role::Tool, vec![ContentBlock::ToolResult {
+                id: call.id.clone(),
+                output: new_output,
+            }]);
+            self.add_message(msg.clone())?;
+            Ok(vec![msg])
+        }
     }
 }
 
-/// 默认 system prompt：告诉模型它是 mcoder，工具调用规则等
-fn default_system_prompt() -> String {
-    r#"You are mcoder, a self-hosted coding agent.
+/// 辅助 trait：从 ToolOutput::Sync 中安全提取字段（不存在时返回 Null）
+trait ToolOutputExt {
+    fn get_field(&self, key: &str) -> serde_json::Value;
+}
 
-## Tool Usage
-- Use tools to read/edit files, run commands, and explore the codebase.
-- For file edits, prefer the `edit` tool with hashline mode (swap/delete/insert) using hashes from `read` output. Use `op=sed` for batch text replacement.
-- For cross-file refactors (e.g. rename), use `ast_edit` with `op=rename`.
-- Use `bash` with `commands` array for batch execution to save tokens.
-- Use `code_exec` to test code snippets (supports rust/python/javascript/go).
-- Use `graph_query` / `graph_file_symbols` to explore code structure via the code graph.
-- Use `memory_store` (scope=project) to record project decisions; use scope=experience for cross-project lessons.
-- Use `plan` to track the overall plan; use `todo` for individual tasks.
-- Use `sandbox_read` with handle when previous tool output was truncated.
-- Use `workflow_create` / `workflow_query` / `workflow_update` for blueprint-style project management.
+impl ToolOutputExt for ToolOutput {
+    fn get_field(&self, key: &str) -> serde_json::Value {
+        match self {
+            ToolOutput::Sync { result } => result.get(key).cloned().unwrap_or(serde_json::Value::Null),
+            _ => serde_json::Value::Null,
+        }
+    }
+}
 
-## Spec-Driven Workflow (blueprint-style)
-When the user describes a large change (e.g. "实现一个 X 功能", "重构 Y 模块", "做一个 Z 系统"), suggest using the workflow system:
-- Use `/workflow init <title>` to start a new roadmap with the first change in `propose` phase.
-- Use `/workflow plan <change_id>` to advance to planning (planner sub-agent generates design + spec + tasks).
-- Use `/workflow apply <change_id>` to advance to implementation (executor sub-agent implements tasks per spec).
-- Use `/workflow review <change_id>` to advance to review (reviewer sub-agent checks implementation vs spec).
-- Use `/workflow archive <change_id>` to archive completed changes.
-- Use `/workflow list` to see all roadmaps.
-Workflow entities use sequence IDs: RM-1, MS-1, CH-1, PR-1, DS-1, SP-1, T-1, RV-1.
-Profiles: `standard` (parallel tasks, mandatory TDD, all tasks must pass review) / `lite` (sequential, optional TDD, any task pass suffices).
-When spec.tdd=true, apply phase MUST follow RED (write failing test) -> GREEN (minimal impl) -> REFACTOR cycle.
+/// 默认 system prompt 的静态段（可缓存）：Identity + Principles + Extensions + Project Context
+/// 参数：model_config 提供模型信息，agents_md 为 AGENTS.md 文件内容（若存在）
+fn default_system_prompt(model_config: &ModelConfig, agents_md: Option<&str>) -> String {
+    let protocol_str = match model_config.protocol {
+        crate::types::ModelProtocol::OpenaiChat => "OpenAI Chat",
+        crate::types::ModelProtocol::OpenaiCompatible => "OpenAI Compatible",
+        crate::types::ModelProtocol::OpenaiResponses => "OpenAI Responses",
+        crate::types::ModelProtocol::Anthropic => "Anthropic",
+        crate::types::ModelProtocol::Gemini => "Gemini",
+    };
+    let provider = extract_provider(&model_config.base_url);
 
-## Token Saving
-- Don't repeat file contents unnecessarily; reference them by path.
-- Prefer batch operations (sed, bash commands array) over multiple single operations.
-- When reading large files, use offset/limit to read only what's needed.
+    let mut prompt = format!(
+        r#"# Identity & Model
+You are mcoder, a self-hosted coding agent running on {model_name} ({provider} {protocol}).
+Context window: {context_window}K tokens.
 
-## Behavior
-- Be concise in responses.
-- Explain what you're doing briefly, then do it.
-- If something fails, read the error and fix it; don't retry blindly."#.to_string()
+You assist users with software engineering tasks: reading/writing code, running commands,
+debugging, refactoring, and project management.
+
+# Operating Principles
+- Read before writing. Understand existing code before modifying it.
+- Be concise. Act, don't narrate.
+- If something fails, read the error and fix it. Don't retry blindly.
+- Don't re-output file contents you've already read; reference by path.
+- Prefer batch operations (bash commands array, sed) over repeated single calls.
+- When unsure, ask the user (ask_user tool).
+
+# Extensions
+- Use skill_use(action=list) to discover available skills, skill_use(action=use, name=...) to activate one.
+- Use mcp_list to discover external tools from connected MCP servers, mcp_call(server, tool, args) to invoke them."#,
+        model_name = model_config.name,
+        provider = provider,
+        protocol = protocol_str,
+        context_window = model_config.context_window / 1000,
+    );
+
+    if let Some(md) = agents_md {
+        if !md.trim().is_empty() {
+            prompt.push_str("\n\n# Project Context\n");
+            prompt.push_str(md.trim());
+        }
+    }
+
+    prompt
+}
+
+/// 从 base_url 提取 provider 名称（域名部分）
+fn extract_provider(base_url: &str) -> String {
+    let url = base_url.trim_end_matches('/');
+    // 去掉协议前缀
+    let host = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    // 取第一个 / 之前的部分
+    let host = host.split('/').next().unwrap_or(host);
+    // 去掉 api. 前缀，取主域名
+    let host = host.strip_prefix("api.").unwrap_or(host);
+    host.to_string()
+}
+
+/// 构建 system prompt 的会话段（不可缓存）：日期、平台、CWD、Git 信息
+fn build_session_segment(project_path: &std::path::Path) -> String {
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let platform = std::env::consts::OS;
+    let cwd = project_path.display();
+
+    let git_info = git_summary(project_path);
+
+    format!(
+        r#"
+# Session
+Date: {date}
+Platform: {platform}
+CWD: {cwd}{git_info}"#,
+        date = date,
+        platform = platform,
+        cwd = cwd,
+        git_info = git_info,
+    )
+}
+
+/// 获取 git 分支和状态摘要
+fn git_summary(project_path: &std::path::Path) -> String {
+    let branch = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(project_path)
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    match branch {
+        Some(b) => format!("\nGit: {}", b),
+        None => String::new(),
+    }
+}
+
+/// 加载 AGENTS.md 文件（优先项目根目录，其次 .mcoder/AGENTS.md）
+fn load_agents_md(project_path: &std::path::Path) -> Option<String> {
+    let candidates = [
+        project_path.join("AGENTS.md"),
+        project_path.join(".mcoder").join("AGENTS.md"),
+    ];
+    for path in &candidates {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            return Some(content);
+        }
+    }
+    None
 }

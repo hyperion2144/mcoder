@@ -4,10 +4,12 @@
 // ask_user 工具：内联渲染 AskCard（移动端触摸友好）
 
 import React, { useEffect, useRef, useState } from 'react';
+import { Capacitor } from '@capacitor/core';
 import type { Message } from '@mcoder/shared/rpc/types.js';
 import { AskCard } from '@mcoder/shared/ask/index.js';
 import { ASK_USER_TOOL } from '@mcoder/shared/ask/types.js';
 import { ToolCard } from '@mcoder/shared/toolCard/ToolCardHtml.js';
+import { formatUsageDelta } from '@mcoder/shared/utils/format.js';
 
 interface Props {
   messages: Message[];
@@ -89,6 +91,16 @@ export function MessageList({ messages, streaming, error, pendingCount, client, 
       // tool_result 由 ToolCard 内联显示，不单独渲染
       return null;
     }
+    if (block.type === 'image' && block.path) {
+      const src = block.path.startsWith('data:') || block.path.startsWith('http')
+        ? block.path
+        : Capacitor.convertFileSrc(block.path);
+      return (
+        <div key={i} className="msg-image-wrap">
+          <img src={src} className="msg-image" alt={block.path} />
+        </div>
+      );
+    }
     return null;
   };
 
@@ -104,6 +116,9 @@ export function MessageList({ messages, streaming, error, pendingCount, client, 
           <div className="message-role">{msg.role}</div>
           <div className="message-body">
             {msg.content.map((block: any, j: number) => renderBlock(block, j))}
+            {msg.role === 'assistant' && msg.usage && (
+              <div className="message-usage">↳ {formatUsageDelta(msg.usage)}</div>
+            )}
           </div>
         </div>
       ))}

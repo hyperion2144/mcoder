@@ -5,7 +5,9 @@ pub mod ast_edit;
 pub mod bash;
 pub mod code_exec;
 pub mod file;
+pub mod image;
 pub mod journal;
+pub mod mcp_meta;
 pub mod plan;
 pub mod sandbox;
 pub mod subagent;
@@ -13,12 +15,9 @@ pub mod task;
 pub mod undo;
 pub mod workflow;
 
-// SkillUseTool / SkillListTool：让 LLM 能调用 skill
+// SkillUseTool：让 LLM 能调用 skill（action=use 激活，action=list 列出）
 // skill 引擎定义在 crate::skills，这里只做工具适配
 pub struct SkillUseTool {
-    pub registry: std::sync::Arc<crate::skills::SkillRegistry>,
-}
-pub struct SkillListTool {
     pub registry: std::sync::Arc<crate::skills::SkillRegistry>,
 }
 
@@ -67,6 +66,12 @@ pub struct ToolContext {
     pub event_tx: tokio::sync::broadcast::Sender<crate::session_manager::ServerEvent>,
     /// 取消令牌
     pub cancellation: crate::types::CancellationToken,
+    /// 全局应用配置（供 view_image 等工具查找视觉模型）
+    pub app_config: Arc<crate::types::AppConfig>,
+    /// MCP 管理器（供 mcp_list / mcp_call 元工具使用）
+    pub mcp_manager: Option<Arc<crate::plugin::mcp::McpManager>>,
+    /// 当前会话的主模型配置（供 read 等工具判断是否需要视觉模型降级）
+    pub current_model: Arc<crate::types::ModelConfig>,
 }
 
 #[async_trait]
@@ -133,9 +138,6 @@ pub fn build_full_registry() -> (
 
     // ===== 文件工具族（无状态，从 ctx 取 project_dir/journal）=====
     reg.register(Arc::new(file::ReadTool));
-    reg.register(Arc::new(file::ReadMoreTool));
-    reg.register(Arc::new(file::ReadFullTool));
-    reg.register(Arc::new(file::ReadOriginalTool));
     reg.register(Arc::new(file::WriteTool));
     reg.register(Arc::new(file::EditTool));
     reg.register(Arc::new(file::LsTool));
@@ -143,31 +145,21 @@ pub fn build_full_registry() -> (
 
     // ===== Bash 工具族（无状态，从 ctx 取）=====
     reg.register(Arc::new(bash::BashTool));
-    reg.register(Arc::new(bash::BashBatchTool));
 
     // ===== 代码图谱工具（无状态，从 ctx 取 graph）=====
-    reg.register(Arc::new(crate::code_graph::tools::GraphQueryTool));
+    reg.register(Arc::new(crate::code_graph::tools::GraphSearchTool));
     reg.register(Arc::new(crate::code_graph::tools::GraphFileSymbolsTool));
     reg.register(Arc::new(crate::code_graph::tools::GraphIndexTool));
-    reg.register(Arc::new(crate::code_graph::tools::GraphFindTool));
-    reg.register(Arc::new(crate::code_graph::tools::GraphCallersTool));
-    reg.register(Arc::new(crate::code_graph::tools::GraphCalleesTool));
-    reg.register(Arc::new(crate::code_graph::tools::GraphReferencesTool));
+    reg.register(Arc::new(crate::code_graph::tools::GraphRelationsTool));
 
     // ===== 记忆工具（无状态，从 ctx 取 store/project_hash）=====
-    reg.register(Arc::new(crate::memory::tools::MemoryStoreTool));
-    reg.register(Arc::new(crate::memory::tools::MemorySearchTool));
-    reg.register(Arc::new(crate::memory::tools::MemoryListTool));
+    reg.register(Arc::new(crate::memory::tools::MemoryTool));
 
     // ===== AST 工具集（无状态，从 ctx 取 graph/journal/lsp）=====
-    reg.register(Arc::new(ast_edit::AstRenameTool));
-    reg.register(Arc::new(ast_edit::AstExtractTool));
-    reg.register(Arc::new(ast_edit::AstInlineTool));
+    reg.register(Arc::new(ast_edit::AstEditTool));
 
     // ===== Plan / Todo（无状态，从 ctx 取 project_dir）=====
-    reg.register(Arc::new(plan::PlanCreateTool));
-    reg.register(Arc::new(plan::PlanUpdateTool));
-    reg.register(Arc::new(plan::PlanQueryTool));
+    reg.register(Arc::new(plan::PlanTool));
     reg.register(Arc::new(plan::TodoTool));
 
     // ===== 代码执行（无状态，从 ctx 取）=====
@@ -182,25 +174,26 @@ pub fn build_full_registry() -> (
     // ===== Undo（无状态，从 ctx 取 journal）=====
     reg.register(Arc::new(undo::UndoTool));
 
+    // ===== 图片工具（无状态，action=view 从 ctx 取 app_config 查视觉模型）=====
+    reg.register(Arc::new(image::ImageTool));
+
     // ===== Subagent（late binding）=====
     // 注意: SubagentTool 仍需 task_manager，通过 ctx 获取
     let subagent_tool = Arc::new(subagent::SubagentTool::new());
     reg.register(subagent_tool.clone());
 
     // ===== Workflow 工具集（无状态，从 ctx 取 store）=====
-    reg.register(Arc::new(workflow::WorkflowCreateTool));
-    reg.register(Arc::new(workflow::WorkflowQueryTool));
-    reg.register(Arc::new(workflow::WorkflowUpdateTool));
+    reg.register(Arc::new(workflow::WorkflowTool));
 
     // ===== DAP 调试工具集（无状态，从 ctx 取）=====
-    reg.register_all(crate::debug::tools::build_debug_tools());
+    reg.register(crate::debug::tools::build_debug_tools());
 
     // ===== LSP 工具集（无状态，从 ctx 取）=====
-    reg.register_all(crate::lsp::tools::build_lsp_tools());
+    reg.register(crate::lsp::tools::build_lsp_tools());
 
     // ===== 浏览器工具集（设计文档 §8.7 M5，无状态）=====
     let browser_manager = crate::browser::BrowserManager::new();
-    reg.register_all(crate::browser::tools::build_browser_tools(browser_manager));
+    reg.register(crate::browser::tools::build_browser_tools(browser_manager));
 
     // ===== Computer Use 工具集（设计文档 §8.7 M5，无状态）=====
     reg.register_all(crate::computer_use::build_computer_use_tools());
@@ -217,6 +210,10 @@ pub fn build_full_registry() -> (
     let ask_user_tool = Arc::new(crate::ask_user::AskUserTool::new(ask_registry.clone()));
     reg.register(ask_user_tool.clone() as SharedTool);
 
+    // ===== MCP 元工具（mcp_list / mcp_call，通过 ctx.mcp_manager 访问）=====
+    reg.register(Arc::new(mcp_meta::McpListTool));
+    reg.register(Arc::new(mcp_meta::McpCallTool));
+
     (reg, subagent_tool, ask_user_tool, ask_registry)
 }
 
@@ -231,69 +228,64 @@ impl Tool for SkillUseTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "skill_use".into(),
-            description: "Activate a skill by name. Returns the expanded prompt to guide subsequent actions. Use when the user's request matches a skill's description, or after the user invokes /skill-name.".into(),
+            description: "Skill tool. action='use': activate a skill by name, returns the expanded prompt. action='list': list all available skills with descriptions.".into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["use", "list"],
+                        "default": "use",
+                        "description": "Operation mode"
+                    },
                     "name": {
                         "type": "string",
-                        "description": "Skill name (e.g. 'tdd', 'commit', 'review')"
+                        "description": "[use] Skill name (e.g. 'tdd', 'commit', 'review')"
                     },
                     "args": {
                         "type": "string",
-                        "description": "Arguments to substitute into the skill template ($ARGUMENTS)"
+                        "description": "[use] Arguments to substitute into the skill template ($ARGUMENTS)"
                     }
-                },
-                "required": ["name"]
+                }
             }),
         }
     }
 
     async fn execute(&self, args: serde_json::Value, _ctx: &ToolContext) -> Result<ToolOutput> {
-        let name = args.get("name")
+        let action = args.get("action")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing 'name' field"))?;
-        let skill_args = args.get("args")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+            .unwrap_or("use");
 
-        let prompt = self.registry.activate(name, skill_args).await
-            .map_err(|e| anyhow::anyhow!("skill activation failed: {}", e))?;
+        match action {
+            "use" => {
+                let name = args.get("name")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("missing 'name' field for action=use"))?;
+                let skill_args = args.get("args")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
 
-        Ok(ToolOutput::Sync {
-            result: serde_json::json!({
-                "skill": name,
-                "prompt": prompt,
-            }),
-        })
-    }
-}
+                let prompt = self.registry.activate(name, skill_args).await
+                    .map_err(|e| anyhow::anyhow!("skill activation failed: {}", e))?;
 
-#[async_trait]
-impl Tool for SkillListTool {
-    fn name(&self) -> &str {
-        "skill_list"
-    }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "skill_list".into(),
-            description: "List all available skills with their descriptions.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {}
-            }),
+                Ok(ToolOutput::Sync {
+                    result: serde_json::json!({
+                        "skill": name,
+                        "prompt": prompt,
+                    }),
+                })
+            }
+            "list" => {
+                let skills = self.registry.list().await;
+                let list: Vec<serde_json::Value> = skills.iter().map(|s| serde_json::json!({
+                    "name": s.name,
+                    "description": s.description,
+                    "user_invocable": s.user_invocable,
+                    "disable_model_invocation": s.disable_model_invocation,
+                })).collect();
+                Ok(ToolOutput::Sync { result: serde_json::Value::Array(list) })
+            }
+            other => anyhow::bail!("unknown action '{}': expected use|list", other),
         }
-    }
-
-    async fn execute(&self, _args: serde_json::Value, _ctx: &ToolContext) -> Result<ToolOutput> {
-        let skills = self.registry.list().await;
-        let list: Vec<serde_json::Value> = skills.iter().map(|s| serde_json::json!({
-            "name": s.name,
-            "description": s.description,
-            "user_invocable": s.user_invocable,
-            "disable_model_invocation": s.disable_model_invocation,
-        })).collect();
-        Ok(ToolOutput::Sync { result: serde_json::Value::Array(list) })
     }
 }

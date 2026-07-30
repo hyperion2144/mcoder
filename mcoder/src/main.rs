@@ -186,22 +186,18 @@ async fn start_server_full(
         }
     };
 
-    // 构建 skill_use 工具（让 LLM 能调用 skill）
+    // 构建 skill_use 工具（让 LLM 能调用 skill，action=use/list）
     let skill_use_tool: tools::SharedTool = Arc::new(tools::SkillUseTool {
         registry: skill_registry.clone(),
     });
-    let skill_list_tool: tools::SharedTool = Arc::new(tools::SkillListTool {
-        registry: skill_registry.clone(),
-    });
-    tools_reg.register_all(vec![skill_use_tool, skill_list_tool]);
+    tools_reg.register(skill_use_tool);
 
-    // 设计文档 §8.3.2: 启动 MCP servers 并注册其工具
+    // 设计文档 §8.3.2: 启动 MCP servers（工具不直接注册，通过 mcp_list/mcp_call 元工具发现）
     let mcp_manager = Arc::new(plugin::mcp::McpManager::new());
     if !app_config.mcp_servers.is_empty() {
         match mcp_manager.start_all(&app_config.mcp_servers).await {
             Ok(mcp_tools) => {
-                tracing::info!("registered {} MCP tools", mcp_tools.len());
-                tools_reg.register_all(mcp_tools);
+                tracing::info!("MCP servers started, {} tools available via mcp_list/mcp_call", mcp_tools.len());
             }
             Err(e) => {
                 tracing::warn!("failed to start MCP servers: {}", e);

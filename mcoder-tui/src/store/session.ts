@@ -2,7 +2,7 @@
 
 import { create } from 'zustand';
 import type { SessionMeta, Message } from '../rpc/types.js';
-import type { SessionSnapshotTask } from '../rpc/sessionSnapshot.js';
+import type { SessionSnapshotTask, LLMUsage } from '../rpc/sessionSnapshot.js';
 
 interface SessionState {
   connected: boolean;
@@ -14,6 +14,8 @@ interface SessionState {
   contextUsed: number;
   contextWindow: number;
   sessionCost: number;
+  /** 累计 LLM usage（真实 token 消耗） */
+  usage: LLMUsage;
   taskCount: number;
   projectPath: string;
   gitBranch: string;
@@ -32,6 +34,7 @@ interface SessionState {
   setRole: (r: string) => void;
   setModel: (m: string) => void;
   setContextUsage: (used: number, window: number) => void;
+  setUsage: (usage: LLMUsage, cost: number) => void;
   addCost: (c: number) => void;
   setTaskCount: (n: number) => void;
   setProjectPath: (p: string) => void;
@@ -45,6 +48,14 @@ interface SessionState {
   reset: () => void;
 }
 
+const DEFAULT_USAGE: LLMUsage = {
+  prompt_tokens: 0,
+  completion_tokens: 0,
+  total_tokens: 0,
+  cache_read_input_tokens: 0,
+  cache_creation_input_tokens: 0,
+};
+
 export const useSessionStore = create<SessionState>((set) => ({
   connected: false,
   sessions: [],
@@ -55,6 +66,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   contextUsed: 0,
   contextWindow: 128000,
   sessionCost: 0,
+  usage: DEFAULT_USAGE,
   taskCount: 0,
   projectPath: '',
   gitBranch: '',
@@ -72,6 +84,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   setRole: (r) => set({ currentRole: r }),
   setModel: (m) => set({ currentModel: m }),
   setContextUsage: (used, window) => set({ contextUsed: used, contextWindow: window }),
+  setUsage: (usage, cost) => set({ usage, sessionCost: cost }),
   addCost: (c) => set((st) => ({ sessionCost: st.sessionCost + c })),
   setTaskCount: (n) => set({ taskCount: n }),
   setProjectPath: (p) => set({ projectPath: p }),
@@ -88,6 +101,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     currentRole: 'default',
     contextUsed: 0,
     sessionCost: 0,
+    usage: DEFAULT_USAGE,
     taskCount: 0,
     filesChanged: 0,
     pendingPlan: null,

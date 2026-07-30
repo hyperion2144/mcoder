@@ -6,41 +6,61 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde_json::Value;
 
-/// 工作流创建工具：roadmap / milestone / change / spec / task / implementation
-pub struct WorkflowCreateTool;
+/// workflow - 统一工作流工具
+/// action=create: 创建工作流实体（原 workflow_create）
+/// action=query: 查询工作流实体（原 workflow_query）
+/// action=update: 更新工作流实体（原 workflow_update）
+pub struct WorkflowTool;
 
 #[async_trait]
-impl Tool for WorkflowCreateTool {
-    fn name(&self) -> &str { "workflow_create" }
+impl Tool for WorkflowTool {
+    fn name(&self) -> &str { "workflow" }
 
     fn schema(&self) -> ToolSchema {
         ToolSchema {
-            name: "workflow_create".into(),
-            description: "Create workflow entities. op=init|roadmap|milestone|change|spec|task|implementation|proposal|design|review. init=one-shot create roadmap+milestone+change. Blueprint-style project management with 5-phase cycle (propose->plan->apply->review->archive).".into(),
+            name: "workflow".into(),
+            description: "Manage workflow entities (roadmap/milestone/change/spec/task/implementation). action=create: create entities. action=query: query entities. action=update: update status/phase. Blueprint-style project management with 5-phase cycle (propose->plan->apply->review->archive).".into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "op": { "type": "string", "enum": ["init", "roadmap", "milestone", "change", "spec", "task", "implementation", "proposal", "design", "review"] },
-                    "profile": { "type": "string", "enum": ["lite", "standard"], "description": "init/roadmap: workflow profile, default standard" },
-                    "roadmap_id": { "type": "string", "description": "milestone: parent roadmap id" },
-                    "milestone_id": { "type": "string", "description": "change: parent milestone id" },
-                    "change_id": { "type": "string", "description": "spec/task/proposal/design/review: parent change id" },
-                    "task_id": { "type": "string", "description": "implementation: parent task id" },
-                    "title": { "type": "string" },
-                    "description": { "type": "string" },
-                    "milestone_title": { "type": "string", "description": "init: first milestone title" },
-                    "change_title": { "type": "string", "description": "init: first change title" },
-                    "content": { "type": "string", "description": "spec/proposal/design/review: full content" },
-                    "tdd": { "type": "boolean", "description": "spec: enable TDD mode, default false" },
-                    "order": { "type": "integer", "description": "milestone/task: sort order, default 0" },
-                    "verdict": { "type": "string", "enum": ["pass", "fail", "needs_work"], "description": "review: verdict, default needs_work" }
+                    "action": { "type": "string", "enum": ["create", "query", "update"], "description": "Operation to perform" },
+                    "op": { "type": "string", "enum": ["init", "roadmap", "milestone", "change", "spec", "task", "implementation", "proposal", "design", "review", "roadmaps", "milestones", "changes", "tasks", "tasks_full", "proposals", "designs", "specs", "reviews", "list", "task_status", "phase_next", "phase_set", "roadmap_status", "milestone_status", "change_status", "impl_status", "spec_content"], "description": "Sub-operation (varies by action)" },
+                    "profile": { "type": "string", "enum": ["lite", "standard"], "description": "create init/roadmap: workflow profile, default standard" },
+                    "roadmap_id": { "type": "string", "description": "create milestone / query milestones / update roadmap_status: parent roadmap id" },
+                    "milestone_id": { "type": "string", "description": "create change / query changes / update milestone_status: parent milestone id" },
+                    "change_id": { "type": "string", "description": "create spec/task/proposal/design/review / query tasks etc / update phase_next/phase_set/change_status: parent change id" },
+                    "task_id": { "type": "string", "description": "create implementation / update task_status/impl_status: target task id" },
+                    "spec_id": { "type": "string", "description": "update spec_content: target spec id" },
+                    "title": { "type": "string", "description": "create: entity title" },
+                    "description": { "type": "string", "description": "create: entity description" },
+                    "milestone_title": { "type": "string", "description": "create init: first milestone title" },
+                    "change_title": { "type": "string", "description": "create init: first change title" },
+                    "content": { "type": "string", "description": "create spec/proposal/design/review / update spec_content: full content" },
+                    "tdd": { "type": "boolean", "description": "create spec: enable TDD mode, default false" },
+                    "order": { "type": "integer", "description": "create milestone/task: sort order, default 0" },
+                    "verdict": { "type": "string", "enum": ["pass", "fail", "needs_work"], "description": "create review: verdict, default needs_work" },
+                    "status": { "type": "string", "enum": ["todo", "in_progress", "done", "blocked", "draft", "active", "completed", "archived", "cancelled"], "description": "update task_status/impl_status/roadmap_status/milestone_status/change_status: new status" },
+                    "phase": { "type": "string", "enum": ["propose", "plan", "apply", "review", "archive"], "description": "update phase_set: target phase" }
                 },
-                "required": ["op", "title"]
+                "required": ["action"]
             }),
         }
     }
 
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let action: String = serde_json::from_value(args["action"].clone())?;
+        match action.as_str() {
+            "create" => Self::create(&args, ctx).await,
+            "query" => Self::query(&args, ctx).await,
+            "update" => Self::update(&args, ctx).await,
+            other => anyhow::bail!("unknown action: {} (use create|query|update)", other),
+        }
+    }
+}
+
+impl WorkflowTool {
+    /// 原 workflow_create: 创建工作流实体
+    async fn create(args: &Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let op: String = serde_json::from_value(args["op"].clone())?;
         let title: String = serde_json::from_value(args["title"].clone())
             .context("title required")?;
@@ -157,33 +177,9 @@ impl Tool for WorkflowCreateTool {
             "title": title
         }) })
     }
-}
 
-/// 工作流查询工具：列出 roadmaps / milestones / changes / tasks
-pub struct WorkflowQueryTool;
-
-#[async_trait]
-impl Tool for WorkflowQueryTool {
-    fn name(&self) -> &str { "workflow_query" }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "workflow_query".into(),
-            description: "Query workflow entities. op=roadmaps|milestones|changes|tasks|tasks_full|proposals|designs|specs|reviews|list. Returns lists of entities.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "op": { "type": "string", "enum": ["roadmaps", "milestones", "changes", "tasks", "tasks_full", "proposals", "designs", "specs", "reviews", "list"] },
-                    "roadmap_id": { "type": "string", "description": "milestones: parent roadmap id" },
-                    "milestone_id": { "type": "string", "description": "changes: parent milestone id" },
-                    "change_id": { "type": "string", "description": "tasks/tasks_full/proposals/designs/specs/reviews: parent change id" }
-                },
-                "required": ["op"]
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+    /// 原 workflow_query: 查询工作流实体
+    async fn query(args: &Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let op: String = serde_json::from_value(args["op"].clone())?;
 
         match op.as_str() {
@@ -291,39 +287,9 @@ impl Tool for WorkflowQueryTool {
             other => anyhow::bail!("unknown op: {} (use roadmaps|milestones|changes|tasks|tasks_full|proposals|designs|specs|reviews|list)", other),
         }
     }
-}
 
-/// 工作流更新工具：更新任务状态、推进 5 步循环阶段等
-/// 设计文档 §8.5: 支持 /workflow slash command 的 propose/plan/apply/review/archive/continue 操作
-pub struct WorkflowUpdateTool;
-
-#[async_trait]
-impl Tool for WorkflowUpdateTool {
-    fn name(&self) -> &str { "workflow_update" }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "workflow_update".into(),
-            description: "Update workflow entities. op=task_status|phase_next|phase_set|roadmap_status|milestone_status|change_status|impl_status|spec_content. task_status updates task (todo|in_progress|done|blocked). phase_next advances change to next phase (propose->plan->apply->review->archive). phase_set explicitly sets phase (for rollback). impl_status updates task impl status (draft|in_progress|done|blocked).".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "op": { "type": "string", "enum": ["task_status", "phase_next", "phase_set", "roadmap_status", "milestone_status", "change_status", "impl_status", "spec_content"] },
-                    "task_id": { "type": "string", "description": "task_status/impl_status: target task id" },
-                    "status": { "type": "string", "enum": ["todo", "in_progress", "done", "blocked", "draft", "active", "completed", "archived", "cancelled"], "description": "task_status/impl_status/roadmap_status/milestone_status/change_status: new status" },
-                    "change_id": { "type": "string", "description": "phase_next/phase_set/change_status: target change id" },
-                    "phase": { "type": "string", "enum": ["propose", "plan", "apply", "review", "archive"], "description": "phase_set: target phase" },
-                    "roadmap_id": { "type": "string", "description": "roadmap_status: target roadmap id" },
-                    "milestone_id": { "type": "string", "description": "milestone_status: target milestone id" },
-                    "spec_id": { "type": "string", "description": "spec_content: target spec id" },
-                    "content": { "type": "string", "description": "spec_content: new spec content" }
-                },
-                "required": ["op"]
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+    /// 原 workflow_update: 更新工作流实体
+    async fn update(args: &Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let op: String = serde_json::from_value(args["op"].clone())?;
 
         match op.as_str() {

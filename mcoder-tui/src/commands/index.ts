@@ -37,6 +37,7 @@ export type MetaCommandResult =
   | { type: 'pair' }
   | { type: 'exit' }
   | { type: 'help' }
+  | { type: 'tree' }
   | { type: 'workflow'; action: string; change_id: string | null; args: string[]; prompt: string };
 
 /// 客户端处理结果：告诉调用方需要做什么 UI 动作
@@ -44,7 +45,7 @@ export interface CommandResult {
   /// 需要添加到消息流的系统消息（可选）
   systemMessage?: string;
   /// 是否需要切换视图
-  switchView?: 'chat' | 'sessions' | 'todos' | 'tasks' | 'config' | 'help' | 'diff';
+  switchView?: 'chat' | 'sessions' | 'todos' | 'tasks' | 'config' | 'help' | 'diff' | 'tree';
   /// 是否需要重新加载会话列表
   loadSessions?: boolean;
   /// 是否需要退出
@@ -126,6 +127,9 @@ async function handleMetaCommand(
   switch (meta.type) {
     case 'help':
       return { switchView: 'help' };
+
+    case 'tree':
+      return { switchView: 'tree' };
 
     case 'exit':
       return { exit: true };

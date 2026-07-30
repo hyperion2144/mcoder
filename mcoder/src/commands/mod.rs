@@ -76,12 +76,14 @@ pub enum MetaCommandResult {
     },
     /// 帮助
     Help,
+    /// 消息树视图（分叉/切换）
+    Tree,
 }
 
 /// 内置元命令名
 pub const META_COMMANDS: &[&str] = &[
     "help", "mode", "model", "sessions", "undo", "diff", "compact", "cancel",
-    "task", "config", "pair", "exit", "quit", "workflow",
+    "task", "config", "pair", "exit", "quit", "workflow", "tree",
 ];
 
 /// 判断是否为元命令
@@ -194,6 +196,7 @@ pub fn parse_meta_command(name: &str, args: &[&str]) -> Result<MetaCommandResult
             }
         }
         "pair" => Ok(MetaCommandResult::Pair),
+        "tree" => Ok(MetaCommandResult::Tree),
         "workflow" => {
             let action = args.first().copied().unwrap_or("list");
             let valid = ["init", "propose", "plan", "apply", "review", "archive", "continue", "list"];
@@ -662,6 +665,7 @@ fn meta_command_description(name: &str) -> &'static str {
         "pair" => "show pairing info",
         "exit" | "quit" => "exit",
         "workflow" => "spec-driven workflow orchestration (init|propose|plan|apply|review|archive|continue|list) - returns orchestration prompt injected into the agent loop",
+        "tree" => "view message tree (fork/switch branches)",
         _ => "",
     }
 }

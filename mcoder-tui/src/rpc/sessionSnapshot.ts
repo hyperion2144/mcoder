@@ -29,9 +29,19 @@ export interface SessionSnapshotSession {
   stop_reason: string | null;
 }
 
+export interface LLMUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+}
+
 export interface SessionSnapshotContext {
   tokens: number;
   cost: number;
+  context_window: number;
+  usage?: LLMUsage;
 }
 
 export interface SessionSnapshotPendingAsk {
@@ -107,6 +117,8 @@ export interface HydrateInput {
     setProjectPath: (p: string) => void;
     /** 设置 context used / window */
     setContextUsage: (used: number, window: number) => void;
+    /** 设置累计 LLM usage + cost（可选；snapshot 携带时写入） */
+    setUsage?: (usage: LLMUsage, cost: number) => void;
     /** 设置 plan */
     setPendingPlan: (plan: any | null) => void;
     /** 设置 todos */
@@ -194,8 +206,11 @@ export function hydrateSnapshot(input: HydrateInput): void {
   store.setModel(snapshot.session.model);
   store.setProjectPath(snapshot.session.project_path);
 
-  // 4. context（Phase 4 再接 pricing；Phase 2 window 从 model_config 取不到，传 0 由 store 兜底）
-  store.setContextUsage(snapshot.context.tokens, 0);
+  // 4. context：真实 context_window 从 snapshot 来；usage 同步写入 store
+  store.setContextUsage(snapshot.context.tokens, snapshot.context.context_window || 0);
+  if (store.setUsage && snapshot.context.usage) {
+    store.setUsage(snapshot.context.usage, snapshot.context.cost);
+  }
 
   // 5. messages：
   //   - 如果 caller 提供了 currentMessageCount 且 store 支持 append / get，

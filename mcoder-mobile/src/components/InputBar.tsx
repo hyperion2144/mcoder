@@ -1,10 +1,16 @@
 // 设计文档 §8.6.2: 输入栏
-// 触摸友好的输入框，支持斜杠命令
+// 触摸友好的输入框，支持斜杠命令和图片附件
 
 import React, { useState, useRef, useEffect } from 'react';
 
+export interface PendingImage {
+  data: string;
+  media_type: string;
+  preview: string;
+}
+
 interface Props {
-  onSubmit: (value: string) => void;
+  onSubmit: (value: string, images: PendingImage[]) => void;
   onCancel?: () => void;
   streaming: boolean;
   disabled: boolean;
@@ -12,7 +18,9 @@ interface Props {
 
 export function InputBar({ onSubmit, onCancel, streaming, disabled }: Props) {
   const [value, setValue] = useState('');
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 自适应高度
   useEffect(() => {
@@ -24,9 +32,10 @@ export function InputBar({ onSubmit, onCancel, streaming, disabled }: Props) {
 
   const handleSubmit = () => {
     const trimmed = value.trim();
-    if (!trimmed || disabled || streaming) return;
-    onSubmit(trimmed);
+    if ((!trimmed && pendingImages.length === 0) || disabled || streaming) return;
+    onSubmit(trimmed, pendingImages);
     setValue('');
+    setPendingImages([]);
   };
 
   // P1-4: 流式响应时按钮变为取消，可点击
@@ -42,30 +51,76 @@ export function InputBar({ onSubmit, onCancel, streaming, disabled }: Props) {
     }
   };
 
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    Array.from(files).forEach(file => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        const base64 = result.split(',')[1] || '';
+        const media_type = file.type || 'image/png';
+        setPendingImages(prev => [...prev, { data: base64, media_type, preview: result }]);
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = '';
+  };
+
   const isCommand = value.startsWith('/');
 
   return (
     <div className="input-bar">
-      <textarea
-        ref={textareaRef}
-        className={`input-textarea ${isCommand ? 'input-command' : ''}`}
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder={disabled ? 'offline...' : 'message or /help'}
-        rows={1}
-        disabled={disabled}
-        autoCapitalize="none"
-        autoCorrect="off"
-      />
-      <button
-        className={`send-button ${streaming ? 'cancel-button' : ''}`}
-        onClick={streaming ? handleCancel : handleSubmit}
-        disabled={!streaming && (!value.trim() || disabled)}
-        aria-label={streaming ? 'cancel' : 'send'}
-      >
-        {streaming ? 'Stop' : 'Send'}
-      </button>
+      {pendingImages.length > 0 && (
+        <div className="pending-images">
+          {pendingImages.map((img, i) => (
+            <div key={i} className="pending-image-item">
+              <img src={img.preview} alt="" />
+              <button
+                className="pending-image-remove"
+                onClick={() => setPendingImages(prev => prev.filter((_, idx) => idx !== i))}
+              >x</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="input-row">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          style={{ display: 'none' }}
+          onChange={handleImageSelect}
+        />
+        <button
+          className="attach-btn"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={disabled || streaming}
+          aria-label="attach image"
+        >+</button>
+        <textarea
+          ref={textareaRef}
+          className={`input-textarea ${isCommand ? 'input-command' : ''}`}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={disabled ? 'offline...' : 'message or /help'}
+          rows={1}
+          disabled={disabled}
+          autoCapitalize="none"
+          autoCorrect="off"
+        />
+        <button
+          className={`send-button ${streaming ? 'cancel-button' : ''}`}
+          onClick={streaming ? handleCancel : handleSubmit}
+          // streaming 时按钮始终可用（允许取消）；非 streaming 时要求有内容且未离线
+          disabled={streaming ? false : ((!value.trim() && pendingImages.length === 0) || disabled)}
+          aria-label={streaming ? 'cancel' : 'send'}
+        >
+          {streaming ? 'Stop' : 'Send'}
+        </button>
+      </div>
     </div>
   );
 }

@@ -3,6 +3,7 @@ use crate::llm::{LLMAdapter, LLMEvent, LLMResponse, Usage};
 use crate::types::{ContentBlock, Message, ModelConfig, Role, ToolCall, ToolSchema};
 use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
+use base64::Engine;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -79,6 +80,26 @@ impl GeminiAdapter {
                         .iter()
                         .filter_map(|b| match b {
                             ContentBlock::Text { text } => Some(GeminiPart::text(text.clone())),
+                            ContentBlock::Image { path, media_type } => {
+                                match std::fs::read(path) {
+                                    Ok(bytes) => {
+                                        let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                                        Some(GeminiPart {
+                                            text: None,
+                                            function_call: None,
+                                            function_response: None,
+                                            inline_data: Some(GeminiInlineData {
+                                                mime_type: media_type.clone(),
+                                                data,
+                                            }),
+                                        })
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("failed to read image {}: {}", path, e);
+                                        Some(GeminiPart::text(format!("[image read error: {}]", path)))
+                                    }
+                                }
+                            }
                             ContentBlock::ToolResult { id, output } => {
                                 let name = id_to_name.get(id).cloned().unwrap_or_else(|| id.clone());
                                 let response = match output {
@@ -101,6 +122,7 @@ impl GeminiAdapter {
                                     text: None,
                                     function_call: None,
                                     function_response: Some(GeminiFunctionResponse { name, response }),
+                                    inline_data: None,
                                 })
                             }
                             _ => None,
@@ -126,6 +148,7 @@ impl GeminiAdapter {
                                     args: Some(args.clone()),
                                 }),
                                 function_response: None,
+                                inline_data: None,
                             }),
                             _ => None,
                         })
@@ -240,6 +263,8 @@ impl LLMAdapter for GeminiAdapter {
                     prompt_tokens: u.prompt_token_count,
                     completion_tokens: u.candidates_token_count,
                     total_tokens: u.total_token_count,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
                 });
 
                 Ok(LLMResponse {
@@ -295,6 +320,7 @@ impl LLMAdapter for GeminiAdapter {
         let mut buffer = String::new();
         let mut full_content = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
+        let mut stream_usage: Option<Usage> = None;
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
@@ -310,6 +336,16 @@ impl LLMAdapter for GeminiAdapter {
 
                 let data = line.trim_start_matches("data: ").trim();
                 if let Ok(event) = serde_json::from_str::<GeminiResponse>(data) {
+                    // 每个 chunk 都可能携带 usage_metadata（累积值），取最新的
+                    if let Some(u) = event.usage_metadata {
+                        stream_usage = Some(Usage {
+                            prompt_tokens: u.prompt_token_count,
+                            completion_tokens: u.candidates_token_count,
+                            total_tokens: u.total_token_count,
+                            cache_read_input_tokens: 0,
+                            cache_creation_input_tokens: 0,
+                        });
+                    }
                     if let Some(candidate) = event.candidates.into_iter().next() {
                         for part in candidate.content.parts {
                             if let Some(text) = part.text {
@@ -335,7 +371,7 @@ impl LLMAdapter for GeminiAdapter {
             .send(LLMEvent::Done(LLMResponse {
                 content: if full_content.is_empty() { None } else { Some(full_content) },
                 tool_calls,
-                usage: None,
+                usage: stream_usage,
             }))
             .await;
 
@@ -372,6 +408,9 @@ struct GeminiPart {
     function_call: Option<GeminiFunctionCall>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "functionResponse")]
     function_response: Option<GeminiFunctionResponse>,
+    /// 图片数据（type=image 时使用）
+    #[serde(skip_serializing_if = "Option::is_none", rename = "inlineData")]
+    inline_data: Option<GeminiInlineData>,
 }
 
 impl GeminiPart {
@@ -380,8 +419,16 @@ impl GeminiPart {
             text: Some(t),
             function_call: None,
             function_response: None,
+            inline_data: None,
         }
     }
+}
+
+#[derive(Serialize, Clone)]
+struct GeminiInlineData {
+    #[serde(rename = "mimeType")]
+    mime_type: String,
+    data: String, // base64 encoded
 }
 
 #[derive(Serialize, Clone)]

@@ -369,6 +369,15 @@ where
                             })),
                             Some(session_id),
                         ),
+                        ServerEvent::UsageUpdated { session_id, delta, cumulative, context_window } => (
+                            make_notification("session.usage_updated", serde_json::json!({
+                                "session_id": session_id,
+                                "delta": delta,
+                                "cumulative": cumulative,
+                                "context_window": context_window,
+                            })),
+                            Some(session_id),
+                        ),
                         ServerEvent::Error { message } => (
                             make_notification("error", serde_json::json!({
                                 "message": message
@@ -469,9 +478,29 @@ async fn handle_request(
             let session_id = params["session_id"].as_str().unwrap_or("");
             let content = params["content"].as_str().unwrap_or("");
 
-            match mgr.send_message(session_id, content).await {
-                Ok(_) => JsonRpcResponse::ok(req.id, serde_json::json!({"accepted": true})),
-                Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+            // 支持附带图片（base64）：params.images = [{data, media_type}, ...]
+            let imgs: Vec<(String, String)> = params.get("images")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter()
+                    .filter_map(|img| {
+                        let data = img.get("data").and_then(|v| v.as_str())?.to_string();
+                        let media_type = img.get("media_type").and_then(|v| v.as_str())
+                            .unwrap_or("image/png").to_string();
+                        Some((data, media_type))
+                    })
+                    .collect())
+                .unwrap_or_default();
+
+            if imgs.is_empty() {
+                match mgr.send_message(session_id, content).await {
+                    Ok(_) => JsonRpcResponse::ok(req.id, serde_json::json!({"accepted": true})),
+                    Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+                }
+            } else {
+                match mgr.send_message_with_images(session_id, content, imgs).await {
+                    Ok(_) => JsonRpcResponse::ok(req.id, serde_json::json!({"accepted": true})),
+                    Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+                }
             }
         }
 
@@ -500,6 +529,53 @@ async fn handle_request(
             }
             match mgr.resume_session(session_id).await {
                 Ok(result) => JsonRpcResponse::ok(req.id, result),
+                Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+            }
+        }
+
+        // ===== Message Tree (分叉/切换) =====
+        "session.tree" => {
+            let params = req.params.unwrap_or_default();
+            let session_id = params["session_id"].as_str().unwrap_or("");
+            if session_id.is_empty() {
+                return JsonRpcResponse::err(
+                    req.id,
+                    -32602,
+                    "session_id required for session.tree".to_string(),
+                );
+            }
+            if let Err(reason) = check_attached_session(attached_session, session_id) {
+                return JsonRpcResponse::err(req.id, -32602, reason);
+            }
+            match mgr.get_message_tree(session_id).await {
+                Ok(tree) => JsonRpcResponse::ok(req.id, serde_json::json!(tree)),
+                Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+            }
+        }
+
+        "session.checkout" => {
+            let params = req.params.unwrap_or_default();
+            let session_id = params["session_id"].as_str().unwrap_or("");
+            let message_id = params["message_id"].as_str().unwrap_or("");
+            if session_id.is_empty() {
+                return JsonRpcResponse::err(
+                    req.id,
+                    -32602,
+                    "session_id required for session.checkout".to_string(),
+                );
+            }
+            if message_id.is_empty() {
+                return JsonRpcResponse::err(
+                    req.id,
+                    -32602,
+                    "message_id required for session.checkout".to_string(),
+                );
+            }
+            if let Err(reason) = check_attached_session(attached_session, session_id) {
+                return JsonRpcResponse::err(req.id, -32602, reason);
+            }
+            match mgr.checkout(session_id, message_id).await {
+                Ok(snapshot) => JsonRpcResponse::ok(req.id, serde_json::to_value(&snapshot).unwrap_or(serde_json::json!({"checked_out": true}))),
                 Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
             }
         }

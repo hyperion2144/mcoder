@@ -2,6 +2,7 @@
 // 显示连接状态、网络状态、模型、上下文用量、成本
 
 import React from 'react';
+import { ContextRing } from '@mcoder/shared/components/ContextRing.js';
 
 interface Props {
   connected: boolean;
@@ -43,11 +44,9 @@ export function StatusBar({
         <span className="status-role">{role}</span>
         {model && <span className="status-model">{model}</span>}
       </div>
-      <div className="status-context">
+      <div className="status-context" title={`${ctxStr}/${winStr} · ${ctxPct}%`}>
+        <ContextRing used={contextUsed} window={contextWindow} size={20} strokeWidth={3} />
         <span className="ctx-text">{ctxStr}/{winStr}</span>
-        <div className="ctx-bar">
-          <div className="ctx-bar-fill" style={{ width: `${Math.min(ctxPct, 100)}%` }} />
-        </div>
       </div>
       {cost > 0 && <span className="status-cost">${cost.toFixed(3)}</span>}
     </div>

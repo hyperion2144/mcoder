@@ -9,16 +9,11 @@ use std::path::PathBuf;
 
 // ==================== Plan 工具（结构化 steps）====================
 
-/// 设计文档 §4.7: plan_create({ steps: [{ description, files_affected?, depends_on? }] })
-pub struct PlanCreateTool;
-
-/// 设计文档 §4.7: plan_update({ step_id, status, note? })
-pub struct PlanUpdateTool;
-
-/// 设计文档 §4.7: plan_query() — 读取当前 session 的 plan 状态
-/// 包含 state（pending/approved/rejected/edited）、content（steps）、decided_at_ms
-/// 注意：plan 是 per-session 存在 pending_plan 表里；本工具只读，不修改
-pub struct PlanQueryTool;
+/// plan - 统一计划工具
+/// action=create: 创建结构化计划（原 plan_create）
+/// action=update: 更新计划步骤状态（原 plan_update）
+/// action=query: 读取当前 session 的计划状态（原 plan_query）
+pub struct PlanTool;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanStep {
@@ -67,18 +62,20 @@ fn save_plan(project_dir: &PathBuf, plan: &Plan) -> Result<()> {
 }
 
 #[async_trait]
-impl Tool for PlanCreateTool {
-    fn name(&self) -> &str { "plan_create" }
+impl Tool for PlanTool {
+    fn name(&self) -> &str { "plan" }
 
     fn schema(&self) -> ToolSchema {
         ToolSchema {
-            name: "plan_create".into(),
-            description: "Create a structured plan with steps. Each step: {description, files_affected?, depends_on?}. Replaces existing plan.".into(),
+            name: "plan".into(),
+            description: "Manage structured plans. action=create: create a plan with steps. action=update: update a step's status/note. action=query: read current session's plan state.".into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
+                    "action": { "type": "string", "enum": ["create", "update", "query"], "description": "Operation to perform" },
                     "steps": {
                         "type": "array",
+                        "description": "create: array of step objects",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -88,202 +85,175 @@ impl Tool for PlanCreateTool {
                             },
                             "required": ["description"]
                         }
+                    },
+                    "step_id": { "type": "integer", "description": "update: step id (1-indexed)" },
+                    "status": { "type": "string", "enum": ["in_progress", "done", "skipped", "failed"], "description": "update: new status" },
+                    "note": { "type": "string", "description": "update: optional note" }
+                },
+                "required": ["action"]
+            }),
+        }
+    }
+
+    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let action: String = serde_json::from_value(args["action"].clone())?;
+
+        match action.as_str() {
+            // 原 plan_create: 创建结构化计划
+            "create" => {
+                let steps_val: Vec<Value> = serde_json::from_value(args["steps"].clone())
+                    .context("steps array required")?;
+
+                let now = chrono::Utc::now().to_rfc3339();
+                let mut steps: Vec<PlanStep> = Vec::new();
+                for (i, sv) in steps_val.iter().enumerate() {
+                    let description: String = serde_json::from_value(sv["description"].clone())
+                        .context(format!("step {} missing description", i))?;
+                    let files_affected: Vec<String> = sv["files_affected"].as_array()
+                        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                        .unwrap_or_default();
+                    let depends_on: Vec<u32> = sv["depends_on"].as_array()
+                        .map(|a| a.iter().filter_map(|v| v.as_u64().map(|n| n as u32)).collect())
+                        .unwrap_or_default();
+                    steps.push(PlanStep {
+                        id: (i + 1) as u32,
+                        description,
+                        files_affected,
+                        depends_on,
+                        status: "pending".into(),
+                        note: None,
+                    });
+                }
+
+                let plan = Plan {
+                    steps: steps.clone(),
+                    created_at: now.clone(),
+                    updated_at: now,
+                };
+                // Phase 4: 写到 per-session SQLite pending_plan（不再写项目级 plan.json）
+                let plan_id = format!("plan-{}", uuid::Uuid::new_v4());
+                let content_json = serde_json::to_value(&plan)
+                    .context("serialize plan for pending_plan table")?;
+                ctx.session_state
+                    .create_pending_plan(&ctx.session_id, &plan_id, content_json, chrono::Utc::now().timestamp_millis())
+                    .await
+                    .map_err(|e| anyhow::anyhow!("plan_create: persist pending_plan failed: {}", e))?;
+                // loop_state=waiting_for_user
+                ctx.session_state
+                    .set_session_state(&ctx.session_id, "waiting_for_user", Some("plan_pending"))
+                    .await
+                    .map_err(|e| anyhow::anyhow!("plan_create: set_session_state failed: {}", e))?;
+
+                Ok(ToolOutput::Sync { result: serde_json::json!({
+                    "created": true,
+                    "step_count": steps.len(),
+                    "steps": steps,
+                    "plan_id": plan_id,
+                }) })
+            }
+            // 原 plan_update: 更新计划步骤状态
+            "update" => {
+                let step_id: u32 = serde_json::from_value(args["step_id"].clone())?;
+                let status: String = serde_json::from_value(args["status"].clone())?;
+                let note: Option<String> = args["note"].as_str().map(|s| s.to_string());
+
+                // Phase 4: 从 per-session SQLite pending_plan 读取并回写
+                let rec = ctx
+                    .session_state
+                    .get_pending_plan(&ctx.session_id)
+                    .await
+                    .context("no plan exists. Use plan create first.")?;
+
+                // 终审修复 #7: 仅 pending plan 可改；approved/rejected/edited 后 step 状态应通过
+                // 完成事件流同步，绝不允许在 plan 已决议后篡改 step。
+                use crate::persistence::session_state::PendingPlanState;
+                if rec.state != PendingPlanState::Pending {
+                    anyhow::bail!(
+                        "plan_update rejected: plan is in terminal state {:?}; \
+                         use the live execution flow instead of mutating past plans",
+                        rec.state
+                    );
+                }
+
+                let mut plan: Plan = serde_json::from_value(rec.content.clone())
+                    .context("plan_update: pending_plan.content parse failed")?;
+
+                let mut found = false;
+                for step in plan.steps.iter_mut() {
+                    if step.id == step_id {
+                        step.status = status.clone();
+                        if note.is_some() { step.note = note.clone(); }
+                        found = true;
+                        break;
                     }
-                },
-                "required": ["steps"]
-            }),
-        }
-    }
+                }
 
-    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
-        let steps_val: Vec<Value> = serde_json::from_value(args["steps"].clone())
-            .context("steps array required")?;
+                if !found {
+                    anyhow::bail!("step {} not found in plan", step_id);
+                }
 
-        let now = chrono::Utc::now().to_rfc3339();
-        let mut steps: Vec<PlanStep> = Vec::new();
-        for (i, sv) in steps_val.iter().enumerate() {
-            let description: String = serde_json::from_value(sv["description"].clone())
-                .context(format!("step {} missing description", i))?;
-            let files_affected: Vec<String> = sv["files_affected"].as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                .unwrap_or_default();
-            let depends_on: Vec<u32> = sv["depends_on"].as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_u64().map(|n| n as u32)).collect())
-                .unwrap_or_default();
-            steps.push(PlanStep {
-                id: (i + 1) as u32,
-                description,
-                files_affected,
-                depends_on,
-                status: "pending".into(),
-                note: None,
-            });
-        }
+                plan.updated_at = chrono::Utc::now().to_rfc3339();
+                let content_json = serde_json::to_value(&plan)
+                    .context("plan_update: serialize plan")?;
+                // 仅更新 content，state 保持原样（plan_update 是执行期改 step 状态，不是用户决议）
+                ctx.session_state
+                    .update_pending_plan_content(&ctx.session_id, content_json)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("plan_update: persist failed: {}", e))?;
 
-        let plan = Plan {
-            steps: steps.clone(),
-            created_at: now.clone(),
-            updated_at: now,
-        };
-        // Phase 4: 写到 per-session SQLite pending_plan（不再写项目级 plan.json）
-        let plan_id = format!("plan-{}", uuid::Uuid::new_v4());
-        let content_json = serde_json::to_value(&plan)
-            .context("serialize plan for pending_plan table")?;
-        ctx.session_state
-            .create_pending_plan(&ctx.session_id, &plan_id, content_json, chrono::Utc::now().timestamp_millis())
-            .await
-            .map_err(|e| anyhow::anyhow!("plan_create: persist pending_plan failed: {}", e))?;
-        // loop_state=waiting_for_user
-        ctx.session_state
-            .set_session_state(&ctx.session_id, "waiting_for_user", Some("plan_pending"))
-            .await
-            .map_err(|e| anyhow::anyhow!("plan_create: set_session_state failed: {}", e))?;
+                // 统计进度
+                let total = plan.steps.len();
+                let done = plan.steps.iter().filter(|s| s.status == "done").count();
+                let in_progress = plan.steps.iter().filter(|s| s.status == "in_progress").count();
+                let failed = plan.steps.iter().filter(|s| s.status == "failed").count();
 
-        Ok(ToolOutput::Sync { result: serde_json::json!({
-            "created": true,
-            "step_count": steps.len(),
-            "steps": steps,
-            "plan_id": plan_id,
-        }) })
-    }
-}
-
-#[async_trait]
-impl Tool for PlanQueryTool {
-    fn name(&self) -> &str { "plan_query" }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "plan_query".into(),
-            description: "Read the current session's plan (state + steps + decision timestamp). \
-                         Returns null if no plan has been created yet.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {},
-            }),
-        }
-    }
-
-    async fn execute(&self, _args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
-        let rec = match ctx.session_state.get_pending_plan(&ctx.session_id).await {
-            Some(r) => r,
-            None => {
-                return Ok(ToolOutput::Sync {
+                Ok(ToolOutput::Sync { result: serde_json::json!({
+                    "updated": true,
+                    "step_id": step_id,
+                    "status": status,
+                    "progress": {
+                        "total": total,
+                        "done": done,
+                        "in_progress": in_progress,
+                        "failed": failed,
+                        "pending": total - done - in_progress - failed
+                    }
+                }) })
+            }
+            // 原 plan_query: 读取当前 session 的 plan 状态
+            "query" => {
+                let rec = match ctx.session_state.get_pending_plan(&ctx.session_id).await {
+                    Some(r) => r,
+                    None => {
+                        return Ok(ToolOutput::Sync {
+                            result: serde_json::json!({
+                                "plan": null,
+                                "exists": false,
+                            }),
+                        });
+                    }
+                };
+                let state_str = match rec.state {
+                    crate::persistence::session_state::PendingPlanState::Pending => "pending",
+                    crate::persistence::session_state::PendingPlanState::Approved => "approved",
+                    crate::persistence::session_state::PendingPlanState::Edited => "edited",
+                    crate::persistence::session_state::PendingPlanState::Rejected => "rejected",
+                };
+                Ok(ToolOutput::Sync {
                     result: serde_json::json!({
-                        "plan": null,
-                        "exists": false,
+                        "plan": {
+                            "plan_id": rec.plan_id,
+                            "state": state_str,
+                            "content": rec.content,
+                            "created_at_ms": rec.created_at_ms,
+                            "decided_at_ms": rec.decided_at_ms,
+                        },
+                        "exists": true,
                     }),
-                });
+                })
             }
-        };
-        let state_str = match rec.state {
-            crate::persistence::session_state::PendingPlanState::Pending => "pending",
-            crate::persistence::session_state::PendingPlanState::Approved => "approved",
-            crate::persistence::session_state::PendingPlanState::Edited => "edited",
-            crate::persistence::session_state::PendingPlanState::Rejected => "rejected",
-        };
-        Ok(ToolOutput::Sync {
-            result: serde_json::json!({
-                "plan": {
-                    "plan_id": rec.plan_id,
-                    "state": state_str,
-                    "content": rec.content,
-                    "created_at_ms": rec.created_at_ms,
-                    "decided_at_ms": rec.decided_at_ms,
-                },
-                "exists": true,
-            }),
-        })
-    }
-}
-
-#[async_trait]
-impl Tool for PlanUpdateTool {
-    fn name(&self) -> &str { "plan_update" }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "plan_update".into(),
-            description: "Update a plan step's status/note. status=in_progress|done|skipped|failed.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "step_id": { "type": "integer", "description": "Step id (1-indexed)" },
-                    "status": { "type": "string", "enum": ["in_progress", "done", "skipped", "failed"] },
-                    "note": { "type": "string", "description": "Optional note about the update" }
-                },
-                "required": ["step_id", "status"]
-            }),
+            other => anyhow::bail!("unknown action: {} (use create|update|query)", other),
         }
-    }
-
-    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
-        let step_id: u32 = serde_json::from_value(args["step_id"].clone())?;
-        let status: String = serde_json::from_value(args["status"].clone())?;
-        let note: Option<String> = args["note"].as_str().map(|s| s.to_string());
-
-        // Phase 4: 从 per-session SQLite pending_plan 读取并回写
-        let rec = ctx
-            .session_state
-            .get_pending_plan(&ctx.session_id)
-            .await
-            .context("no plan exists. Use plan_create first.")?;
-
-        // 终审修复 #7: 仅 pending plan 可改；approved/rejected/edited 后 step 状态应通过
-        // 完成事件流同步，绝不允许在 plan 已决议后篡改 step。
-        use crate::persistence::session_state::PendingPlanState;
-        if rec.state != PendingPlanState::Pending {
-            anyhow::bail!(
-                "plan_update rejected: plan is in terminal state {:?}; \
-                 use the live execution flow instead of mutating past plans",
-                rec.state
-            );
-        }
-
-        let mut plan: Plan = serde_json::from_value(rec.content.clone())
-            .context("plan_update: pending_plan.content parse failed")?;
-
-        let mut found = false;
-        for step in plan.steps.iter_mut() {
-            if step.id == step_id {
-                step.status = status.clone();
-                if note.is_some() { step.note = note.clone(); }
-                found = true;
-                break;
-            }
-        }
-
-        if !found {
-            anyhow::bail!("step {} not found in plan", step_id);
-        }
-
-        plan.updated_at = chrono::Utc::now().to_rfc3339();
-        let content_json = serde_json::to_value(&plan)
-            .context("plan_update: serialize plan")?;
-        // 仅更新 content，state 保持原样（plan_update 是执行期改 step 状态，不是用户决议）
-        ctx.session_state
-            .update_pending_plan_content(&ctx.session_id, content_json)
-            .await
-            .map_err(|e| anyhow::anyhow!("plan_update: persist failed: {}", e))?;
-
-        // 统计进度
-        let total = plan.steps.len();
-        let done = plan.steps.iter().filter(|s| s.status == "done").count();
-        let in_progress = plan.steps.iter().filter(|s| s.status == "in_progress").count();
-        let failed = plan.steps.iter().filter(|s| s.status == "failed").count();
-
-        Ok(ToolOutput::Sync { result: serde_json::json!({
-            "updated": true,
-            "step_id": step_id,
-            "status": status,
-            "progress": {
-                "total": total,
-                "done": done,
-                "in_progress": in_progress,
-                "failed": failed,
-                "pending": total - done - in_progress - failed
-            }
-        }) })
     }
 }
 

@@ -424,7 +424,7 @@ async fn run_subagent(
             return;
         }
 
-        let assistant_msg = Message { role: Role::Assistant, content: blocks };
+        let assistant_msg = Message::new(Role::Assistant, blocks);
         messages.push(assistant_msg);
 
         // 如果没有工具调用，子代理结束
@@ -484,13 +484,10 @@ async fn run_subagent(
                 }
             }
 
-            let tool_msg = Message {
-                role: Role::Tool,
-                content: vec![ContentBlock::ToolResult {
-                    id: tc.id.clone(),
-                    output: result,
-                }],
-            };
+            let tool_msg = Message::new(Role::Tool, vec![ContentBlock::ToolResult {
+                id: tc.id.clone(),
+                output: result,
+            }]);
             messages.push(tool_msg);
 
             // 设计文档 §8.5: 连续失败检测（N=3）

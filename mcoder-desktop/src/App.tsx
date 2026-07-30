@@ -4,6 +4,7 @@
 // 复用 TUI 的 rpc/store/commands/utils 逻辑层
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { WsClient } from '@mcoder/shared/rpc/client.js';
 import { useSessionStore, useMessagesStore } from '@mcoder/shared/store/index.js';
 import { dispatchSlashCommand } from '@mcoder/shared/commands/index.js';
@@ -24,9 +25,12 @@ import { PlanPanel } from './components/PlanPanel.js';
 import { TodoPanel } from './components/TodoPanel.js';
 import { TodoSummaryBar } from './components/TodoSummaryBar.js';
 import { ResumeBar } from './components/ResumeBar.js';
+import { TreeView } from './components/TreeView.js';
 import { ToolCard } from '@mcoder/shared/toolCard/ToolCardHtml.js';
+import { ContextRing } from '@mcoder/shared/components/ContextRing.js';
+import { formatUsageDelta } from '@mcoder/shared/utils/format.js';
 
-type RightPanel = 'graph' | 'diff' | 'file' | 'none';
+type RightPanel = 'graph' | 'diff' | 'file' | 'tree' | 'none';
 
 // 按创建时间倒序（最近在前）
 function sortByRecent(list: SessionMeta[]): SessionMeta[] {
@@ -124,9 +128,22 @@ function MessageItem({
               // tool_result 由 ToolCard 内联显示，不单独渲染
               return null;
             }
+            if (block.type === 'image' && block.path) {
+              const src = block.path.startsWith('data:') || block.path.startsWith('http')
+                ? block.path
+                : convertFileSrc(block.path);
+              return (
+                <div key={j} className="msg-image-wrap">
+                  <img src={src} className="msg-image" alt={block.path} />
+                </div>
+              );
+            }
             return null;
           })}
         </div>
+        {msg.role === 'assistant' && msg.usage && formatUsageDelta(msg.usage) && (
+          <div className="message-usage">↳ {formatUsageDelta(msg.usage)}</div>
+        )}
       </div>
     </div>
   );
@@ -170,6 +187,8 @@ export function App() {
   const [input, setInput] = useState('');
   const [rightPanel, setRightPanel] = useState<RightPanel>('none');
   const [previewFile, setPreviewFile] = useState<{ path: string; content: string } | null>(null);
+  const [pendingImages, setPendingImages] = useState<{data: string; media_type: string; name: string; preview: string}[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const sessionStore = useSessionStore();
   const msgStore = useMessagesStore();
   const desktop = useDesktopStore();
@@ -213,7 +232,8 @@ export function App() {
           setRole: (r) => sessionStore.setRole(r),
           setModel: (m) => sessionStore.setModel(m),
           setProjectPath: (p) => sessionStore.setProjectPath(p),
-          setContextUsage: (used, _window) => sessionStore.setContextUsage(used, sessionStore.contextWindow || 0),
+          setContextUsage: (used, window) => sessionStore.setContextUsage(used, window || sessionStore.contextWindow || 0),
+          setUsage: (usage, cost) => sessionStore.setUsage(usage, cost),
           setPendingPlan: (p) => sessionStore.setPendingPlan(p),
           setPendingTodos: (t) => sessionStore.setPendingTodos(t),
           setBackgroundTasks: (t) => sessionStore.setBackgroundTasks(t),
@@ -399,6 +419,17 @@ export function App() {
           sessionStore.setCanResume(true);
           msgStore.setStreaming(false);
           break;
+        case 'session.usage_updated': {
+          const p = notif.params;
+          if (p && p.cumulative) {
+            const used = (p.cumulative.prompt_tokens || 0)
+              + (p.cumulative.cache_read_input_tokens || 0)
+              + (p.cumulative.cache_creation_input_tokens || 0);
+            sessionStore.setContextUsage(used, p.context_window || 0);
+            sessionStore.setUsage(p.cumulative, sessionStore.sessionCost);
+          }
+          break;
+        }
         case 'error':
           msgStore.setError(notif.params.message);
           msgStore.setStreaming(false);
@@ -491,7 +522,7 @@ export function App() {
   }, []);
 
   const sendMessage = async () => {
-    if (!client || !input.trim()) return;
+    if (!client || (!input.trim() && pendingImages.length === 0)) return;
     let sid = currentSessionId;
     if (!sid) {
       if (!currentProject) {
@@ -510,17 +541,57 @@ export function App() {
         return;
       }
     }
-    msgStore.addMessage({ role: 'user', content: [{ type: 'text', text: input }] });
+    // 构建用户消息内容块（含图片，乐观渲染用 data URL）
+    const userBlocks: any[] = [];
+    if (input.trim()) {
+      userBlocks.push({ type: 'text', text: input });
+    }
+    for (const img of pendingImages) {
+      userBlocks.push({ type: 'image', path: img.preview, media_type: img.media_type });
+    }
+    msgStore.addMessage({ role: 'user', content: userBlocks });
     msgStore.setStreaming(true);
     const text = input;
+    const imgs = pendingImages;
     setInput('');
+    setPendingImages([]);
     try {
-      // 服务端会自动把 pending-ask 期间的 send 视为 note，无需客户端额外处理
-      await client.request('sessions.send', { session_id: sid, content: text });
+      if (imgs.length > 0) {
+        await client.request('sessions.send', {
+          session_id: sid,
+          content: text,
+          images: imgs.map(im => ({ data: im.data, media_type: im.media_type })),
+        });
+      } else {
+        await client.request('sessions.send', { session_id: sid, content: text });
+      }
     } catch (e: any) {
       msgStore.setError(e.message);
       msgStore.setStreaming(false);
     }
+  };
+
+  // 读取图片文件为 base64
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    Array.from(files).forEach(file => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        const base64 = result.split(',')[1] || '';
+        const media_type = file.type || 'image/png';
+        setPendingImages(prev => [...prev, {
+          data: base64,
+          media_type,
+          name: file.name,
+          preview: result,
+        }]);
+      };
+      reader.readAsDataURL(file);
+    });
+    // 清空 input 以便重复选择同一文件
+    e.target.value = '';
   };
 
   const cancelStreaming = async () => {
@@ -542,6 +613,9 @@ export function App() {
       else msgStore.setError(null);
       if (result.systemMessage) {
         msgStore.addMessage({ role: 'system', content: [{ type: 'text', text: result.systemMessage }] });
+      }
+      if (result.switchView === 'tree') {
+        setRightPanel('tree');
       }
     } catch (e: any) {
       msgStore.setError(e.message);
@@ -600,9 +674,9 @@ export function App() {
         <span className="header-info">
           {currentRole !== 'default' && <span className="header-role">{currentRole}</span>}
           {currentModel && <span className="header-model">{currentModel}</span>}
-          <span className="header-ctx" title={`${contextUsed}/${contextWindow} tokens`}>
+          <span className="header-ctx" title={`${contextUsed}/${contextWindow} tokens · ${ctxPct}%`}>
+            <ContextRing used={contextUsed} window={contextWindow} size={22} strokeWidth={3} />
             <span className="ctx-text">{contextUsed > 1000 ? `${(contextUsed / 1000).toFixed(1)}k` : contextUsed}/{contextWindow > 1000 ? `${(contextWindow / 1000).toFixed(0)}k` : contextWindow}</span>
-            <span className="ctx-bar"><span className="ctx-bar-fill" style={{ width: `${Math.min(ctxPct, 100)}%` }} /></span>
           </span>
           {sessionCost > 0 && <span className="header-cost">${sessionCost.toFixed(3)}</span>}
         </span>
@@ -682,6 +756,19 @@ export function App() {
                 <TodoSummaryBar />
                 {/* Phase 3: Resume 入口（固定状态提示附近；非模态） */}
                 <ResumeBar client={client} sessionId={currentSessionId} />
+                {pendingImages.length > 0 && (
+                  <div className="pending-images">
+                    {pendingImages.map((img, i) => (
+                      <div key={i} className="pending-image-item">
+                        <img src={img.preview} alt={img.name} />
+                        <button
+                          className="pending-image-remove"
+                          onClick={() => setPendingImages(prev => prev.filter((_, idx) => idx !== i))}
+                        >x</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <textarea
                   value={input}
                   onChange={e => setInput(e.target.value)}
@@ -691,6 +778,19 @@ export function App() {
                 />
                 <div className="input-toolbar">
                   <span className="input-hint">Enter to send · Shift+Enter for newline</span>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    style={{ display: 'none' }}
+                    onChange={handleImageSelect}
+                  />
+                  <button
+                    className="attach-btn"
+                    onClick={() => fileInputRef.current?.click()}
+                    title="Attach image"
+                  >Image</button>
                   {streaming && (
                     <button className="cancel-btn" onClick={cancelStreaming}>Cancel</button>
                   )}
@@ -709,6 +809,10 @@ export function App() {
                   className={rightPanel === 'diff' ? 'active' : ''}
                   onClick={() => setRightPanel(rightPanel === 'diff' ? 'none' : 'diff')}
                 >Diff</button>
+                <button
+                  className={rightPanel === 'tree' ? 'active' : ''}
+                  onClick={() => setRightPanel(rightPanel === 'tree' ? 'none' : 'tree')}
+                >Tree</button>
                 {previewFile && (
                   <button
                     className={rightPanel === 'file' ? 'active' : ''}
@@ -722,6 +826,7 @@ export function App() {
               <div className="right-panel-content">
                 {rightPanel === 'graph' && client && <GraphView client={client} />}
                 {rightPanel === 'diff' && client && <DiffViewer client={client} />}
+                {rightPanel === 'tree' && client && <TreeView client={client} />}
                 {rightPanel === 'file' && previewFile && (
                   <div className="file-preview">
                     <div className="file-preview-header">

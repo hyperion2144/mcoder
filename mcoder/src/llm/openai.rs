@@ -6,6 +6,7 @@ use crate::llm::{LLMAdapter, LLMEvent, LLMResponse, Usage};
 use crate::types::{ContentBlock, Message, ModelConfig, ToolCall, ToolSchema};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use base64::Engine;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -45,10 +46,31 @@ impl OpenAIAdapter {
                     tool_call_id: None,
                 };
 
+                // 先收集 text / image，判断是否需要数组格式
+                let mut text_parts: Vec<String> = Vec::new();
+                let mut image_parts: Vec<Value> = Vec::new();
+                let mut has_tool_result = false;
+
                 for block in &m.content {
                     match block {
                         ContentBlock::Text { text } => {
-                            msg.content = Some(text.clone());
+                            text_parts.push(text.clone());
+                        }
+                        ContentBlock::Image { path, media_type } => {
+                            match std::fs::read(path) {
+                                Ok(bytes) => {
+                                    let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                                    let url = format!("data:{};base64,{}", media_type, data);
+                                    image_parts.push(serde_json::json!({
+                                        "type": "image_url",
+                                        "image_url": { "url": url }
+                                    }));
+                                }
+                                Err(e) => {
+                                    tracing::warn!("failed to read image {}: {}", path, e);
+                                    text_parts.push(format!("[image read error: {}]", path));
+                                }
+                            }
                         }
                         ContentBlock::ToolUse { id, name, args } => {
                             let oai_tc = OpenAIToolCall {
@@ -63,7 +85,7 @@ impl OpenAIAdapter {
                         }
                         ContentBlock::ToolResult { id, output } => {
                             msg.tool_call_id = Some(id.clone());
-                            msg.content = Some(match output {
+                            msg.content = Some(Value::String(match output {
                                 crate::types::ToolOutput::Sync { result } => result.to_string(),
                                 crate::types::ToolOutput::AsyncTask { handle, status_msg, .. } => {
                                     format!("async: {} - {}", handle, status_msg)
@@ -71,10 +93,24 @@ impl OpenAIAdapter {
                                 crate::types::ToolOutput::Error { message } => {
                                     format!("Error: {}", message)
                                 }
-                            });
+                            }));
+                            has_tool_result = true;
                         }
                     }
                 }
+
+                // 有图片时 content 用数组格式；有 ToolResult 时保留其输出（不被 text 覆盖）；
+                // 否则用纯字符串
+                if !image_parts.is_empty() && !has_tool_result {
+                    let mut arr: Vec<Value> = text_parts.into_iter()
+                        .map(|t| serde_json::json!({"type": "text", "text": t}))
+                        .collect();
+                    arr.extend(image_parts);
+                    msg.content = Some(Value::Array(arr));
+                } else if !text_parts.is_empty() && !has_tool_result {
+                    msg.content = Some(Value::String(text_parts.join("\n")));
+                }
+
                 msg
             })
             .collect()
@@ -114,6 +150,7 @@ impl LLMAdapter for OpenAIAdapter {
             temperature: config.temperature,
             max_tokens: config.max_tokens,
             stream: false,
+            stream_options: None,
         };
         let body_value = serde_json::to_value(&body).context("serializing OpenAI request")?;
         let url = self.build_url();
@@ -177,6 +214,8 @@ impl LLMAdapter for OpenAIAdapter {
                         prompt_tokens: u.prompt_tokens,
                         completion_tokens: u.completion_tokens,
                         total_tokens: u.total_tokens,
+                        cache_read_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
                     }),
                 })
             }
@@ -198,6 +237,7 @@ impl LLMAdapter for OpenAIAdapter {
             temperature: config.temperature,
             max_tokens: config.max_tokens,
             stream: true,
+            stream_options: Some(OAIStreamOptions { include_usage: true }),
         };
 
         let resp = self
@@ -221,6 +261,7 @@ impl LLMAdapter for OpenAIAdapter {
         let mut full_content = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         let mut tool_args: Vec<String> = Vec::new();
+        let mut stream_usage: Option<Usage> = None;
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
@@ -240,6 +281,16 @@ impl LLMAdapter for OpenAIAdapter {
                 }
 
                 if let Ok(event) = serde_json::from_str::<OAIStreamEvent>(data) {
+                    // 末尾 chunk（choices 为空）可能携带累积 usage
+                    if let Some(u) = event.usage {
+                        stream_usage = Some(Usage {
+                            prompt_tokens: u.prompt_tokens,
+                            completion_tokens: u.completion_tokens,
+                            total_tokens: u.total_tokens,
+                            cache_read_input_tokens: 0,
+                            cache_creation_input_tokens: 0,
+                        });
+                    }
                     if let Some(choice) = event.choices.first() {
                         if let Some(content) = &choice.delta.content {
                             full_content.push_str(content);
@@ -287,7 +338,7 @@ impl LLMAdapter for OpenAIAdapter {
             .send(LLMEvent::Done(LLMResponse {
                 content: if full_content.is_empty() { None } else { Some(full_content) },
                 tool_calls,
-                usage: None,
+                usage: stream_usage,
             }))
             .await;
 
@@ -306,13 +357,22 @@ struct OAIRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
     stream: bool,
+    /// 流式时请求累积 usage（末尾 chunk 携带）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<OAIStreamOptions>,
+}
+
+#[derive(Serialize)]
+struct OAIStreamOptions {
+    include_usage: bool,
 }
 
 #[derive(Serialize, Deserialize)]
 struct OpenAIMessage {
     role: String,
+    /// content 可以是纯字符串或数组（含 image_url 时需用数组格式）
     #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
+    content: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<OpenAIToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -377,6 +437,9 @@ struct OAIUsage {
 struct OAIStreamEvent {
     #[serde(default)]
     choices: Vec<OAIStreamChoice>,
+    /// 末尾 chunk（choices 为空）携带的累积 usage
+    #[serde(default)]
+    usage: Option<OAIUsage>,
 }
 
 #[derive(Deserialize)]

@@ -27,11 +27,28 @@ pub struct LLMResponse {
     pub usage: Option<Usage>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Usage {
+    /// 非缓存的输入 token 数（Anthropic input_tokens 语义）
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub total_tokens: u32,
+    /// Anthropic prompt caching：从缓存读取的输入 token 数（其它 adapter 为 0）
+    #[serde(default)]
+    pub cache_read_input_tokens: u32,
+    /// Anthropic prompt caching：写入缓存的输入 token 数（其它 adapter 为 0）
+    #[serde(default)]
+    pub cache_creation_input_tokens: u32,
+}
+
+impl Usage {
+    /// 总输入 token = 非缓存 prompt + cache_read + cache_creation
+    /// 用于上下文占用估算与展示
+    pub fn total_input(&self) -> u64 {
+        self.prompt_tokens as u64
+            + self.cache_read_input_tokens as u64
+            + self.cache_creation_input_tokens as u64
+    }
 }
 
 #[async_trait]

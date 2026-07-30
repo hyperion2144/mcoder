@@ -19,7 +19,7 @@ import {
   ContextLine, ProjectLine, CompactLine,
   MessageList, PlanApproval,
   SessionList, TodoView, TodoSummaryBar, TaskMonitor, ConfigView, HelpView,
-  InputBox, AskUserCard, AskUserSummary, ResumeBar,
+  InputBox, AskUserCard, AskUserSummary, ResumeBar, TreeView,
 } from './components/index.js';
 
 interface Props {
@@ -140,6 +140,18 @@ export function App({ client }: Props) {
           sessionStore.setCanResume(true);
           msgStore.setStreaming(false);
           break;
+        case 'session.usage_updated': {
+          const p = notif.params;
+          if (p && p.cumulative) {
+            // 用累计 usage 的总输入作为 contextUsed（真实占用）
+            const used = (p.cumulative.prompt_tokens || 0)
+              + (p.cumulative.cache_read_input_tokens || 0)
+              + (p.cumulative.cache_creation_input_tokens || 0);
+            sessionStore.setContextUsage(used, p.context_window || 0);
+            sessionStore.setUsage(p.cumulative, sessionStore.sessionCost);
+          }
+          break;
+        }
         case 'error':
           msgStore.setError(notif.params.message);
           msgStore.setStreaming(false);
@@ -284,11 +296,58 @@ export function App({ client }: Props) {
         return;
       }
     }
-    msgStore.addMessage({ role: 'user', content: [{ type: 'text', text: content }] });
+
+    // 解析 @image:/path/to/file 语法，提取图片文件
+    const imagePaths: string[] = [];
+    let textContent = content;
+    const imageRegex = /@image:(\S+)/g;
+    let match;
+    while ((match = imageRegex.exec(content)) !== null) {
+      imagePaths.push(match[1]);
+    }
+    textContent = content.replace(imageRegex, '').trim();
+
+    // 读取图片文件为 base64
+    const images: { data: string; media_type: string }[] = [];
+    const pathToMediaType = new Map<string, string>();
+    for (const imgPath of imagePaths) {
+      try {
+        const fs = await import('fs');
+        const path = await import('path');
+        const data = fs.readFileSync(imgPath);
+        const base64 = data.toString('base64');
+        const ext = path.extname(imgPath).toLowerCase();
+        const media_type = ext === '.png' ? 'image/png'
+          : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg'
+          : ext === '.gif' ? 'image/gif'
+          : ext === '.webp' ? 'image/webp'
+          : ext === '.bmp' ? 'image/bmp'
+          : 'image/png';
+        images.push({ data: base64, media_type });
+        pathToMediaType.set(imgPath, media_type);
+      } catch (e: any) {
+        msgStore.setError(`failed to read image ${imgPath}: ${e.message}`);
+      }
+    }
+
+    // 构建乐观消息内容块
+    const userBlocks: any[] = [];
+    if (textContent) {
+      userBlocks.push({ type: 'text', text: textContent });
+    }
+    for (const img of imagePaths) {
+      userBlocks.push({ type: 'image', path: img, media_type: pathToMediaType.get(img) || 'image/png' });
+    }
+    msgStore.addMessage({ role: 'user', content: userBlocks.length > 0 ? userBlocks : [{ type: 'text', text: content }] });
     msgStore.setStreaming(true);
     setInput('');
     try {
-      await client.request('sessions.send', { session_id: sid2, content });
+      if (images.length > 0) {
+        await client.request('sessions.send', { session_id: sid2, content: textContent, images });
+      } else {
+        // 图片读取失败时也要用 textContent（已去除 @image: 语法），避免泄漏到服务端
+        await client.request('sessions.send', { session_id: sid2, content: textContent });
+      }
     } catch (e: any) {
       msgStore.setError(e.message);
       msgStore.setStreaming(false);
@@ -478,6 +537,7 @@ export function App({ client }: Props) {
       {currentView === 'tasks' && <TaskMonitor />}
       {currentView === 'config' && <ConfigView />}
       {currentView === 'help' && <HelpView client={client} />}
+      {currentView === 'tree' && <TreeView client={client} />}
 
       {/* Todo 摘要条（消息区下方、输入框上方）；全部完成时隐藏 */}
       <TodoSummaryBar />
@@ -534,8 +594,9 @@ function buildHydrateStore(currentMessageCount: number) {
     setRole: (r: string) => useSessionStore.getState().setRole(r),
     setModel: (m: string) => useSessionStore.getState().setModel(m),
     setProjectPath: (p: string) => useSessionStore.getState().setProjectPath(p),
-    setContextUsage: (used: number, _w: number) =>
-      useSessionStore.getState().setContextUsage(used, useSessionStore.getState().contextWindow || 0),
+    setContextUsage: (used: number, w: number) =>
+      useSessionStore.getState().setContextUsage(used, w || useSessionStore.getState().contextWindow || 0),
+    setUsage: (usage: any, cost: number) => useSessionStore.getState().setUsage(usage, cost),
     setPendingPlan: (p: any) => useSessionStore.getState().setPendingPlan(p),
     setPendingTodos: (t: any[]) => useSessionStore.getState().setPendingTodos(t),
     setBackgroundTasks: (t: any[]) => useSessionStore.getState().setBackgroundTasks(t),

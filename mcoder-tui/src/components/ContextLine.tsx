@@ -12,11 +12,17 @@ export function ContextLine() {
   } = useSessionStore();
   const { streaming } = useMessagesStore();
 
-  const contextPct = contextWindow > 0 ? (contextUsed / contextWindow * 100).toFixed(1) : '0';
+  const contextPctNum = contextWindow > 0 ? (contextUsed / contextWindow * 100) : 0;
+  const contextPct = contextPctNum.toFixed(1);
   const contextStr = formatContext(contextUsed, contextWindow);
   const costStr = formatCost(sessionCost);
   const taskStr = taskCount > 0 ? `${taskCount} task${taskCount > 1 ? 's' : ''}` : '';
   const runningStr = streaming ? ' · running' : '';
+
+  // 颜色阈值：<70% green, 70-90% yellow, >90% red
+  const contextColor = contextPctNum < 70 ? 'green'
+    : contextPctNum <= 90 ? 'yellow'
+    : 'red';
 
   return (
     <Box paddingX={1}>
@@ -26,7 +32,8 @@ export function ContextLine() {
         {' · '}
         <Text color="magenta">{currentRole}</Text>
         {currentModel && <> · <Text color="blue">{currentModel}</Text></>}
-        {` · ${contextStr} (${contextPct}%)`}
+        {' · '}
+        <Text color={contextColor}>{contextStr} ({contextPct}%)</Text>
         {costStr && ` · ${costStr}`}
         {taskStr && ` · ${taskStr}`}
         {runningStr && <Text color="yellow">{runningStr}</Text>}

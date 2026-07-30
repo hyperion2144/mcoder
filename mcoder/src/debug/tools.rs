@@ -1,5 +1,5 @@
 // 设计文档 §8.4.3: DAP 调试工具集
-// 7 个工具注册到 ToolRegistry，供 agent 自驱调试
+// 合并为单个 debug 工具，通过 action 参数分派
 // forward-looking scaffolding
 #![allow(dead_code)]
 
@@ -12,57 +12,82 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
 
-/// debug_start - 启动调试会话
-/// config: lang/program/args/cwd/stop_on_entry
-/// 自动选择 adapter：rust→lldb-dap, node→node, python→debugpy, go→dlv
-pub struct DebugStartTool;
+/// P2-5 修复：大输出阈值（4KB），超过则走 sandbox
+const DEBUG_STATE_SANDBOX_THRESHOLD: usize = 4 * 1024;
+
+/// debug - 统一调试工具，通过 action 参数分派
+/// action: "start" | "breakpoint" | "continue" | "step" | "eval" | "state" | "stop"
+pub struct DebugTool;
 
 #[async_trait]
-impl Tool for DebugStartTool {
+impl Tool for DebugTool {
     fn name(&self) -> &str {
-        "debug_start"
+        "debug"
     }
 
     fn schema(&self) -> ToolSchema {
         ToolSchema {
-            name: "debug_start".into(),
-            description: "Start a debug session via DAP. Auto-selects adapter by lang: rust→lldb-dap, node→node, python→debugpy, go→dlv. Supports launch and attach (attach_pid).".into(),
+            name: "debug".into(),
+            description: "Unified debug tool via DAP. Dispatch by 'action': \
+                start (launch/attach session; auto-selects adapter by lang: rust->lldb-dap, node->node, python->debugpy, go->dlv), \
+                breakpoint (set breakpoint at file:line, optional condition), \
+                continue (resume execution until next stop), \
+                step (step over/in/out), \
+                eval (evaluate expression in current frame), \
+                state (get stopped/frames/variables/output), \
+                stop (stop and remove session).".into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "lang": {
+                    "action": {
                         "type": "string",
-                        "enum": ["rust", "node", "python", "go"],
-                        "description": "Debug language"
+                        "enum": ["start", "breakpoint", "continue", "step", "eval", "state", "stop"],
+                        "description": "Debug action to perform"
                     },
-                    "program": {
-                        "type": "string",
-                        "description": "Executable path (for launch) or symbol-bearing binary (for attach)"
-                    },
-                    "args": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Command-line arguments passed to program"
-                    },
-                    "cwd": {
-                        "type": "string",
-                        "description": "Working directory"
-                    },
-                    "stop_on_entry": {
-                        "type": "boolean",
-                        "description": "Whether to stop at entry point"
-                    },
-                    "attach_pid": {
-                        "type": "integer",
-                        "description": "Optional: attach to running process by pid (instead of launch)"
-                    }
+                    "lang": { "type": "string", "enum": ["rust", "node", "python", "go"], "description": "[start] Debug language" },
+                    "program": { "type": "string", "description": "[start] Executable path (launch) or symbol-bearing binary (attach)" },
+                    "args": { "type": "array", "items": { "type": "string" }, "description": "[start] Command-line arguments passed to program" },
+                    "cwd": { "type": "string", "description": "[start] Working directory" },
+                    "stop_on_entry": { "type": "boolean", "description": "[start] Whether to stop at entry point" },
+                    "attach_pid": { "type": "integer", "description": "[start] Attach to running process by pid (instead of launch)" },
+                    "file": { "type": "string", "description": "[breakpoint] Source file path" },
+                    "line": { "type": "integer", "description": "[breakpoint] Line number (1-based)" },
+                    "condition": { "type": "string", "description": "[breakpoint] Optional conditional breakpoint expression" },
+                    "granularity": { "type": "string", "enum": ["over", "in", "out"], "description": "[step] Step granularity (default: over)" },
+                    "expression": { "type": "string", "description": "[eval] Expression to evaluate (language-specific syntax)" },
+                    "session_id": { "type": "string", "description": "[stop] Optional specific session id to stop; default session if omitted" }
                 },
-                "required": ["lang", "program"]
+                "required": ["action"]
             }),
         }
     }
 
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let action = args
+            .get("action")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing required field: action"))?;
+        match action {
+            "start" => self.execute_start(args, ctx).await,
+            "breakpoint" => self.execute_breakpoint(args, ctx).await,
+            "continue" => self.execute_continue(args, ctx).await,
+            "step" => self.execute_step(args, ctx).await,
+            "eval" => self.execute_eval(args, ctx).await,
+            "state" => self.execute_state(args, ctx).await,
+            "stop" => self.execute_stop(args, ctx).await,
+            other => Ok(ToolOutput::Error {
+                message: format!(
+                    "unknown action: {} (expected: start|breakpoint|continue|step|eval|state|stop)",
+                    other
+                ),
+            }),
+        }
+    }
+}
+
+impl DebugTool {
+    /// action=start - 启动调试会话
+    async fn execute_start(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let lang_str = args
             .get("lang")
             .and_then(|v| v.as_str())
@@ -121,7 +146,7 @@ impl Tool for DebugStartTool {
                 result: serde_json::json!({
                     "session_id": session_id,
                     "status": "started",
-                    "hint": "Use debug_set_breakpoint to add breakpoints, then debug_continue or debug_step to control execution."
+                    "hint": "Use debug action=breakpoint to add breakpoints, then action=continue or action=step to control execution."
                 }),
             }),
             Err(e) => Ok(ToolOutput::Error {
@@ -129,43 +154,9 @@ impl Tool for DebugStartTool {
             }),
         }
     }
-}
 
-/// debug_set_breakpoint - 设置断点（支持条件断点）
-pub struct DebugSetBreakpointTool;
-
-#[async_trait]
-impl Tool for DebugSetBreakpointTool {
-    fn name(&self) -> &str {
-        "debug_set_breakpoint"
-    }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "debug_set_breakpoint".into(),
-            description: "Set a breakpoint at file:line. Optional condition for conditional breakpoint. Returns breakpoint_id and verified status.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "file": {
-                        "type": "string",
-                        "description": "Source file path"
-                    },
-                    "line": {
-                        "type": "integer",
-                        "description": "Line number (1-based)"
-                    },
-                    "condition": {
-                        "type": "string",
-                        "description": "Optional: conditional breakpoint expression"
-                    }
-                },
-                "required": ["file", "line"]
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+    /// action=breakpoint - 设置断点（支持条件断点）
+    async fn execute_breakpoint(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let file = args
             .get("file")
             .and_then(|v| v.as_str())
@@ -183,7 +174,7 @@ impl Tool for DebugSetBreakpointTool {
             Some(s) => s,
             None => {
                 return Ok(ToolOutput::Error {
-                    message: "no active debug session; call debug_start first".into(),
+                    message: "no active debug session; call debug action=start first".into(),
                 });
             }
         };
@@ -213,34 +204,14 @@ impl Tool for DebugSetBreakpointTool {
             }),
         }
     }
-}
 
-/// debug_continue - 继续执行
-pub struct DebugContinueTool;
-
-#[async_trait]
-impl Tool for DebugContinueTool {
-    fn name(&self) -> &str {
-        "debug_continue"
-    }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "debug_continue".into(),
-            description: "Continue execution of the active debug session. Returns after the next stop (breakpoint/step/exception/termination).".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {}
-            }),
-        }
-    }
-
-    async fn execute(&self, _args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+    /// action=continue - 继续执行
+    async fn execute_continue(&self, _args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let session = match ctx.debug_manager.default_session().await {
             Some(s) => s,
             None => {
                 return Ok(ToolOutput::Error {
-                    message: "no active debug session; call debug_start first".into(),
+                    message: "no active debug session; call debug action=start first".into(),
                 });
             }
         };
@@ -251,7 +222,7 @@ impl Tool for DebugContinueTool {
             return Ok(ToolOutput::Sync {
                 result: serde_json::json!({
                     "status": "terminated",
-                    "hint": "session already terminated; call debug_start to begin a new session"
+                    "hint": "session already terminated; call debug action=start to begin a new session"
                 }),
             });
         }
@@ -265,44 +236,18 @@ impl Tool for DebugContinueTool {
                     result: serde_json::json!({
                         "status": format!("{:?}", state).to_lowercase(),
                         "event": event,
-                        "hint": "use debug_get_state to inspect current frame and variables"
+                        "hint": "use debug action=state to inspect current frame and variables"
                     }),
                 })
             }
             Err(e) => Ok(ToolOutput::Error {
-                message: format!("debug_continue failed: {}", e),
-            }),
-        }
-    }
-}
-
-/// debug_step - 单步执行（granularity: over|in|out）
-pub struct DebugStepTool;
-
-#[async_trait]
-impl Tool for DebugStepTool {
-    fn name(&self) -> &str {
-        "debug_step"
-    }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "debug_step".into(),
-            description: "Step execution: granularity=over (next line, skip function calls), in (step into function), out (step out of current function).".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "granularity": {
-                        "type": "string",
-                        "enum": ["over", "in", "out"],
-                        "description": "Step granularity (default: over)"
-                    }
-                }
+                message: format!("debug continue failed: {}", e),
             }),
         }
     }
 
-    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+    /// action=step - 单步执行（granularity: over|in|out）
+    async fn execute_step(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let granularity = args
             .get("granularity")
             .and_then(|v| v.as_str())
@@ -312,7 +257,7 @@ impl Tool for DebugStepTool {
             Some(s) => s,
             None => {
                 return Ok(ToolOutput::Error {
-                    message: "no active debug session; call debug_start first".into(),
+                    message: "no active debug session; call debug action=start first".into(),
                 });
             }
         };
@@ -341,39 +286,13 @@ impl Tool for DebugStepTool {
                 })
             }
             Err(e) => Ok(ToolOutput::Error {
-                message: format!("debug_step failed: {}", e),
-            }),
-        }
-    }
-}
-
-/// debug_eval - 求值表达式
-pub struct DebugEvalTool;
-
-#[async_trait]
-impl Tool for DebugEvalTool {
-    fn name(&self) -> &str {
-        "debug_eval"
-    }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "debug_eval".into(),
-            description: "Evaluate an expression in the current stack frame context. Useful for inspecting variables, calling methods, or testing conditions.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "expression": {
-                        "type": "string",
-                        "description": "Expression to evaluate (language-specific syntax)"
-                    }
-                },
-                "required": ["expression"]
+                message: format!("debug step failed: {}", e),
             }),
         }
     }
 
-    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+    /// action=eval - 求值表达式
+    async fn execute_eval(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let expression = args
             .get("expression")
             .and_then(|v| v.as_str())
@@ -383,7 +302,7 @@ impl Tool for DebugEvalTool {
             Some(s) => s,
             None => {
                 return Ok(ToolOutput::Error {
-                    message: "no active debug session; call debug_start first".into(),
+                    message: "no active debug session; call debug action=start first".into(),
                 });
             }
         };
@@ -402,43 +321,20 @@ impl Tool for DebugEvalTool {
                 }),
             }),
             Err(e) => Ok(ToolOutput::Error {
-                message: format!("debug_eval failed: {}", e),
-            }),
-        }
-    }
-}
-
-/// debug_get_state - 获取当前调试状态
-/// 返回 {stopped, thread_id, frames, variables}
-/// P2-5 修复：输出超过阈值时存入 sandbox 返回 handle + 摘要
-pub struct DebugGetStateTool;
-
-/// P2-5 修复：大输出阈值（4KB），超过则走 sandbox
-const DEBUG_STATE_SANDBOX_THRESHOLD: usize = 4 * 1024;
-
-#[async_trait]
-impl Tool for DebugGetStateTool {
-    fn name(&self) -> &str {
-        "debug_get_state"
-    }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "debug_get_state".into(),
-            description: "Get current debug state: stopped flag, thread id, call stack frames (file/line/function), and local variables (name/value/type). Large output is stored in sandbox and a handle is returned for pagination via sandbox_read.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {}
+                message: format!("debug eval failed: {}", e),
             }),
         }
     }
 
-    async fn execute(&self, _args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+    /// action=state - 获取当前调试状态
+    /// 返回 {stopped, thread_id, frames, variables}
+    /// P2-5 修复：输出超过阈值时存入 sandbox 返回 handle + 摘要
+    async fn execute_state(&self, _args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let session = match ctx.debug_manager.default_session().await {
             Some(s) => s,
             None => {
                 return Ok(ToolOutput::Error {
-                    message: "no active debug session; call debug_start first".into(),
+                    message: "no active debug session; call debug action=start first".into(),
                 });
             }
         };
@@ -474,34 +370,9 @@ impl Tool for DebugGetStateTool {
             Ok(ToolOutput::Sync { result: full_result })
         }
     }
-}
 
-/// debug_stop - 停止调试会话
-pub struct DebugStopTool;
-
-#[async_trait]
-impl Tool for DebugStopTool {
-    fn name(&self) -> &str {
-        "debug_stop"
-    }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "debug_stop".into(),
-            description: "Stop and remove the active debug session. Sends disconnect to adapter and kills the adapter process.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "session_id": {
-                        "type": "string",
-                        "description": "Optional: specific session id to stop. If omitted, stops the default session."
-                    }
-                }
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+    /// action=stop - 停止调试会话
+    async fn execute_stop(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let session_id = args
             .get("session_id")
             .and_then(|v| v.as_str())
@@ -542,7 +413,7 @@ impl Tool for DebugStopTool {
                 }),
             }),
             Err(e) => Ok(ToolOutput::Error {
-                message: format!("debug_stop failed: {}", e),
+                message: format!("debug stop failed: {}", e),
             }),
         }
     }
@@ -558,16 +429,8 @@ fn tail_output(s: &str, max_chars: usize) -> String {
     }
 }
 
-/// 构建调试工具集（7 个工具），注册到 ToolRegistry 时使用
+/// 构建调试工具集（单个合并工具），注册到 ToolRegistry 时使用
 /// 无状态：所有依赖通过 ToolContext 注入
-pub fn build_debug_tools() -> Vec<Arc<dyn Tool>> {
-    vec![
-        Arc::new(DebugStartTool),
-        Arc::new(DebugSetBreakpointTool),
-        Arc::new(DebugContinueTool),
-        Arc::new(DebugStepTool),
-        Arc::new(DebugEvalTool),
-        Arc::new(DebugGetStateTool),
-        Arc::new(DebugStopTool),
-    ]
+pub fn build_debug_tools() -> Arc<DebugTool> {
+    Arc::new(DebugTool)
 }

@@ -14,6 +14,9 @@ pub struct SessionMeta {
     pub title: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub model: String,
+    /// 当前消息树分支末端消息 id（用于分叉/切换；None=空会话或未设置）
+    #[serde(default)]
+    pub current_head_id: Option<String>,
 }
 
 pub struct JsonlSession {
@@ -43,6 +46,7 @@ impl JsonlSession {
             title: title.into(),
             created_at: chrono::Utc::now(),
             model: model.into(),
+            current_head_id: None,
         };
 
         std::fs::write(&meta_path, serde_json::to_string_pretty(&meta)?)?;
@@ -109,6 +113,15 @@ impl JsonlSession {
     pub fn id(&self) -> &str { &self.meta.session_id }
     pub fn meta(&self) -> &SessionMeta { &self.meta }
     pub fn project_path(&self) -> &Path { &self.meta.project_path }
+    pub fn current_head_id(&self) -> Option<&str> { self.meta.current_head_id.as_deref() }
+
+    /// 更新 current_head_id 并持久化到 meta.json（用于消息树分叉/切换）
+    pub fn update_head_id(&mut self, head_id: impl Into<String>) -> Result<()> {
+        self.meta.current_head_id = Some(head_id.into());
+        let meta_path = self.path.with_extension("meta.json");
+        std::fs::write(&meta_path, serde_json::to_string_pretty(&self.meta)?)?;
+        Ok(())
+    }
 
     pub fn append(&self, msg: &Message) -> Result<()> {
         let line = serde_json::to_string(msg)?;

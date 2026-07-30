@@ -1,5 +1,5 @@
 // 设计文档 §8.7 M5 自测: Computer Use 工具集
-// 8 个工具：screen_screenshot/click/type/key/scroll、app_list/open/focus
+// 合并为 2 个工具：screen（screenshot/click/type/key/scroll）、app（list/open/focus）
 // 实现：enigo 0.2（键鼠）+ screenshots（截屏）+ 平台命令（应用管理）
 
 use crate::tools::{Tool, ToolContext};
@@ -10,170 +10,6 @@ use base64::Engine;
 use enigo::{Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 use serde_json::Value;
 use std::sync::Arc;
-
-// ============================================================
-// 1. screen_screenshot: 截取屏幕截图
-// ============================================================
-pub struct ScreenScreenshotTool;
-
-#[async_trait]
-impl Tool for ScreenScreenshotTool {
-    fn name(&self) -> &str { "screen_screenshot" }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "screen_screenshot".into(),
-            description: "Capture a screenshot of the main display. Returns base64-encoded PNG.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "display": { "type": "integer", "description": "Display index (0=main), default 0" }
-                }
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolOutput> {
-        let display_idx: usize = args["display"].as_u64().unwrap_or(0) as usize;
-
-        // 截屏操作是同步的且较快，用 spawn_blocking 避免阻塞 runtime
-        let png_b64 = tokio::task::spawn_blocking(move || -> Result<String> {
-            let screens = screenshots::Screen::all()
-                .context("listing displays")?;
-            let screen = screens.get(display_idx)
-                .ok_or_else(|| anyhow::anyhow!("display index {} out of range ({} displays)", display_idx, screens.len()))?;
-            let img = screen.capture()
-                .context("capturing screen")?;
-            // 编码为 PNG
-            let mut buf = Vec::with_capacity(1024 * 768);
-            let dyn_img = image::DynamicImage::ImageRgba8(img);
-            dyn_img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
-                .context("encoding PNG")?;
-            Ok(base64::engine::general_purpose::STANDARD.encode(&buf))
-        }).await
-            .context("spawn_blocking for screenshot")??;
-
-        Ok(ToolOutput::Sync { result: serde_json::json!({
-            "screenshot": png_b64,
-            "format": "png",
-            "display": display_idx
-        }) })
-    }
-}
-
-// ============================================================
-// 2. screen_click: 点击屏幕坐标
-// ============================================================
-pub struct ScreenClickTool;
-
-#[async_trait]
-impl Tool for ScreenClickTool {
-    fn name(&self) -> &str { "screen_click" }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "screen_click".into(),
-            description: "Click at screen coordinates (x, y). Optionally double-click or right-click.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "x": { "type": "integer", "description": "X coordinate (pixels from left)" },
-                    "y": { "type": "integer", "description": "Y coordinate (pixels from top)" },
-                    "button": { "type": "string", "enum": ["left", "right", "middle"], "description": "Mouse button, default 'left'" },
-                    "double": { "type": "boolean", "description": "Double-click, default false" }
-                },
-                "required": ["x", "y"]
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolOutput> {
-        let x: i32 = args["x"].as_i64().unwrap_or(0) as i32;
-        let y: i32 = args["y"].as_i64().unwrap_or(0) as i32;
-        let button_str: String = args["button"].as_str().unwrap_or("left").to_string();
-        let double_click: bool = args["double"].as_bool().unwrap_or(false);
-
-        let button = match button_str.as_str() {
-            "right" => Button::Right,
-            "middle" => Button::Middle,
-            _ => Button::Left,
-        };
-
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut enigo = Enigo::new(&Settings::default())
-                .context("creating Enigo instance")?;
-            enigo.move_mouse(x, y, Coordinate::Abs)
-                .context("moving mouse")?;
-            enigo.button(button, Direction::Click)
-                .context("clicking")?;
-            if double_click {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                enigo.button(button, Direction::Click)?;
-            }
-            Ok(())
-        }).await
-            .context("spawn_blocking for click")??;
-
-        Ok(ToolOutput::Sync { result: serde_json::json!({
-            "clicked": true,
-            "x": x,
-            "y": y,
-            "button": button_str,
-            "double": double_click
-        }) })
-    }
-}
-
-// ============================================================
-// 3. screen_type: 输入文本
-// ============================================================
-pub struct ScreenTypeTool;
-
-#[async_trait]
-impl Tool for ScreenTypeTool {
-    fn name(&self) -> &str { "screen_type" }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "screen_type".into(),
-            description: "Type text at the current cursor position. Uses keyboard input simulation.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "text": { "type": "string", "description": "Text to type" }
-                },
-                "required": ["text"]
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolOutput> {
-        let text: String = serde_json::from_value(args["text"].clone())
-            .context("text required")?;
-
-        // 设计 P1-4 修复: 用字符数（chars().count()）而非字节数（len()）
-        // 对中文等多字节字符，字符数更准确
-        let char_count = text.chars().count();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut enigo = Enigo::new(&Settings::default())
-                .context("creating Enigo instance")?;
-            enigo.text(&text)
-                .context("typing text")?;
-            Ok(())
-        }).await
-            .context("spawn_blocking for type")??;
-
-        Ok(ToolOutput::Sync { result: serde_json::json!({
-            "typed": true,
-            "length": char_count
-        }) })
-    }
-}
-
-// ============================================================
-// 4. screen_key: 按键（支持组合键）
-// ============================================================
-pub struct ScreenKeyTool;
 
 /// 将字符串键名解析为 enigo::Key
 fn parse_key(name: &str) -> Result<Key> {
@@ -221,29 +57,166 @@ fn parse_key(name: &str) -> Result<Key> {
     Ok(key)
 }
 
+// ============================================================
+// screen - 统一屏幕操作工具，通过 action 参数分派
+// action: "screenshot" | "click" | "type" | "key" | "scroll"
+// ============================================================
+pub struct ScreenTool;
+
 #[async_trait]
-impl Tool for ScreenKeyTool {
-    fn name(&self) -> &str { "screen_key" }
+impl Tool for ScreenTool {
+    fn name(&self) -> &str {
+        "screen"
+    }
 
     fn schema(&self) -> ToolSchema {
         ToolSchema {
-            name: "screen_key".into(),
-            description: "Press a key or key combination (e.g. Cmd+C, Ctrl+Shift+T). Modifiers are held while the final key is pressed.".into(),
+            name: "screen".into(),
+            description: "Unified screen interaction tool. Dispatch by 'action': \
+                screenshot (capture main display as base64 PNG), \
+                click (click at x,y coordinates), \
+                type (type text at cursor), \
+                key (press key/combo e.g. Cmd+C), \
+                scroll (scroll at coordinates).".into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["screenshot", "click", "type", "key", "scroll"],
+                        "description": "Screen action to perform"
+                    },
+                    "display": { "type": "integer", "description": "[screenshot] Display index (0=main), default 0" },
+                    "x": { "type": "integer", "description": "[click|scroll] X coordinate (pixels from left)" },
+                    "y": { "type": "integer", "description": "[click|scroll] Y coordinate (pixels from top)" },
+                    "button": { "type": "string", "enum": ["left", "right", "middle"], "description": "[click] Mouse button, default 'left'" },
+                    "double": { "type": "boolean", "description": "[click] Double-click, default false" },
+                    "text": { "type": "string", "description": "[type] Text to type" },
                     "keys": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Keys to press, e.g. [\"cmd\", \"c\"] or [\"enter\"]. Last key is the main key; preceding are modifiers held down."
-                    }
+                        "description": "[key] Keys to press, e.g. [\"cmd\", \"c\"] or [\"enter\"]. Last key is the main key; preceding are modifiers held down."
+                    },
+                    "amount": { "type": "integer", "description": "[scroll] Scroll amount (positive=down, negative=up). Typical range -10 to 10." },
+                    "direction": { "type": "string", "enum": ["vertical", "horizontal"], "description": "[scroll] Scroll direction, default 'vertical'" }
                 },
-                "required": ["keys"]
+                "required": ["action"]
             }),
         }
     }
 
     async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolOutput> {
+        let action = args
+            .get("action")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing required field: action"))?;
+        match action {
+            "screenshot" => self.execute_screenshot(args).await,
+            "click" => self.execute_click(args).await,
+            "type" => self.execute_type(args).await,
+            "key" => self.execute_key(args).await,
+            "scroll" => self.execute_scroll(args).await,
+            other => Ok(ToolOutput::Error {
+                message: format!(
+                    "unknown action: {} (expected: screenshot|click|type|key|scroll)",
+                    other
+                ),
+            }),
+        }
+    }
+}
+
+impl ScreenTool {
+    /// action=screenshot: 截取屏幕截图
+    async fn execute_screenshot(&self, args: Value) -> Result<ToolOutput> {
+        let display_idx: usize = args["display"].as_u64().unwrap_or(0) as usize;
+
+        // 截屏操作是同步的且较快，用 spawn_blocking 避免阻塞 runtime
+        let png_b64 = tokio::task::spawn_blocking(move || -> Result<String> {
+            let screens = screenshots::Screen::all()
+                .context("listing displays")?;
+            let screen = screens.get(display_idx)
+                .ok_or_else(|| anyhow::anyhow!("display index {} out of range ({} displays)", display_idx, screens.len()))?;
+            let img = screen.capture()
+                .context("capturing screen")?;
+            // 编码为 PNG
+            let mut buf = Vec::with_capacity(1024 * 768);
+            let dyn_img = image::DynamicImage::ImageRgba8(img);
+            dyn_img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+                .context("encoding PNG")?;
+            Ok(base64::engine::general_purpose::STANDARD.encode(&buf))
+        }).await
+            .context("spawn_blocking for screenshot")??;
+
+        Ok(ToolOutput::Sync { result: serde_json::json!({
+            "screenshot": png_b64,
+            "format": "png",
+            "display": display_idx
+        }) })
+    }
+
+    /// action=click: 点击屏幕坐标
+    async fn execute_click(&self, args: Value) -> Result<ToolOutput> {
+        let x: i32 = args["x"].as_i64().unwrap_or(0) as i32;
+        let y: i32 = args["y"].as_i64().unwrap_or(0) as i32;
+        let button_str: String = args["button"].as_str().unwrap_or("left").to_string();
+        let double_click: bool = args["double"].as_bool().unwrap_or(false);
+
+        let button = match button_str.as_str() {
+            "right" => Button::Right,
+            "middle" => Button::Middle,
+            _ => Button::Left,
+        };
+
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut enigo = Enigo::new(&Settings::default())
+                .context("creating Enigo instance")?;
+            enigo.move_mouse(x, y, Coordinate::Abs)
+                .context("moving mouse")?;
+            enigo.button(button, Direction::Click)
+                .context("clicking")?;
+            if double_click {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                enigo.button(button, Direction::Click)?;
+            }
+            Ok(())
+        }).await
+            .context("spawn_blocking for click")??;
+
+        Ok(ToolOutput::Sync { result: serde_json::json!({
+            "clicked": true,
+            "x": x,
+            "y": y,
+            "button": button_str,
+            "double": double_click
+        }) })
+    }
+
+    /// action=type: 输入文本
+    async fn execute_type(&self, args: Value) -> Result<ToolOutput> {
+        let text: String = serde_json::from_value(args["text"].clone())
+            .context("text required")?;
+
+        // 设计 P1-4 修复: 用字符数（chars().count()）而非字节数（len()）
+        // 对中文等多字节字符，字符数更准确
+        let char_count = text.chars().count();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut enigo = Enigo::new(&Settings::default())
+                .context("creating Enigo instance")?;
+            enigo.text(&text)
+                .context("typing text")?;
+            Ok(())
+        }).await
+            .context("spawn_blocking for type")??;
+
+        Ok(ToolOutput::Sync { result: serde_json::json!({
+            "typed": true,
+            "length": char_count
+        }) })
+    }
+
+    /// action=key: 按键（支持组合键）
+    async fn execute_key(&self, args: Value) -> Result<ToolOutput> {
         let keys_arr: Vec<String> = serde_json::from_value(args["keys"].clone())
             .context("keys array required")?;
         if keys_arr.is_empty() {
@@ -284,35 +257,9 @@ impl Tool for ScreenKeyTool {
             "keys": keys_str
         }) })
     }
-}
 
-// ============================================================
-// 5. screen_scroll: 滚动
-// ============================================================
-pub struct ScreenScrollTool;
-
-#[async_trait]
-impl Tool for ScreenScrollTool {
-    fn name(&self) -> &str { "screen_scroll" }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "screen_scroll".into(),
-            description: "Scroll at screen coordinates. Positive amount scrolls down, negative scrolls up.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "x": { "type": "integer", "description": "X coordinate, default 0" },
-                    "y": { "type": "integer", "description": "Y coordinate, default 0" },
-                    "amount": { "type": "integer", "description": "Scroll amount (positive=down, negative=up). Typical range -10 to 10." },
-                    "direction": { "type": "string", "enum": ["vertical", "horizontal"], "description": "Scroll direction, default 'vertical'" }
-                },
-                "required": ["amount"]
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolOutput> {
+    /// action=scroll: 滚动
+    async fn execute_scroll(&self, args: Value) -> Result<ToolOutput> {
         let x: i32 = args["x"].as_i64().unwrap_or(0) as i32;
         let y: i32 = args["y"].as_i64().unwrap_or(0) as i32;
         let amount: i32 = args["amount"].as_i64().unwrap_or(0) as i32;
@@ -346,28 +293,62 @@ impl Tool for ScreenScrollTool {
 }
 
 // ============================================================
-// 6. app_list: 列出已安装应用
+// app - 统一应用管理工具，通过 action 参数分派
+// action: "list" | "open" | "focus"
 // ============================================================
-pub struct AppListTool;
+pub struct AppTool;
 
 #[async_trait]
-impl Tool for AppListTool {
-    fn name(&self) -> &str { "app_list" }
+impl Tool for AppTool {
+    fn name(&self) -> &str {
+        "app"
+    }
 
     fn schema(&self) -> ToolSchema {
         ToolSchema {
-            name: "app_list".into(),
-            description: "List installed applications. Returns app names that can be used with app_open/app_focus.".into(),
+            name: "app".into(),
+            description: "Unified application management tool. Dispatch by 'action': \
+                list (list installed applications), \
+                open (open an app by name), \
+                focus (bring app window to foreground).".into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "filter": { "type": "string", "description": "Filter app names by substring (case-insensitive)" }
-                }
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "open", "focus"],
+                        "description": "App action to perform"
+                    },
+                    "filter": { "type": "string", "description": "[list] Filter app names by substring (case-insensitive)" },
+                    "name": { "type": "string", "description": "[open|focus] Application name (e.g. 'Safari', 'firefox')" }
+                },
+                "required": ["action"]
             }),
         }
     }
 
     async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolOutput> {
+        let action = args
+            .get("action")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing required field: action"))?;
+        match action {
+            "list" => self.execute_list(args).await,
+            "open" => self.execute_open(args).await,
+            "focus" => self.execute_focus(args).await,
+            other => Ok(ToolOutput::Error {
+                message: format!(
+                    "unknown action: {} (expected: list|open|focus)",
+                    other
+                ),
+            }),
+        }
+    }
+}
+
+impl AppTool {
+    /// action=list: 列出已安装应用
+    async fn execute_list(&self, args: Value) -> Result<ToolOutput> {
         let filter: String = args["filter"].as_str().unwrap_or("").to_lowercase();
 
         #[cfg(target_os = "macos")]
@@ -430,32 +411,9 @@ impl Tool for AppListTool {
             }) })
         }
     }
-}
 
-// ============================================================
-// 7. app_open: 打开应用
-// ============================================================
-pub struct AppOpenTool;
-
-#[async_trait]
-impl Tool for AppOpenTool {
-    fn name(&self) -> &str { "app_open" }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "app_open".into(),
-            description: "Open an application by name. On macOS uses 'open -a', on Linux uses 'xdg-open', on Windows uses 'start'.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "name": { "type": "string", "description": "Application name (e.g. 'Safari', 'firefox')" }
-                },
-                "required": ["name"]
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolOutput> {
+    /// action=open: 打开应用
+    async fn execute_open(&self, args: Value) -> Result<ToolOutput> {
         let name: String = serde_json::from_value(args["name"].clone())
             .context("name required")?;
 
@@ -502,32 +460,9 @@ impl Tool for AppOpenTool {
             "name": name
         }) })
     }
-}
 
-// ============================================================
-// 8. app_focus: 聚焦应用窗口
-// ============================================================
-pub struct AppFocusTool;
-
-#[async_trait]
-impl Tool for AppFocusTool {
-    fn name(&self) -> &str { "app_focus" }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "app_focus".into(),
-            description: "Bring an application window to the foreground. On macOS uses AppleScript.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "name": { "type": "string", "description": "Application name (e.g. 'Safari', 'Terminal')" }
-                },
-                "required": ["name"]
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolOutput> {
+    /// action=focus: 聚焦应用窗口
+    async fn execute_focus(&self, args: Value) -> Result<ToolOutput> {
         let name: String = serde_json::from_value(args["name"].clone())
             .context("name required")?;
 
@@ -585,14 +520,5 @@ impl Tool for AppFocusTool {
 // 构建所有 Computer Use 工具
 // ============================================================
 pub fn build_computer_use_tools() -> Vec<Arc<dyn Tool>> {
-    vec![
-        Arc::new(ScreenScreenshotTool),
-        Arc::new(ScreenClickTool),
-        Arc::new(ScreenTypeTool),
-        Arc::new(ScreenKeyTool),
-        Arc::new(ScreenScrollTool),
-        Arc::new(AppListTool),
-        Arc::new(AppOpenTool),
-        Arc::new(AppFocusTool),
-    ]
+    vec![Arc::new(ScreenTool), Arc::new(AppTool)]
 }

@@ -1,9 +1,9 @@
 // 设计文档 §8.4.1: 基于 tree-sitter 的语法感知编辑
-// 三个工具：ast_rename / ast_extract / ast_inline
+// 统一工具 ast_edit，op=rename|extract|inline
 // 架构：
-//   - ast_rename: 优先委托 LSP textDocument/rename（语义级精确），LSP 不可用时 fallback 到 code_graph + tree-sitter 定位引用节点
-//   - ast_extract: tree-sitter 解析文件，定位行范围对应的最小节点，提取节点文本
-//   - ast_inline: code_graph.find_callers 拿到精确 (file,line,col)，tree-sitter 定位该位置的 call_expression 节点，精确替换 byte_range
+//   - rename: 优先委托 LSP textDocument/rename（语义级精确），LSP 不可用时 fallback 到 code_graph + tree-sitter 定位引用节点
+//   - extract: tree-sitter 解析文件，定位行范围对应的最小节点，提取节点文本
+//   - inline: code_graph.find_callers 拿到精确 (file,line,col)，tree-sitter 定位该位置的 call_expression 节点，精确替换 byte_range
 
 use crate::code_graph::CodeGraph;
 use crate::lsp::path_to_uri;
@@ -61,7 +61,7 @@ fn node_covering_lines<'a>(root: Node<'a>, start_line: u32, end_line: u32) -> Op
         let parent_start = parent.start_position().row + 1;
         let parent_end = parent.end_position().row + 1;
         if parent_start <= start_line && parent_end >= end_line {
-            // parent 也覆盖范围，但 node 更小——检查 node 是否已覆盖
+            // parent 也覆盖范围，但 node 更小--检查 node 是否已覆盖
             let node_start = node.start_position().row + 1;
             let node_end = node.end_position().row + 1;
             if node_start <= start_line && node_end >= end_line {
@@ -242,42 +242,63 @@ fn apply_byte_edits(content: &str, mut edits: Vec<(usize, usize, String)>) -> St
     result
 }
 
-// ==================== ast_rename ====================
+// ==================== ast_edit (merged) ====================
 
-/// ast_rename - 跨文件重命名符号
-/// 设计文档 §8.4.1: 基于 tree-sitter 的语法感知编辑
-/// 策略：
-///   1. 优先委托 LSP textDocument/rename（语义级精确，理解作用域/类型）
-///   2. LSP 不可用时，用 code_graph 查找符号定义位置，tree-sitter 定位所有引用节点精确替换
-pub struct AstRenameTool;
+/// ast_edit - 基于 tree-sitter 的语法感知编辑
+/// op=rename: 跨文件重命名符号（原 ast_rename）
+/// op=extract: 将选定代码范围提取为新函数（原 ast_extract）
+/// op=inline: 内联一个简短函数（原 ast_inline）
+pub struct AstEditTool;
 
 #[async_trait]
-impl Tool for AstRenameTool {
-    fn name(&self) -> &str { "ast_rename" }
+impl Tool for AstEditTool {
+    fn name(&self) -> &str { "ast_edit" }
 
     fn schema(&self) -> ToolSchema {
         ToolSchema {
-            name: "ast_rename".into(),
-            description: "Rename a symbol (function/class/variable/struct/etc.) across all files. \
-                          Uses LSP textDocument/rename when available (semantic-level precision), \
-                          falls back to code_graph + tree-sitter for exact AST node replacement. \
-                          Records changes via journal for undo.".into(),
+            name: "ast_edit".into(),
+            description: "AST-aware code editing. op=rename: rename a symbol across all files (LSP or tree-sitter). op=extract: extract a code range into a new function. op=inline: inline a short function (replace call sites with body).".into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "old_name": { "type": "string", "description": "Current symbol name" },
-                    "new_name": { "type": "string", "description": "New symbol name" },
-                    "file": { "type": "string", "description": "Optional: file where symbol is defined (improves LSP accuracy). If omitted, uses code_graph to locate." },
-                    "line": { "type": "integer", "description": "Optional: 1-indexed line of symbol definition (for LSP mode)" },
-                    "col": { "type": "integer", "description": "Optional: 0-indexed column of symbol definition (for LSP mode)" },
-                    "kind": { "type": "string", "description": "Optional: filter by kind (function|class|struct|variable|method|trait|enum|constant|module|interface|type_alias)" }
+                    "op": { "type": "string", "enum": ["rename", "extract", "inline"], "description": "Operation to perform" },
+                    "old_name": { "type": "string", "description": "rename: current symbol name" },
+                    "new_name": { "type": "string", "description": "rename/extract: new symbol/function name" },
+                    "file": { "type": "string", "description": "rename/extract: file path" },
+                    "line": { "type": "integer", "description": "rename: 1-indexed line of symbol definition (for LSP mode)" },
+                    "col": { "type": "integer", "description": "rename: 0-indexed column of symbol definition (for LSP mode)" },
+                    "kind": { "type": "string", "description": "rename: optional filter by kind (function|class|struct|variable|method|trait|enum|constant|module|interface|type_alias)" },
+                    "start_line": { "type": "integer", "description": "extract: start line (1-indexed, inclusive)" },
+                    "end_line": { "type": "integer", "description": "extract: end line (1-indexed, inclusive)" },
+                    "args": { "type": "string", "description": "extract: arguments for the new function CALL (no types), e.g. \"(a, b)\". Default: \"()\"" },
+                    "def_args": { "type": "string", "description": "extract: arguments for the new function DEFINITION (with types). Default: same as args" },
+                    "name": { "type": "string", "description": "inline: function name to inline" },
+                    "remove_def": { "type": "boolean", "description": "inline: also remove the function definition (default true)" }
                 },
-                "required": ["old_name", "new_name"]
+                "required": ["op"]
             }),
         }
     }
 
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let op: String = serde_json::from_value(args["op"].clone())?;
+        match op.as_str() {
+            "rename" => Self::rename(&args, ctx).await,
+            "extract" => Self::extract(&args, ctx).await,
+            "inline" => Self::inline(&args, ctx).await,
+            other => anyhow::bail!("unknown op: {} (use rename|extract|inline)", other),
+        }
+    }
+}
+
+impl AstEditTool {
+    // ==================== rename (原 AstRenameTool) ====================
+
+    /// 跨文件重命名符号
+    /// 策略：
+    ///   1. 优先委托 LSP textDocument/rename（语义级精确，理解作用域/类型）
+    ///   2. LSP 不可用时，用 code_graph 查找符号定义位置，tree-sitter 定位所有引用节点精确替换
+    async fn rename(args: &Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let old_name: String = serde_json::from_value(args["old_name"].clone())
             .or_else(|_| serde_json::from_value(args["symbol"].clone()))
             .context("old_name (or symbol) required")?;
@@ -296,8 +317,8 @@ impl Tool for AstRenameTool {
         }
 
         // 策略 1：优先用 LSP rename
-        // 1a: 用户提供了 file/line/col → 直接用
-        // 1b: 没提供 line/col → 用 code_graph 查符号定义位置
+        // 1a: 用户提供了 file/line/col -> 直接用
+        // 1b: 没提供 line/col -> 用 code_graph 查符号定义位置
         let lsp = &ctx.lsp_manager;
         let lsp_result = if let (Some(file_str), Some(line), Some(col)) =
             (&file_arg, line_arg, col_arg) {
@@ -332,9 +353,7 @@ impl Tool for AstRenameTool {
         // 策略 2：fallback - code_graph + tree-sitter 精确定位
         Self::rename_via_tree_sitter(&ctx.journal, &ctx.code_graph, &old_name, &new_name, &kind_filter).await
     }
-}
 
-impl AstRenameTool {
     /// 策略 1：委托 LSP textDocument/rename
     async fn try_lsp_rename(
         journal: &Arc<FileJournal>,
@@ -513,42 +532,12 @@ impl AstRenameTool {
             "files": changed_files
         }) })
     }
-}
 
-// ==================== ast_extract ====================
+    // ==================== extract (原 AstExtractTool) ====================
 
-/// ast_extract - 将选定代码范围提取为新函数
-/// 设计文档 §8.4.1: 基于 tree-sitter 的语法感知编辑
-/// 策略：tree-sitter 解析文件，定位行范围对应的最小节点，提取节点文本
-pub struct AstExtractTool;
-
-#[async_trait]
-impl Tool for AstExtractTool {
-    fn name(&self) -> &str { "ast_extract" }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "ast_extract".into(),
-            description: "Extract a code range into a new function. Uses tree-sitter to locate \
-                          the minimal node covering the given line range, replaces it with a \
-                          function call, and appends the new function definition at end of file. \
-                          Records changes via journal for undo.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "file": { "type": "string", "description": "File path" },
-                    "start_line": { "type": "integer", "description": "Start line (1-indexed, inclusive)" },
-                    "end_line": { "type": "integer", "description": "End line (1-indexed, inclusive)" },
-                    "new_name": { "type": "string", "description": "Name of the new function" },
-                    "args": { "type": "string", "description": "Optional: arguments for the new function CALL (no types), e.g. \"(a, b)\". Default: \"()\"" },
-                    "def_args": { "type": "string", "description": "Optional: arguments for the new function DEFINITION (with types), e.g. \"(a: i32, b: i32)\". Default: same as args" }
-                },
-                "required": ["file", "start_line", "end_line", "new_name"]
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+    /// 将选定代码范围提取为新函数
+    /// 策略：tree-sitter 解析文件，定位行范围对应的最小节点，提取节点文本
+    async fn extract(args: &Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let file: String = serde_json::from_value(args["file"].clone())?;
         let start_line: u32 = serde_json::from_value(args["start_line"].clone())?;
         let end_line: u32 = serde_json::from_value(args["end_line"].clone())?;
@@ -656,42 +645,16 @@ impl Tool for AstExtractTool {
             "hint": "selected node replaced with function call; new function appended at end of file"
         }) })
     }
-}
 
-// ==================== ast_inline ====================
+    // ==================== inline (原 AstInlineTool) ====================
 
-/// ast_inline - 内联一个简短函数
-/// 设计文档 §8.4.1: 基于 tree-sitter 的语法感知编辑
-/// 策略：
-///   1. code_graph 查找函数定义，提取 body（用 tree-sitter 定位 body 节点）
-///   2. code_graph.find_callers 拿到精确 (file, line, col) 调用点
-///   3. 对每个调用点：tree-sitter 解析该文件，定位 (line, col) 处的 call_expression 节点
-///   4. 用 expr 替换该节点的 byte_range（精确替换，不误伤注释/字符串）
-pub struct AstInlineTool;
-
-#[async_trait]
-impl Tool for AstInlineTool {
-    fn name(&self) -> &str { "ast_inline" }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "ast_inline".into(),
-            description: "Inline a short function: replace all call sites with the function body. \
-                          Uses code_graph to find callers and tree-sitter to precisely locate \
-                          call_expression nodes for replacement. Only supports single-expression \
-                          function bodies for safety. Records changes via journal for undo.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "name": { "type": "string", "description": "Function name to inline" },
-                    "remove_def": { "type": "boolean", "description": "Optional: also remove the function definition (default: true)" }
-                },
-                "required": ["name"]
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+    /// 内联一个简短函数
+    /// 策略：
+    ///   1. code_graph 查找函数定义，提取 body（用 tree-sitter 定位 body 节点）
+    ///   2. code_graph.find_callers 拿到精确 (file, line, col) 调用点
+    ///   3. 对每个调用点：tree-sitter 解析该文件，定位 (line, col) 处的 call_expression 节点
+    ///   4. 用 expr 替换该节点的 byte_range（精确替换，不误伤注释/字符串）
+    async fn inline(args: &Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let name: String = serde_json::from_value(args["name"].clone())?;
         let remove_def: bool = args["remove_def"].as_bool().unwrap_or(true);
 
@@ -872,9 +835,7 @@ impl Tool for AstInlineTool {
             "hint": "call sites precisely replaced via tree-sitter AST nodes; verify manually"
         }) })
     }
-}
 
-impl AstInlineTool {
     /// 从函数定义节点提取 body 文本
     /// 支持多语言：查找 body/block 节点
     fn extract_function_body(def_node: Node, content: &str) -> Result<String> {

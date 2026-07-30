@@ -1,7 +1,8 @@
 // 设计文档 §8.4.2: LSP 工具集（注册到 ToolRegistry）
-// 6 个工具：lsp_diagnose / lsp_hover / lsp_definition / lsp_references / lsp_rename / lsp_format
+// 合并为单个 lsp 工具，通过 action 参数分派
+// action: "diagnose" | "hover" | "definition" | "references" | "rename" | "format"
 // 无状态：所有依赖通过 ToolContext 注入（lsp_manager / journal）
-// LspRenameTool / LspFormatTool 通过 ctx.journal 记录文件变更
+// rename / format 通过 ctx.journal 记录文件变更
 #![allow(dead_code)]
 
 use crate::lsp::{apply_text_edits, path_to_uri, uri_to_path};
@@ -14,72 +15,76 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// 构建 LSP 工具集（6 个工具）
+/// 构建 LSP 工具集（单个合并工具）
 /// 设计文档 §8.4.2: 注册到 ToolRegistry
-/// lsp_diagnose / lsp_hover / lsp_definition / lsp_references / lsp_rename / lsp_format
 /// 无状态：所有依赖通过 ToolContext 注入
-pub fn build_lsp_tools() -> Vec<Arc<dyn Tool>> {
-    vec![
-        Arc::new(LspDiagnoseTool),
-        Arc::new(LspHoverTool),
-        Arc::new(LspDefinitionTool),
-        Arc::new(LspReferencesTool),
-        Arc::new(LspRenameTool),
-        Arc::new(LspFormatTool),
-    ]
+pub fn build_lsp_tools() -> Arc<LspTool> {
+    Arc::new(LspTool)
 }
 
-// ==================== 辅助函数 ====================
-
-/// 解析 file 参数为绝对路径
-/// 接受 "file" 或 "path" 字段名
-fn parse_file_arg(args: &Value) -> Result<PathBuf> {
-    let path_str: String = serde_json::from_value(args["file"].clone())
-        .or_else(|_| serde_json::from_value(args["path"].clone()))
-        .context("file required")?;
-    Ok(PathBuf::from(path_str))
-}
-
-/// 解析 line/col 参数（0-based，LSP 规范）
-fn parse_position(args: &Value) -> Result<(u32, u32)> {
-    let line = args["line"].as_u64().context("line required (0-based)")? as u32;
-    let col = args["col"]
-        .as_u64()
-        .or_else(|| args["character"].as_u64())
-        .or_else(|| args["column"].as_u64())
-        .context("col required (0-based)")? as u32;
-    Ok((line, col))
-}
-
-// ==================== lsp_diagnose ====================
-
-/// lsp_diagnose(file) - 获取文件诊断
-/// 设计文档 §8.4.2: 拉取文件诊断信息（errors/warnings）
-pub struct LspDiagnoseTool;
+/// lsp - 统一 LSP 工具，通过 action 参数分派
+pub struct LspTool;
 
 #[async_trait]
-impl Tool for LspDiagnoseTool {
+impl Tool for LspTool {
     fn name(&self) -> &str {
-        "lsp_diagnose"
+        "lsp"
     }
 
     fn schema(&self) -> ToolSchema {
         ToolSchema {
-            name: "lsp_diagnose".into(),
-            description: "Get LSP diagnostics for a file (errors/warnings). Returns array of \
-                          {range: {start, end}, severity, message, source}. File must be in a \
-                          supported language (Rust/TS/Go/Python).".into(),
+            name: "lsp".into(),
+            description: "Unified LSP tool. Dispatch by 'action': \
+                diagnose (get file diagnostics), \
+                hover (get type/doc for symbol at position), \
+                definition (find definition of symbol), \
+                references (find all references to symbol), \
+                rename (rename symbol across project, records journal for undo), \
+                format (format file via LSP, records journal for undo). \
+                line/col are 0-based (LSP standard).".into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "file": { "type": "string", "description": "File path (absolute or relative to project)" }
+                    "action": {
+                        "type": "string",
+                        "enum": ["diagnose", "hover", "definition", "references", "rename", "format"],
+                        "description": "LSP action to perform"
+                    },
+                    "file": { "type": "string", "description": "File path (absolute or relative to project). Also accepts 'path'." },
+                    "line": { "type": "integer", "description": "[hover|definition|references|rename] 0-based line number" },
+                    "col": { "type": "integer", "description": "[hover|definition|references|rename] 0-based column (character). Also accepts 'character'/'column'." },
+                    "new_name": { "type": "string", "description": "[rename] New symbol name (also accepts 'newName')" }
                 },
-                "required": ["file"]
+                "required": ["action"]
             }),
         }
     }
 
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let action = args
+            .get("action")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing required field: action"))?;
+        match action {
+            "diagnose" => self.execute_diagnose(args, ctx).await,
+            "hover" => self.execute_hover(args, ctx).await,
+            "definition" => self.execute_definition(args, ctx).await,
+            "references" => self.execute_references(args, ctx).await,
+            "rename" => self.execute_rename(args, ctx).await,
+            "format" => self.execute_format(args, ctx).await,
+            other => Ok(ToolOutput::Error {
+                message: format!(
+                    "unknown action: {} (expected: diagnose|hover|definition|references|rename|format)",
+                    other
+                ),
+            }),
+        }
+    }
+}
+
+impl LspTool {
+    /// action=diagnose - 获取文件诊断
+    async fn execute_diagnose(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let path = parse_file_arg(&args)?;
         // 确保文件在 LSP server 中已打开
         let client = ctx.lsp_manager.ensure_open(&path).await?;
@@ -107,38 +112,9 @@ impl Tool for LspDiagnoseTool {
         });
         Ok(ToolOutput::Sync { result })
     }
-}
 
-// ==================== lsp_hover ====================
-
-/// lsp_hover(file, line, col) - 获取 hover 信息
-/// 设计文档 §8.4.2: 显示符号的类型、文档等信息
-pub struct LspHoverTool;
-
-#[async_trait]
-impl Tool for LspHoverTool {
-    fn name(&self) -> &str {
-        "lsp_hover"
-    }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "lsp_hover".into(),
-            description: "Get hover info (type/doc) for symbol at position. \
-                          line/col are 0-based (LSP standard).".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "file": { "type": "string" },
-                    "line": { "type": "integer", "description": "0-based line number" },
-                    "col": { "type": "integer", "description": "0-based column (character)" }
-                },
-                "required": ["file", "line", "col"]
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+    /// action=hover - 获取 hover 信息
+    async fn execute_hover(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let path = parse_file_arg(&args)?;
         let (line, col) = parse_position(&args)?;
 
@@ -177,38 +153,9 @@ impl Tool for LspHoverTool {
         };
         Ok(ToolOutput::Sync { result })
     }
-}
 
-// ==================== lsp_definition ====================
-
-/// lsp_definition(file, line, col) - 跳转定义
-/// 设计文档 §8.4.2: 查找符号定义位置
-pub struct LspDefinitionTool;
-
-#[async_trait]
-impl Tool for LspDefinitionTool {
-    fn name(&self) -> &str {
-        "lsp_definition"
-    }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "lsp_definition".into(),
-            description: "Find definition of symbol at position. Returns Location array \
-                          [{uri, range: {start, end}}]. line/col are 0-based.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "file": { "type": "string" },
-                    "line": { "type": "integer", "description": "0-based line" },
-                    "col": { "type": "integer", "description": "0-based column" }
-                },
-                "required": ["file", "line", "col"]
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+    /// action=definition - 跳转定义
+    async fn execute_definition(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let path = parse_file_arg(&args)?;
         let (line, col) = parse_position(&args)?;
 
@@ -239,38 +186,9 @@ impl Tool for LspDefinitionTool {
         });
         Ok(ToolOutput::Sync { result })
     }
-}
 
-// ==================== lsp_references ====================
-
-/// lsp_references(file, line, col) - 引用查找
-/// 设计文档 §8.4.2: 查找符号的所有引用位置
-pub struct LspReferencesTool;
-
-#[async_trait]
-impl Tool for LspReferencesTool {
-    fn name(&self) -> &str {
-        "lsp_references"
-    }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "lsp_references".into(),
-            description: "Find all references to symbol at position. Returns Location array. \
-                          line/col are 0-based.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "file": { "type": "string" },
-                    "line": { "type": "integer", "description": "0-based line" },
-                    "col": { "type": "integer", "description": "0-based column" }
-                },
-                "required": ["file", "line", "col"]
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+    /// action=references - 引用查找
+    async fn execute_references(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let path = parse_file_arg(&args)?;
         let (line, col) = parse_position(&args)?;
 
@@ -300,39 +218,9 @@ impl Tool for LspReferencesTool {
         });
         Ok(ToolOutput::Sync { result })
     }
-}
 
-// ==================== lsp_rename ====================
-
-/// lsp_rename(file, line, col, new_name) - 重命名符号
-/// 设计文档 §8.4.2: 跨文件重命名（基于 journal 记录文件变更）
-pub struct LspRenameTool;
-
-#[async_trait]
-impl Tool for LspRenameTool {
-    fn name(&self) -> &str {
-        "lsp_rename"
-    }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "lsp_rename".into(),
-            description: "Rename symbol at position across the project. Applies WorkspaceEdit \
-                          to disk and records changes via journal for undo. line/col are 0-based.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "file": { "type": "string" },
-                    "line": { "type": "integer", "description": "0-based line" },
-                    "col": { "type": "integer", "description": "0-based column" },
-                    "new_name": { "type": "string", "description": "New symbol name" }
-                },
-                "required": ["file", "line", "col", "new_name"]
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+    /// action=rename - 重命名符号（基于 journal 记录文件变更）
+    async fn execute_rename(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let path = parse_file_arg(&args)?;
         let (line, col) = parse_position(&args)?;
         let new_name: String = serde_json::from_value(args["new_name"].clone())
@@ -377,36 +265,9 @@ impl Tool for LspRenameTool {
         });
         Ok(ToolOutput::Sync { result })
     }
-}
 
-// ==================== lsp_format ====================
-
-/// lsp_format(file) - 格式化文件
-/// 设计文档 §8.4.2: 调用 LSP server 的 formatting 能力
-pub struct LspFormatTool;
-
-#[async_trait]
-impl Tool for LspFormatTool {
-    fn name(&self) -> &str {
-        "lsp_format"
-    }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "lsp_format".into(),
-            description: "Format a file using LSP server's formatting capability. \
-                          Applies TextEdit[] to disk and records via journal for undo.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "file": { "type": "string" }
-                },
-                "required": ["file"]
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+    /// action=format - 格式化文件
+    async fn execute_format(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let path = parse_file_arg(&args)?;
 
         let client = ctx.lsp_manager.ensure_open(&path).await?;
@@ -465,14 +326,34 @@ impl Tool for LspFormatTool {
     }
 }
 
-// ==================== 内部辅助函数 ====================
+// ==================== 辅助函数 ====================
+
+/// 解析 file 参数为绝对路径
+/// 接受 "file" 或 "path" 字段名
+fn parse_file_arg(args: &Value) -> Result<PathBuf> {
+    let path_str: String = serde_json::from_value(args["file"].clone())
+        .or_else(|_| serde_json::from_value(args["path"].clone()))
+        .context("file required")?;
+    Ok(PathBuf::from(path_str))
+}
+
+/// 解析 line/col 参数（0-based，LSP 规范）
+fn parse_position(args: &Value) -> Result<(u32, u32)> {
+    let line = args["line"].as_u64().context("line required (0-based)")? as u32;
+    let col = args["col"]
+        .as_u64()
+        .or_else(|| args["character"].as_u64())
+        .or_else(|| args["column"].as_u64())
+        .context("col required (0-based)")? as u32;
+    Ok((line, col))
+}
 
 /// 将 LSP definition/references 返回值归一化为 Location 数组
 /// 处理多种返回形式：
 /// - null
 /// - Location (单个对象)
 /// - Location[] (数组)
-/// - LocationLink[] (含 targetUri/targetRange)
+/// - LocationLink[] (含 targetUri/targetRange）
 fn normalize_locations(result: &Value) -> Vec<Value> {
     match result {
         Value::Null => vec![],

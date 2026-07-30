@@ -135,6 +135,7 @@ impl Default for AppConfig {
             mcp_servers: std::collections::HashMap::new(),
             memory: crate::types::MemoryConfig::default(),
             tools: crate::types::ToolsConfig::default(),
+            image_description_timeout_secs: 8,
         }
     }
 }

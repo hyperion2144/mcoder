@@ -6,6 +6,7 @@ use crate::llm::{LLMAdapter, LLMEvent, LLMResponse, Usage};
 use crate::types::{ContentBlock, Message, ModelConfig, ToolCall, ToolSchema};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use base64::Engine;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -37,14 +38,14 @@ impl AnthropicAdapter {
         format!("{}/messages", base)
     }
 
-    fn build_messages(messages: &[Message]) -> (Option<String>, Vec<AnthropicMessage>) {
-        let mut system_prompt: Option<String> = None;
+    fn build_messages(messages: &[Message]) -> (Option<Vec<AnthropicContent>>, Vec<AnthropicMessage>) {
+        let mut system_blocks: Vec<AnthropicContent> = Vec::new();
         let mut result = Vec::new();
 
         for msg in messages {
             match msg.role {
                 crate::types::Role::System => {
-                    // Anthropic uses a top-level system param, not a message
+                    // Anthropic uses a top-level system param (array of content blocks)
                     let text: String = msg.content.iter()
                         .filter_map(|b| match b {
                             ContentBlock::Text { text } => Some(text.clone()),
@@ -53,7 +54,16 @@ impl AnthropicAdapter {
                         .collect::<Vec<_>>()
                         .join("\n");
                     if !text.is_empty() {
-                        system_prompt = Some(text);
+                        system_blocks.push(AnthropicContent {
+                            kind: "text".into(),
+                            text: Some(text),
+                            id: None,
+                            name: None,
+                            input: None,
+                            tool_use_id: None,
+                            source: None,
+                            cache_control: None,
+                        });
                     }
                 }
                 crate::types::Role::User | crate::types::Role::Tool => {
@@ -66,7 +76,40 @@ impl AnthropicAdapter {
                                 name: None,
                                 input: None,
                                 tool_use_id: None,
+                                source: None,
+                                cache_control: None,
                             }),
+                            ContentBlock::Image { path, media_type } => {
+                                // 读取图片文件并 base64 编码
+                                match std::fs::read(path) {
+                                    Ok(bytes) => {
+                                        let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                                        Some(AnthropicContent {
+                                            kind: "image".into(),
+                                            text: None,
+                                            id: None,
+                                            name: None,
+                                            input: None,
+                                            tool_use_id: None,
+                                            source: Some(AnthropicImageSource {
+                                                kind: "base64".into(),
+                                                media_type: media_type.clone(),
+                                                data,
+                                            }),
+                                            cache_control: None,
+                                        })
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("failed to read image {}: {}", path, e);
+                                        Some(AnthropicContent {
+                                            kind: "text".into(),
+                                            text: Some(format!("[image read error: {}]", path)),
+                                            id: None, name: None, input: None, tool_use_id: None, source: None,
+                                            cache_control: None,
+                                        })
+                                    }
+                                }
+                            }
                             ContentBlock::ToolResult { id, output } => {
                                 let text = match output {
                                     crate::types::ToolOutput::Sync { result } => result.to_string(),
@@ -80,6 +123,8 @@ impl AnthropicAdapter {
                                     name: None,
                                     input: None,
                                     tool_use_id: Some(id.clone()),
+                                    source: None,
+                                    cache_control: None,
                                 })
                             }
                             _ => None,
@@ -102,6 +147,8 @@ impl AnthropicAdapter {
                                 name: None,
                                 input: None,
                                 tool_use_id: None,
+                                source: None,
+                                cache_control: None,
                             }),
                             ContentBlock::ToolUse { id, name, args } => Some(AnthropicContent {
                                 kind: "tool_use".into(),
@@ -110,6 +157,8 @@ impl AnthropicAdapter {
                                 name: Some(name.clone()),
                                 input: Some(args.clone()),
                                 tool_use_id: None,
+                                source: None,
+                                cache_control: None,
                             }),
                             _ => None,
                         })
@@ -124,18 +173,40 @@ impl AnthropicAdapter {
             }
         }
 
-        (system_prompt, result)
+        // 对 system blocks 添加 cache_control：除最后一个块外都加上 ephemeral
+        // 最后一个 system 块（会话段）不缓存，前面的（静态段）缓存
+        if !system_blocks.is_empty() {
+            let last_idx = system_blocks.len() - 1;
+            for (i, block) in system_blocks.iter_mut().enumerate() {
+                if i != last_idx {
+                    block.cache_control = Some(AnthropicCacheControl {
+                        kind: "ephemeral".into(),
+                    });
+                }
+            }
+        }
+
+        let system = if system_blocks.is_empty() { None } else { Some(system_blocks) };
+        (system, result)
     }
 
     fn build_tools(tools: &[ToolSchema]) -> Vec<AnthropicTool> {
-        tools
+        let mut result: Vec<AnthropicTool> = tools
             .iter()
             .map(|t| AnthropicTool {
                 name: t.name.clone(),
                 description: Some(t.description.clone()),
                 input_schema: t.parameters.clone(),
+                cache_control: None,
             })
-            .collect()
+            .collect();
+        // 在最后一个 tool 上设置 cache_control（Anthropic 缓存顺序: tools -> system -> messages）
+        if let Some(last) = result.last_mut() {
+            last.cache_control = Some(AnthropicCacheControl {
+                kind: "ephemeral".into(),
+            });
+        }
+        result
     }
 }
 
@@ -230,6 +301,8 @@ impl LLMAdapter for AnthropicAdapter {
                         prompt_tokens: u.input_tokens,
                         completion_tokens: u.output_tokens,
                         total_tokens: u.input_tokens + u.output_tokens,
+                        cache_read_input_tokens: u.cache_read_input_tokens.unwrap_or(0),
+                        cache_creation_input_tokens: u.cache_creation_input_tokens.unwrap_or(0),
                     }),
                 })
             }
@@ -279,6 +352,11 @@ impl LLMAdapter for AnthropicAdapter {
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         let mut current_tc: Option<ToolCall> = None;
         let mut tc_args = String::new();
+        // 累积 usage：message_start 给 input + cache，message_delta 给 output
+        let mut acc_input: u32 = 0;
+        let mut acc_output: u32 = 0;
+        let mut acc_cache_read: u32 = 0;
+        let mut acc_cache_creation: u32 = 0;
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
@@ -295,6 +373,16 @@ impl LLMAdapter for AnthropicAdapter {
                 let data = line.trim_start_matches("data: ").trim();
                 if let Ok(event) = serde_json::from_str::<AnthropicStreamEvent>(data) {
                     match event.kind.as_str() {
+                        "message_start" => {
+                            // message.message.usage 提供 input_tokens + cache 字段（output 通常为 0）
+                            if let Some(msg) = &event.message {
+                                if let Some(u) = &msg.usage {
+                                    acc_input = u.input_tokens;
+                                    acc_cache_read = u.cache_read_input_tokens.unwrap_or(0);
+                                    acc_cache_creation = u.cache_creation_input_tokens.unwrap_or(0);
+                                }
+                            }
+                        }
                         "content_block_start" => {
                             if let Some(block) = &event.content_block {
                                 if block.kind == "tool_use" {
@@ -331,6 +419,12 @@ impl LLMAdapter for AnthropicAdapter {
                                 tool_calls.push(tc);
                             }
                         }
+                        "message_delta" => {
+                            // message_delta.usage 带累积 output_tokens
+                            if let Some(u) = &event.usage {
+                                acc_output = u.output_tokens;
+                            }
+                        }
                         "message_stop" => break,
                         _ => {}
                     }
@@ -338,11 +432,19 @@ impl LLMAdapter for AnthropicAdapter {
             }
         }
 
+        let usage = Some(Usage {
+            prompt_tokens: acc_input,
+            completion_tokens: acc_output,
+            total_tokens: acc_input + acc_output,
+            cache_read_input_tokens: acc_cache_read,
+            cache_creation_input_tokens: acc_cache_creation,
+        });
+
         let _ = tx
             .send(LLMEvent::Done(LLMResponse {
                 content: if full_content.is_empty() { None } else { Some(full_content) },
                 tool_calls,
-                usage: None,
+                usage,
             }))
             .await;
 
@@ -355,7 +457,7 @@ struct AnthropicRequest {
     model: String,
     messages: Vec<AnthropicMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<String>,
+    system: Option<Vec<AnthropicContent>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<AnthropicTool>>,
     max_tokens: u32,
@@ -384,6 +486,27 @@ struct AnthropicContent {
     input: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_use_id: Option<String>,
+    /// 图片 source（type=image 时使用）：{type:"base64", media_type, data}
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<AnthropicImageSource>,
+    /// 缓存控制（ephemeral）：放在需要缓存的最后一个 content block 上
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_control: Option<AnthropicCacheControl>,
+}
+
+/// Anthropic prompt cache 控制：{type: "ephemeral"}
+#[derive(Serialize, Deserialize, Clone)]
+struct AnthropicCacheControl {
+    #[serde(rename = "type")]
+    kind: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct AnthropicImageSource {
+    #[serde(rename = "type")]
+    kind: String, // "base64"
+    media_type: String,
+    data: String, // base64 encoded
 }
 
 #[derive(Serialize)]
@@ -392,6 +515,8 @@ struct AnthropicTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
     input_schema: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_control: Option<AnthropicCacheControl>,
 }
 
 #[derive(Deserialize)]
@@ -405,6 +530,10 @@ struct AnthropicResponse {
 struct AnthropicUsage {
     input_tokens: u32,
     output_tokens: u32,
+    #[serde(default)]
+    cache_read_input_tokens: Option<u32>,
+    #[serde(default)]
+    cache_creation_input_tokens: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -415,6 +544,18 @@ struct AnthropicStreamEvent {
     content_block: Option<AnthropicContent>,
     #[serde(default)]
     delta: Option<AnthropicDelta>,
+    /// message_start 事件携带的 message 对象（含 usage）
+    #[serde(default)]
+    message: Option<AnthropicStreamMessage>,
+    /// message_delta 事件携带的 usage
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicStreamMessage {
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
 }
 
 #[derive(Deserialize)]

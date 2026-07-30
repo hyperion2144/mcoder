@@ -111,20 +111,46 @@ pub enum ContentBlock {
         id: String,
         output: ToolOutput,
     },
+    /// 图片内容块：用户发送或 agent 通过 send_image 工具展示
+    /// path 为图片文件路径（服务端保证可访问），media_type 为 MIME 类型
+    Image {
+        path: String,
+        media_type: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
+    /// 消息唯一 id（uuid），用于消息树分叉/切换
+    pub id: String,
+    /// 父消息 id：None=根消息（会话首条）；非 None 指向上游消息，构成消息树
+    pub parent_id: Option<String>,
     pub role: Role,
     pub content: Vec<ContentBlock>,
+    /// 该轮 LLM 调用的 token 用量（仅 assistant 消息携带，用于在消息底下展示每轮消耗）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<crate::llm::Usage>,
+    /// m12: 仅供 UI 展示、不送入 LLM 上下文的标记（如 send_image 工具插入的 assistant 消息）
+    /// #[serde(default)] 让旧 JSONL 文件加载时默认为 false
+    #[serde(default)]
+    pub display_only: bool,
 }
 
 impl Message {
-    pub fn text(role: Role, text: impl Into<String>) -> Self {
+    /// 构造新消息：自动生成 uuid，parent_id=None（由 SessionManager 在 append 前设置）
+    pub fn new(role: Role, content: Vec<ContentBlock>) -> Self {
         Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            parent_id: None,
             role,
-            content: vec![ContentBlock::Text { text: text.into() }],
+            content,
+            usage: None,
+            display_only: false,
         }
+    }
+
+    pub fn text(role: Role, text: impl Into<String>) -> Self {
+        Self::new(role, vec![ContentBlock::Text { text: text.into() }])
     }
 
     pub fn user(text: impl Into<String>) -> Self {
@@ -137,6 +163,12 @@ impl Message {
 
     pub fn system(text: impl Into<String>) -> Self {
         Self::text(Role::System, text)
+    }
+
+    /// 设置 usage（链式调用，供 process_response 携带该轮用量）
+    pub fn with_usage(mut self, usage: Option<crate::llm::Usage>) -> Self {
+        self.usage = usage;
+        self
     }
 }
 
@@ -181,6 +213,26 @@ pub struct ModelConfig {
     pub temperature: Option<f32>,
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// 模型支持的输入模态：text / image / audio / video
+    /// 默认 ["text"]；视觉模型应配置为 ["text", "image"]
+    #[serde(default = "default_input_modalities")]
+    pub input: Vec<String>,
+}
+
+fn default_input_modalities() -> Vec<String> {
+    vec!["text".to_string()]
+}
+
+impl ModelConfig {
+    /// 是否支持某种输入模态
+    pub fn supports(&self, modality: &str) -> bool {
+        self.input.iter().any(|m| m == modality)
+    }
+
+    /// 是否支持图片输入（便捷方法）
+    pub fn supports_image(&self) -> bool {
+        self.supports("image")
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -258,6 +310,13 @@ pub struct AppConfig {
     /// 设计文档 §8.7: 工具安全配置
     #[serde(default)]
     pub tools: ToolsConfig,
+    /// m9: read 工具用视觉模型生成 description 时的超时秒数（默认 8）
+    #[serde(default = "default_image_description_timeout_secs")]
+    pub image_description_timeout_secs: u64,
+}
+
+fn default_image_description_timeout_secs() -> u64 {
+    8
 }
 
 /// 设计文档 §8.7: 工具安全配置

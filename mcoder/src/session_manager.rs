@@ -49,6 +49,10 @@ pub struct SessionSnapshotContext {
     pub tokens: usize,
     /// 累计费用（USD），Phase 2 暂为 0.0；Phase 4 接入 model pricing
     pub cost: f64,
+    /// 模型 context window 大小（来自 model_config.context_window）
+    pub context_window: usize,
+    /// 累计 LLM usage（真实 token 消耗，跨轮次累加）
+    pub usage: crate::llm::Usage,
 }
 
 /// 单个 pending Ask 在 snapshot 中的镜像（仅 attach 时返回；不要长驻 store）
@@ -93,6 +97,45 @@ pub struct SessionSnapshot {
     pub context: SessionSnapshotContext,
     /// 当前 session 是否允许 send_message（loop_state != running）
     pub can_resume: bool,
+}
+
+/// 消息树节点（用于 session.tree 返回）
+#[derive(Debug, Clone, Serialize)]
+pub struct MessageTreeNode {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub role: String,
+    pub preview: String,
+    pub is_head: bool,
+}
+
+/// 消息树（用于 session.tree 返回）
+#[derive(Debug, Clone, Serialize)]
+pub struct MessageTree {
+    pub nodes: Vec<MessageTreeNode>,
+    pub head_id: Option<String>,
+}
+
+/// 生成消息预览（前 80 字符），用于消息树节点展示
+fn message_preview(m: &Message) -> String {
+    for b in &m.content {
+        match b {
+            crate::types::ContentBlock::Text { text } => {
+                let chars: Vec<char> = text.chars().take(80).collect();
+                return chars.into_iter().collect();
+            }
+            crate::types::ContentBlock::ToolUse { name, .. } => {
+                return format!("[tool_use: {}]", name);
+            }
+            crate::types::ContentBlock::ToolResult { .. } => {
+                return "[tool_result]".to_string();
+            }
+            crate::types::ContentBlock::Image { path, .. } => {
+                return format!("[image: {}]", path);
+            }
+        }
+    }
+    String::new()
 }
 
 /// 设计文档 §8.3: 运行时配置覆盖（config.set 设置，不持久化）
@@ -263,9 +306,55 @@ pub enum ServerEvent {
         ask_id: String,
         tool_call_id: String,
     },
+    /// LLM usage 报告：每轮 LLM 调用后广播 delta + cumulative + context_window
+    /// 客户端用于更新上下文使用率（圆环/百分比）与 cost 展示
+    UsageUpdated {
+        session_id: String,
+        delta: crate::llm::Usage,
+        cumulative: crate::llm::Usage,
+        context_window: usize,
+    },
     Error {
         message: String,
     },
+}
+
+/// RAII guard：构造时 armed=true；drop 时若仍 armed 则把 flag 重置为 false。
+/// 用于 send_message / send_message_with_images 中 CAS 成功后保证早退路径（ask/错误）
+/// 也会重置 loop_running，避免会话永久 409 死锁。进入 spawn_run_loop 前设 armed=false
+/// 把所有权移交给 loop task（task 结束时自行重置）。
+struct LoopGuard<'a> {
+    flag: &'a std::sync::atomic::AtomicBool,
+    armed: bool,
+}
+impl Drop for LoopGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.flag.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
+fn loop_running_guard(flag: &std::sync::atomic::AtomicBool) -> LoopGuard<'_> {
+    LoopGuard { flag, armed: true }
+}
+
+/// 清理 24h 以上的旧图片临时文件（best-effort，失败仅记录日志）
+async fn cleanup_old_images(dir: &std::path::Path) {
+    let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(86400);
+    let mut rd = match tokio::fs::read_dir(dir).await {
+        Ok(rd) => rd,
+        Err(_) => return,
+    };
+    while let Ok(Some(entry)) = rd.next_entry().await {
+        if let Ok(meta) = entry.metadata().await {
+            if let Ok(mtime) = meta.modified() {
+                if mtime < cutoff {
+                    let _ = tokio::fs::remove_file(entry.path()).await;
+                }
+            }
+        }
+    }
 }
 
 impl SessionManager {
@@ -410,9 +499,12 @@ impl SessionManager {
         session_id: &str,
         entry: &Arc<SessionEntry>,
     ) -> Result<crate::tools::ToolContext> {
-        let project_path = {
+        let (project_path, current_model) = {
             let agent = entry.session.lock().await;
-            agent.session.project_path().to_path_buf()
+            (
+                agent.session.project_path().to_path_buf(),
+                agent.model_config.clone(),
+            )
         };
         let resources = self.get_or_create_resources(&project_path).await?;
         let project_dir = project_path.join(".mcoder");
@@ -441,6 +533,9 @@ impl SessionManager {
             session_state: Arc::new(session_state),
             event_tx: self.event_tx.clone(),
             cancellation: entry.cancellation.clone(),
+            app_config: self.config.clone(),
+            mcp_manager: Some(self.mcp_manager.clone()),
+            current_model,  // already Arc<ModelConfig> from agent.model_config.clone()
         })
     }
 
@@ -450,7 +545,7 @@ impl SessionManager {
         title: &str,
         model_name: Option<&str>,
     ) -> Result<String> {
-        let model_config = self.resolve_model(model_name)?;
+        let model_config = Arc::new(self.resolve_model(model_name)?);
         let jsonl = JsonlSession::create(project, title, &model_config.name)?;
         let session_id = jsonl.id().to_string();
 
@@ -611,6 +706,71 @@ impl SessionManager {
         }
     }
 
+    /// 消息树：返回所有消息节点 + 当前 head_id（用于客户端树视图）
+    pub async fn get_message_tree(&self, session_id: &str) -> Result<MessageTree> {
+        let sessions = self.sessions.read().await;
+        if let Some(entry) = sessions.get(session_id) {
+            let agent = entry.session.lock().await;
+            let head_id = agent.current_head_id.clone();
+            let nodes: Vec<MessageTreeNode> = agent.messages.iter().map(|m| {
+                let preview = message_preview(m);
+                MessageTreeNode {
+                    id: m.id.clone(),
+                    parent_id: m.parent_id.clone(),
+                    role: format!("{:?}", m.role).to_lowercase(),
+                    preview,
+                    is_head: head_id.as_deref() == Some(&m.id),
+                }
+            }).collect();
+            Ok(MessageTree { nodes, head_id })
+        } else {
+            anyhow::bail!("session not found: {}", session_id)
+        }
+    }
+
+    /// 切换消息分支：将 current_head_id 切到指定消息。
+    /// 不剪枝内存消息（保留全树供 get_message_tree / 再次 checkout 兄弟分支）；
+    /// run_once 在调用 LLM 前会仅取 root->head 路径上的消息。
+    /// 返回新 SessionSnapshot（messages 为路径上的消息）。
+    pub async fn checkout(self: &Arc<Self>, session_id: &str, message_id: &str) -> Result<SessionSnapshot> {
+        let sessions = self.sessions.read().await;
+        let entry = sessions.get(session_id).context("session not found")?;
+
+        // 竞态保护：loop 运行中禁止 checkout，避免 run_once 迭代间消息列表/head 被改
+        if entry.loop_running.load(std::sync::atomic::Ordering::SeqCst) {
+            anyhow::bail!("cannot checkout while agent loop is running for session {}", session_id);
+        }
+        let mut agent = entry.session.lock().await;
+
+        // 在独立块内构建 id→message 索引并反向追溯根→target 路径，
+        // 块结束时 by_id/path 的不可变借用一并释放，之后才能可变借用 agent
+        let path_msgs: Vec<Message> = {
+            let by_id: std::collections::HashMap<&str, &Message> =
+                agent.messages.iter().map(|m| (m.id.as_str(), m)).collect();
+
+            let target = by_id.get(message_id).context("message not found in tree")?;
+
+            let mut path: Vec<&Message> = Vec::new();
+            let mut cur = Some(*target);
+            while let Some(m) = cur {
+                path.push(m);
+                cur = m.parent_id.as_deref().and_then(|pid| by_id.get(pid).copied());
+            }
+            path.reverse();
+            path.into_iter().cloned().collect()
+        };
+
+        // 更新 head（内存 + 持久化），不替换 agent.messages（保留全树供 tree 视图/兄弟分支 checkout）
+        agent.current_head_id = Some(message_id.to_string());
+        agent.session.update_head_id(message_id)?;
+
+        drop(agent);
+        drop(sessions);
+
+        // 构建 snapshot（复用路径消息）
+        self.build_snapshot(session_id, path_msgs).await
+    }
+
     /// 设计文档 §3.4: 切换 session 的 role（/mode 命令）
     /// 终审修复 #15：role 切换持久化到 session_state SQLite（key='role'），
     /// 服务重启后 snapshot / attach 复原角色，避免 model 与 tools 不一致。
@@ -618,6 +778,16 @@ impl SessionManager {
         let sessions = self.sessions.read().await;
         let entry = sessions.get(session_id).context("session not found")?;
         let mut agent = entry.session.lock().await;
+
+        // vision role 校验：当前模型必须支持图片输入
+        if role_name == "vision" && !agent.model_config.supports_image() {
+            anyhow::bail!(
+                "vision role requires a model with image input modality. Current model '{}' has input={:?}. Please switch to a vision-capable model first (e.g. via /model set <name>).",
+                agent.model_config.name,
+                agent.model_config.input
+            );
+        }
+
         agent.switch_role(role_name)?;
         drop(agent); // 显式释放
         // 持久化 role 到 session_state（"key_value" 表）
@@ -670,6 +840,10 @@ impl SessionManager {
         ).is_err() {
             anyhow::bail!("agent loop already running for session {} (409 Conflict)", session_id);
         }
+        // RAII guard：早退（ask/错误）时自动重置 loop_running=false；
+        // 进入 spawn_run_loop 前 disown（所有权移交给 loop task）。
+        // 复用定义见下方 send_message_with_images 中同名 struct（local type）。
+        let mut guard = loop_running_guard(&entry.loop_running);
 
         // 设计文档 §3.7: loop 已结束后完成的任务结果仍需追加，下次用户消息时模型可见
         // 在添加用户消息前，先 drain 上一轮 loop 结束后完成的异步任务
@@ -678,7 +852,7 @@ impl SessionManager {
         // ask_user 特殊处理：若该 session 当前有 pending Ask，普通文本输入
         // 应被视为对 Ask 的"其他"自由文本，不创建新 loop、不发新 user message
         if self.try_handle_text_for_pending_ask(session_id, content).await {
-            return Ok(());
+            return Ok(()); // guard drop 时重置 loop_running
         }
 
         // 设计文档 §8.3.1: 记忆自动召回
@@ -703,6 +877,100 @@ impl SessionManager {
         let entry_clone = entry.clone();
         // Phase 2: 进入 loop 前持久化 loop_state=running
         mgr.persist_loop_state(&sid, "running", None).await;
+        // 把 loop_running 的所有权移交给 loop task
+        guard.armed = false;
+        mgr.spawn_run_loop(sid, entry_clone);
+
+        Ok(())
+    }
+
+    /// 发送含图片的用户消息：将 base64 图片数据保存为临时文件，构造 ContentBlock 列表后发送。
+    /// images: Vec<(base64_data, media_type)>
+    pub async fn send_message_with_images(
+        self: &Arc<Self>,
+        session_id: &str,
+        content: &str,
+        images: Vec<(String, String)>,
+    ) -> Result<()> {
+        use base64::Engine;
+
+        let entry = {
+            let sessions = self.sessions.read().await;
+            sessions.get(session_id).cloned().context("session not found")?
+        };
+
+        // CAS 先行：成功后再写图片文件，避免 session 不存在/CAS 失败时产生孤儿文件（C3）
+        if entry.loop_running.compare_exchange(
+            false, true,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        ).is_err() {
+            anyhow::bail!("agent loop already running for session {} (409 Conflict)", session_id);
+        }
+        let mut guard = loop_running_guard(&entry.loop_running);
+
+        // 保存图片到 ~/.mcoder/tmp/images/（CAS 成功后才写盘）
+        let home = dirs::home_dir().context("cannot determine home directory")?;
+        let img_dir = home.join(".mcoder").join("tmp").join("images");
+        tokio::fs::create_dir_all(&img_dir).await
+            .context("failed to create image temp dir")?;
+
+        // 清理 24h 以上的旧图片临时文件（best-effort，失败不影响发送）
+        cleanup_old_images(&img_dir).await;
+
+        // 构造内容块：仅当文本非空才追加 Text（m6）
+        let mut blocks: Vec<ContentBlock> = Vec::new();
+        if !content.is_empty() {
+            blocks.push(ContentBlock::Text { text: content.to_string() });
+        }
+        for (data, media_type) in images {
+            let ext = match media_type.as_str() {
+                "image/png" => "png",
+                "image/jpeg" => "jpg",
+                "image/gif" => "gif",
+                "image/webp" => "webp",
+                "image/bmp" => "bmp",
+                _ => "png",
+            };
+            let filename = format!("{}.{}", uuid::Uuid::new_v4(), ext);
+            let path = img_dir.join(&filename);
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(&data)
+                .context("invalid base64 image data")?;
+            tokio::fs::write(&path, &bytes).await
+                .context("failed to write image file")?;
+            blocks.push(ContentBlock::Image {
+                path: path.to_string_lossy().to_string(),
+                media_type,
+            });
+        }
+
+        self.inject_completed_tasks(session_id, &entry).await?;
+
+        if self.try_handle_text_for_pending_ask(session_id, content).await {
+            return Ok(()); // guard drop 重置 loop_running
+        }
+
+        if self.config.memory.auto_recall {
+            self.inject_recalled_memory(session_id, &entry, content).await?;
+        }
+
+        let user_msg = Message::new(crate::types::Role::User, blocks);
+        {
+            let mut agent = entry.session.lock().await;
+            agent.add_message(user_msg.clone())?;
+        }
+
+        let _ = self.event_tx.send(ServerEvent::Message {
+            session_id: session_id.to_string(),
+            message: user_msg,
+        });
+
+        let mgr = self.clone();
+        let sid = session_id.to_string();
+        let entry_clone = entry.clone();
+        mgr.persist_loop_state(&sid, "running", None).await;
+        guard.armed = false;
         mgr.spawn_run_loop(sid, entry_clone);
 
         Ok(())
@@ -1160,11 +1428,7 @@ impl SessionManager {
                     .unwrap_or_default(),
             );
             let msg = Message::system(text.clone());
-            // 写 JSONL + 内存
-            let jsonl = crate::persistence::jsonl::JsonlSession::load(session_id).ok();
-            if let Some(jsonl) = &jsonl {
-                let _ = jsonl.append(&msg);
-            }
+            // 写 JSONL + 内存（add_message 内部会 append + 更新 head）
             if let Err(e) = agent.add_message(msg.clone()) {
                 tracing::warn!("inject_completed_tasks: add_message failed: {}", e);
             }
@@ -1258,7 +1522,7 @@ impl SessionManager {
             }
 
             // 设计文档 §3.9: LLM 调用可被取消（select between LLM 和 cancellation）
-            let assistant_msg = {
+            let (assistant_msg, last_usage) = {
                 let mut agent = entry.session.lock().await;
                 tokio::select! {
                     r = agent.run_once() => r?,
@@ -1287,6 +1551,20 @@ impl SessionManager {
                         session_id: session_id.to_string(),
                         message: msg.clone(),
                     });
+
+                    // 广播 usage（若本轮拿到）
+                    if let Some(u) = &last_usage {
+                        let (cumulative, context_window) = {
+                            let agent = entry.session.lock().await;
+                            (agent.cumulative_usage.clone(), agent.model_config().context_window as usize)
+                        };
+                        let _ = self.event_tx.send(ServerEvent::UsageUpdated {
+                            session_id: session_id.to_string(),
+                            delta: u.clone(),
+                            cumulative,
+                            context_window,
+                        });
+                    }
 
                     let tool_calls: Vec<_> = msg
                         .content
@@ -1444,15 +1722,12 @@ impl SessionManager {
                         };
                         if !role_allowed {
                             tracing::info!("tool {} blocked by role whitelist", tc.name);
-                            let block_msg = Message {
-                                role: Role::Tool,
-                                content: vec![ContentBlock::ToolResult {
+                            let block_msg = Message::new(Role::Tool, vec![ContentBlock::ToolResult {
                                     id: tc.id.clone(),
                                     output: crate::types::ToolOutput::Error {
                                         message: format!("tool '{}' is not allowed in current role", tc.name),
                                     },
-                                }],
-                            };
+                                }]);
                             let _ = self.event_tx.send(ServerEvent::Message {
                                 session_id: session_id.to_string(),
                                 message: block_msg.clone(),
@@ -1492,9 +1767,7 @@ impl SessionManager {
                             ).await?;
                             if !danger_result.allow {
                                 tracing::info!("dangerous tool {} blocked by hook (not auto-approved)", tc.name);
-                                let block_msg = Message {
-                                    role: Role::Tool,
-                                    content: vec![ContentBlock::ToolResult {
+                                let block_msg = Message::new(Role::Tool, vec![ContentBlock::ToolResult {
                                         id: tc.id.clone(),
                                         output: crate::types::ToolOutput::Error {
                                             message: format!(
@@ -1502,8 +1775,7 @@ impl SessionManager {
                                                 tc.name
                                             ),
                                         },
-                                    }],
-                                };
+                                    }]);
                                 let _ = self.event_tx.send(ServerEvent::Message {
                                     session_id: session_id.to_string(),
                                     message: block_msg.clone(),
@@ -1570,75 +1842,94 @@ impl SessionManager {
 
                         let result = {
                             let mut agent = entry.session.lock().await;
-                            // 设计文档 §3.9: 工具执行可被取消
+                            // C3: 取消时不合成消息 -- execute_tool 内部已检查取消并返回
+                            // 相应的 error tool_result。若 cancel 在 select! 竞争中胜出
+                            // 而 execute_tool 还没返回，说明工具执行尚未完成，
+                            // 返回空 vec 让调用方跳过广播（agent 内部无半提交状态）。
                             tokio::select! {
                                 r = agent.execute_tool(tc, &ctx) => r,
                                 _ = cancel_token.cancelled() => {
-                                    tracing::info!("tool {} cancelled during execution", tc.name);
-                                    Ok(Message {
-                                        role: Role::Tool,
-                                        content: vec![ContentBlock::ToolResult {
-                                            id: tc.id.clone(),
-                                            output: crate::types::ToolOutput::Error {
-                                                message: format!("tool '{}' cancelled by user", tc.name),
-                                            },
-                                        }],
-                                    })
+                                    tracing::info!("tool {} cancelled during execution (select race)", tc.name);
+                                    Ok(vec![])
                                 }
                             }
                         };
 
                         let success = result.is_ok();
-                        if let Ok(result_msg) = &result {
-                            // 检查是否是 AsyncTask 返回
-                            let is_async = result_msg.content.iter().any(|b| {
-                                matches!(b, ContentBlock::ToolResult { output, .. } if matches!(output, crate::types::ToolOutput::AsyncTask { .. }))
-                            });
+                        if let Ok(result_msgs) = &result {
+                            // 遍历所有返回的消息依次广播（image 工具可能返回 2 条：tool_result + image user message）
+                            for result_msg in result_msgs {
+                                // 检查是否是 AsyncTask 返回
+                                let is_async = result_msg.content.iter().any(|b| {
+                                    matches!(b, ContentBlock::ToolResult { output, .. } if matches!(output, crate::types::ToolOutput::AsyncTask { .. }))
+                                });
 
-                            let _ = self.event_tx.send(ServerEvent::Message {
-                                session_id: session_id.to_string(),
-                                message: result_msg.clone(),
-                            });
+                                let _ = self.event_tx.send(ServerEvent::Message {
+                                    session_id: session_id.to_string(),
+                                    message: result_msg.clone(),
+                                });
 
-                            if is_async {
-                                tracing::info!("tool {} returned AsyncTask, agent can continue while it runs in background", tc.name);
+                                if is_async {
+                                    tracing::info!("tool {} returned AsyncTask, agent can continue while it runs in background", tc.name);
+                                }
+                            }
+
+                            // image 工具（action=send）：检测 image_sent 标记，追加含 Image 块的 assistant 消息并广播
+                            // 只在最后一条消息（工具结果消息）上检测
+                            if tc.name == "image" {
+                                if let Some(last_msg) = result_msgs.last() {
+                                    let image_msg = {
+                                        let mut agent = entry.session.lock().await;
+                                        agent.maybe_create_image_message(tc, last_msg)
+                                    };
+                                    if let Some(img_msg) = image_msg {
+                                        let _ = self.event_tx.send(ServerEvent::Message {
+                                            session_id: session_id.to_string(),
+                                            message: img_msg,
+                                        });
+                                    }
+                                }
                             }
 
                             // 自动调度子代理：workflow_update phase_next 返回 spawn_subagent 时
                             // 自动构造 subagent 工具调用并执行，无需 LLM 主动调用
                             if tc.name == "workflow_update" {
-                                if let Some(spawn) = extract_spawn_subagent(result_msg) {
-                                    tracing::info!(
-                                        "auto-spawning subagent (role={}) for change {} phase {}",
-                                        spawn.role, spawn.change_id, spawn.phase
-                                    );
-                                    let subagent_call = crate::types::ToolCall {
-                                        id: uuid::Uuid::new_v4().to_string(),
-                                        name: "subagent".into(),
-                                        args: serde_json::json!({
-                                            "op": "spawn",
-                                            "role": spawn.role,
-                                            "task": spawn.prompt,
-                                        }),
-                                    };
-                                    let _ = self.event_tx.send(ServerEvent::ToolCallStart {
-                                        session_id: session_id.to_string(),
-                                        name: "subagent".into(),
-                                    });
-                                    let sub_result = {
-                                        let mut agent = entry.session.lock().await;
-                                        agent.execute_tool(&subagent_call, &ctx).await
-                                    };
-                                    let _ = self.event_tx.send(ServerEvent::ToolCallDone {
-                                        session_id: session_id.to_string(),
-                                        name: "subagent".into(),
-                                        success: sub_result.is_ok(),
-                                    });
-                                    if let Ok(sub_msg) = sub_result {
-                                        let _ = self.event_tx.send(ServerEvent::Message {
+                                if let Some(result_msg) = result_msgs.first() {
+                                    if let Some(spawn) = extract_spawn_subagent(result_msg) {
+                                        tracing::info!(
+                                            "auto-spawning subagent (role={}) for change {} phase {}",
+                                            spawn.role, spawn.change_id, spawn.phase
+                                        );
+                                        let subagent_call = crate::types::ToolCall {
+                                            id: uuid::Uuid::new_v4().to_string(),
+                                            name: "subagent".into(),
+                                            args: serde_json::json!({
+                                                "op": "spawn",
+                                                "role": spawn.role,
+                                                "task": spawn.prompt,
+                                            }),
+                                        };
+                                        let _ = self.event_tx.send(ServerEvent::ToolCallStart {
                                             session_id: session_id.to_string(),
-                                            message: sub_msg,
+                                            name: "subagent".into(),
                                         });
+                                        let sub_result = {
+                                            let mut agent = entry.session.lock().await;
+                                            agent.execute_tool(&subagent_call, &ctx).await
+                                        };
+                                        let _ = self.event_tx.send(ServerEvent::ToolCallDone {
+                                            session_id: session_id.to_string(),
+                                            name: "subagent".into(),
+                                            success: sub_result.is_ok(),
+                                        });
+                                        if let Ok(sub_msgs) = sub_result {
+                                            for sub_msg in sub_msgs {
+                                                let _ = self.event_tx.send(ServerEvent::Message {
+                                                    session_id: session_id.to_string(),
+                                                    message: sub_msg,
+                                                });
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -2013,21 +2304,27 @@ impl SessionManager {
         tool_call_id: &str,
         result_json: &serde_json::Value,
     ) -> Result<()> {
-        let jsonl = crate::persistence::jsonl::JsonlSession::load(session_id)
-            .context("loading jsonl for tool_result append")?;
-        let msg = Message {
-            role: Role::Tool,
-            content: vec![ContentBlock::ToolResult {
+        let msg = Message::new(Role::Tool, vec![ContentBlock::ToolResult {
                 id: tool_call_id.to_string(),
                 output: ToolOutput::Sync { result: result_json.clone() },
-            }],
-        };
-        // 写 jsonl + 注入内存
-        jsonl.append(&msg)?;
+            }]);
+        // 写 jsonl + 注入内存（add_message 内部会 append + 更新 head）
         let sessions = self.sessions.read().await;
         if let Some(entry) = sessions.get(session_id) {
             let mut agent = entry.session.lock().await;
             let _ = agent.add_message(msg);
+        } else {
+            // session 未 attach：直接写 jsonl + 更新 head（无内存注入）
+            let mut jsonl = crate::persistence::jsonl::JsonlSession::load(session_id)
+                .context("loading jsonl for tool_result append")?;
+            let msg_id = msg.id.clone();
+            // parent_id 设为当前 head（若有）
+            let mut msg = msg;
+            if msg.parent_id.is_none() {
+                msg.parent_id = jsonl.current_head_id().map(|s| s.to_string());
+            }
+            jsonl.append(&msg)?;
+            jsonl.update_head_id(&msg_id)?;
         }
         Ok(())
     }
@@ -2170,9 +2467,9 @@ impl SessionManager {
     ) -> Result<SessionSnapshot> {
         // 1. 基础元数据：role / project_path / model / tokens（来自 AgentSession）
         // 终审修复 #6：snapshot build 不在 agent lock 内 await ask registry。
-        // 先在锁内 clone 必要字段（role / project_path / model / tokens / context_window），
+        // 先在锁内 clone 必要字段（role / project_path / model / tokens / context_window / cumulative_usage），
         // 释放锁后再 async peek ask registry；避免 agent lock 持有期间跨 await 导致死锁/竞态。
-        let (role, project_path_str, model_name, tokens, context_window, loop_running) = {
+        let (role, project_path_str, model_name, tokens, context_window, loop_running, cumulative_usage) = {
             let sessions = self.sessions.read().await;
             let entry = sessions
                 .get(session_id)
@@ -2187,6 +2484,7 @@ impl SessionManager {
                 agent.estimate_total_tokens(),
                 agent.model_config().context_window as usize,
                 entry.loop_running.load(std::sync::atomic::Ordering::SeqCst),
+                agent.cumulative_usage.clone(),
             )
         };
         // 锁外 await ask registry（非阻塞读）
@@ -2297,8 +2595,14 @@ impl SessionManager {
             .collect();
 
         // 7. context tokens + cost（Phase 2 cost=0.0；Phase 4 接入 model pricing）
-        let _ = context_window; // 暂未直接使用，保留供 Phase 4 接入
-        let context = SessionSnapshotContext { tokens, cost: 0.0 };
+        // tokens 用 estimate_total_tokens（基于当前分支消息长度估算）；
+        // 注：cumulative_usage 是跨轮累加值，不能用作当前上下文占用（会严重偏高）。
+        let context = SessionSnapshotContext {
+            tokens,
+            cost: 0.0,
+            context_window,
+            usage: cumulative_usage,
+        };
 
         // 8. can_resume：loop_state == "running" 时禁止 send（避免并发 loop）
         let can_resume = loop_state != "running";
@@ -2336,7 +2640,7 @@ impl SessionManager {
         let meta = jsonl.meta().clone();
         // 获取或创建该 session 所属项目的 per-project 资源
         self.get_or_create_resources(&meta.project_path).await?;
-        let model_config = self.resolve_model(Some(&meta.model))?;
+        let model_config = Arc::new(self.resolve_model(Some(&meta.model))?);
         let llm = create_adapter(&model_config)?;
         let max_iters = self.config.loop_max_iters;
         let agent = AgentSession::new(jsonl, model_config, llm, self.tools.clone(), max_iters, self.role_registry.clone());
@@ -2791,12 +3095,19 @@ impl SessionManager {
 /// **Phase 5c 校对**：只保留真实注册到 ToolRegistry 的工具名。
 /// 移除历史遗留的 `task_status` / `task_list` / `plan_get` 等占位
 /// （实际只有 `task` 工具）；新增 `plan_query`（Phase 5c 新增工具）。
+///
+/// **m14 校对**：graph 工具已经过合并。
+/// `graph_query` + `graph_find` 合并为 `graph_search`；
+/// `graph_callers` + `graph_callees` + `graph_references` 合并为 `graph_relations`。
+///
+/// **m8 校对**：`image` 工具不在此白名单中——其 `view` action 无副作用但 `send` action
+/// 会向会话插入新消息（display-only）；runtime 无法按 action 区分，因此走默认路径
+/// （与其它写工具一起串行，但读路径仍可并发），这是保守但安全的行为。
 pub const READONLY_TOOLS: &[&str] = &[
-    "read", "read_more", "read_full", "read_original",
+    "read",
     "ls", "grep",
-    "graph_query", "graph_file_symbols", "graph_index",
-    // P2-8: 新增 graph 只读查询工具（graph_index 也算只读，因不修改源文件）
-    "graph_find", "graph_callers", "graph_callees", "graph_references",
+    "graph_search", "graph_file_symbols", "graph_index",
+    "graph_relations",
     "memory_search", "memory_list",
     "sandbox_read",
     "task", // Phase 5: 单 task 工具（query/get/cancel 都通过 op 参数）
@@ -2852,15 +3163,12 @@ async fn execute_readonly_concurrent(
             let id = tc.id.clone();
             let name = tc.name.clone();
             let handle = tokio::spawn(async move {
-                Message {
-                    role: Role::Tool,
-                    content: vec![ContentBlock::ToolResult {
+                Message::new(Role::Tool, vec![ContentBlock::ToolResult {
                         id,
                         output: crate::types::ToolOutput::Error {
                             message: format!("tool '{}' is not allowed in current role", name),
                         },
-                    }],
-                }
+                    }])
             });
             handles.push((tc.clone(), handle));
             continue;
@@ -2884,13 +3192,10 @@ async fn execute_readonly_concurrent(
                     }
                 }
             };
-            Message {
-                role: Role::Tool,
-                content: vec![ContentBlock::ToolResult {
+            Message::new(Role::Tool, vec![ContentBlock::ToolResult {
                     id: tc_clone.id.clone(),
                     output,
-                }],
-            }
+                }])
         });
         handles.push((tc.clone(), handle));
     }
@@ -2900,15 +3205,12 @@ async fn execute_readonly_concurrent(
     for (tc, handle) in handles {
         let msg = match handle.await {
             Ok(m) => m,
-            Err(e) => Message {
-                role: Role::Tool,
-                content: vec![ContentBlock::ToolResult {
+            Err(e) => Message::new(Role::Tool, vec![ContentBlock::ToolResult {
                     id: tc.id.clone(),
                     output: crate::types::ToolOutput::Error {
                         message: format!("tool panicked: {}", e),
                     },
-                }],
-            },
+                }]),
         };
         // 广播消息
         let _ = mgr.event_tx.send(ServerEvent::Message {

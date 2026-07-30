@@ -13,3 +13,4 @@ export { HelpView } from './HelpView.js';
 export { InputBox } from './InputBox.js';
 export { AskUserCard, AskUserSummary, useAskForSession } from './AskUserCard.js';
 export { ResumeBar } from './ResumeBar.js';
+export { TreeView } from './TreeView.js';

@@ -4,12 +4,14 @@
 // 工具调用：统一渲染为 ToolCard（三态折叠 + 流光 loading）
 
 import { Box, Text } from 'ink';
+import Image from 'ink-picture';
 import { useMessagesStore, useUiStore } from '../store/index.js';
 import { ToolCard } from './ToolCard.js';
 import { AskUserCard, AskUserSummary } from './AskUserCard.js';
 import type { Message, ContentBlock } from '../rpc/types.js';
 import { ASK_USER_TOOL } from '../ask/types.js';
 import { useAskStore } from '../ask/store.js';
+import { formatUsageDelta } from '../utils/format.js';
 
 function MessageView({
   msg,
@@ -109,8 +111,20 @@ function MessageView({
           // tool_result 由 ToolCard 内联显示，这里不再单独渲染
           return null;
         }
+        if (block.type === 'image' && block.path) {
+          const filename = block.path.split('/').pop() || block.path;
+          return (
+            <Box key={i} flexDirection="column" paddingLeft={1}>
+              <Image src={block.path} width={40} height={20} alt={`image: ${filename}`} />
+              <Text color="gray" dimColor>  {filename}</Text>
+            </Box>
+          );
+        }
         return null;
       })}
+      {msg.role === 'assistant' && msg.usage && formatUsageDelta(msg.usage) && (
+        <Text color="gray" dimColor>  ↳ {formatUsageDelta(msg.usage)}</Text>
+      )}
     </Box>
   );
 }

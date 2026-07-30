@@ -17,12 +17,13 @@ import { NetworkMonitor } from './network.js';
 import { PairingScreen } from './components/PairingScreen.js';
 import { Drawer } from './components/Drawer.js';
 import { MessageList } from './components/MessageList.js';
-import { InputBar } from './components/InputBar.js';
+import { InputBar, type PendingImage } from './components/InputBar.js';
 import { StatusBar } from './components/StatusBar.js';
 import { ProjectList } from './components/ProjectList.js';
 import { SessionTabs } from './components/SessionTabs.js';
 import { TodoSummaryBar } from './components/TodoSummaryBar.js';
 import { ResumeBar } from './components/ResumeBar.js';
+import { TreeView } from './components/TreeView.js';
 
 // 设计文档 §6.2/§6.7: Plan 审批 + Todo 显示（移动端触摸友好版）
 function MobilePlanPanel({
@@ -168,8 +169,9 @@ export function App() {
   const [client, setClient] = useState<WsClient | null>(null);
   const [pairing, setPairing] = useState<string>('');
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [showTree, setShowTree] = useState(false);
   const [networkStatus, setNetworkStatus] = useState<'online' | 'offline'>('online');
-  const [pendingQueue, setPendingQueue] = useState<string[]>([]);
+  const [pendingQueue, setPendingQueue] = useState<{content: string; images: PendingImage[]}[]>([]);
   // 项目入口视图状态：projects 为项目选择页，sessions 为项目内会话 tab 页
   const [view, setView] = useState<'projects' | 'sessions'>('projects');
   const [currentProject, setCurrentProject] = useState<string | null>(null);
@@ -182,7 +184,7 @@ export function App() {
   const networkMonitor = useRef<NetworkMonitor | null>(null);
 
   // P1-5: 用 ref 保存最新的 sendMessage 和 client，避免闭包过期
-  const sendMessageRef = useRef<(content: string) => void>(() => {});
+  const sendMessageRef = useRef<(content: string, images?: PendingImage[]) => void>(() => {});
   const clientRef = useRef<WsClient | null>(null);
   clientRef.current = client;
 
@@ -195,7 +197,7 @@ export function App() {
         // P1-5: 弱网恢复后重发排队消息，用 ref 获取最新 sendMessage
         const queue = [...pendingQueue];
         setPendingQueue([]);
-        queue.forEach((msg) => sendMessageRef.current(msg));
+        queue.forEach((item) => sendMessageRef.current(item.content, item.images));
       }
     });
     return () => networkMonitor.current?.destroy();
@@ -388,7 +390,8 @@ export function App() {
           setRole: (r) => sessionStore.setRole(r),
           setModel: (m) => sessionStore.setModel(m),
           setProjectPath: (p) => sessionStore.setProjectPath(p),
-          setContextUsage: (used, _window) => sessionStore.setContextUsage(used, sessionStore.contextWindow || 0),
+          setContextUsage: (used, window) => sessionStore.setContextUsage(used, window || sessionStore.contextWindow || 0),
+          setUsage: (usage, cost) => sessionStore.setUsage(usage, cost),
           setPendingPlan: (p) => sessionStore.setPendingPlan(p),
           setPendingTodos: (t) => sessionStore.setPendingTodos(t),
           setBackgroundTasks: (t) => sessionStore.setBackgroundTasks(t),
@@ -522,8 +525,8 @@ export function App() {
     await attachSession(id);
   }, [sessionStore.sessions, currentProject, openTabs, attachSession]);
 
-  const sendMessage = useCallback(async (content: string) => {
-    if (!client || !content.trim()) return;
+  const sendMessage = useCallback(async (content: string, images: PendingImage[] = []) => {
+    if (!client || (!content.trim() && images.length === 0)) return;
 
     // issue 9: 离线 pending answer 不作为普通消息重发
     // 若 session 当前有 pending Ask，则此文本本应作为 ask answer 提交
@@ -535,7 +538,7 @@ export function App() {
         msgStore.setError('当前有 ask 等待回答，请先在 ask 卡片上交互；离线消息会丢失');
         return;
       }
-      setPendingQueue((q) => [...q, content]);
+      setPendingQueue((q) => [...q, { content, images }]);
       msgStore.addMessage({
         role: 'system',
         content: [{ type: 'text', text: `[queued, will send when online] ${content}` }],
@@ -561,10 +564,26 @@ export function App() {
         return;
       }
     }
-    msgStore.addMessage({ role: 'user', content: [{ type: 'text', text: content }] });
+    // 构建用户消息内容块（含图片，乐观渲染用 data URL）
+    const userBlocks: any[] = [];
+    if (content.trim()) {
+      userBlocks.push({ type: 'text', text: content });
+    }
+    for (const img of images) {
+      userBlocks.push({ type: 'image', path: img.preview, media_type: img.media_type });
+    }
+    msgStore.addMessage({ role: 'user', content: userBlocks });
     msgStore.setStreaming(true);
     try {
-      await client.request('sessions.send', { session_id: sid, content });
+      if (images.length > 0) {
+        await client.request('sessions.send', {
+          session_id: sid,
+          content,
+          images: images.map(im => ({ data: im.data, media_type: im.media_type })),
+        });
+      } else {
+        await client.request('sessions.send', { session_id: sid, content });
+      }
     } catch (e: any) {
       // 发送失败，排队重试（但 ask answer 不入队，见上面）
       const hasPendingAsk = sid ? useAskStore.getState().pending[sid] : null;
@@ -573,7 +592,7 @@ export function App() {
         msgStore.setStreaming(false);
         return;
       }
-      setPendingQueue((q) => [...q, content]);
+      setPendingQueue((q) => [...q, { content, images: [] }]);
       msgStore.setError(`send failed (queued): ${e.message}`);
       msgStore.setStreaming(false);
     }
@@ -603,16 +622,19 @@ export function App() {
       if (result.systemMessage) {
         msgStore.addMessage({ role: 'system', content: [{ type: 'text', text: result.systemMessage }] });
       }
+      if (result.switchView === 'tree') {
+        setShowTree(true);
+      }
     } catch (e: any) {
       msgStore.setError(e.message);
     }
   }, [client]);
 
-  const onSubmit = useCallback((value: string) => {
+  const onSubmit = useCallback((value: string, images: PendingImage[] = []) => {
     if (value.startsWith('/')) {
       handleSlash(value);
     } else {
-      sendMessage(value);
+      sendMessage(value, images);
     }
   }, [handleSlash, sendMessage]);
 
@@ -749,6 +771,11 @@ export function App() {
         streaming={msgStore.streaming}
         disabled={networkStatus === 'offline'}
       />
+
+      {/* 消息树模态 */}
+      {showTree && client && (
+        <TreeView client={client} onClose={() => setShowTree(false)} />
+      )}
 
       <Drawer
         open={drawerOpen}

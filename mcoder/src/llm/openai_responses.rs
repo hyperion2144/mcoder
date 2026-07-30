@@ -6,6 +6,7 @@ use crate::llm::{LLMAdapter, LLMEvent, LLMResponse, Usage};
 use crate::types::{ContentBlock, Message, ModelConfig, ToolCall, ToolSchema};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use base64::Engine;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -47,15 +48,44 @@ impl OpenAIResponsesAdapter {
                             role: role.to_string(),
                             content: vec![ResponseContent {
                                 kind: "input_text".to_string(),
-                                text: text.clone(),
+                                text: Some(text.clone()),
+                                image_url: None,
                             }],
                         }),
+                        ContentBlock::Image { path, media_type } => {
+                            match std::fs::read(path) {
+                                Ok(bytes) => {
+                                    let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                                    let url = format!("data:{};base64,{}", media_type, data);
+                                    Some(ResponseInputItem {
+                                        role: role.to_string(),
+                                        content: vec![ResponseContent {
+                                            kind: "input_image".to_string(),
+                                            text: None,
+                                            image_url: Some(url),
+                                        }],
+                                    })
+                                }
+                                Err(e) => {
+                                    tracing::warn!("failed to read image {}: {}", path, e);
+                                    Some(ResponseInputItem {
+                                        role: role.to_string(),
+                                        content: vec![ResponseContent {
+                                            kind: "input_text".to_string(),
+                                            text: Some(format!("[image read error: {}]", path)),
+                                            image_url: None,
+                                        }],
+                                    })
+                                }
+                            }
+                        }
                         ContentBlock::ToolUse { id: _, name, args } => {
                             Some(ResponseInputItem {
                                 role: "assistant".to_string(),
                                 content: vec![ResponseContent {
                                     kind: "output_text".to_string(),
-                                    text: format!("{}({})", name, args),
+                                    text: Some(format!("{}({})", name, args)),
+                                    image_url: None,
                                 }],
                             })
                         }
@@ -69,7 +99,8 @@ impl OpenAIResponsesAdapter {
                                 role: "user".to_string(),
                                 content: vec![ResponseContent {
                                     kind: "input_text".to_string(),
-                                    text,
+                                    text: Some(text),
+                                    image_url: None,
                                 }],
                             })
                         }
@@ -156,7 +187,9 @@ impl LLMAdapter for OpenAIResponsesAdapter {
                             if let Some(content_items) = &item.content {
                                 for c in content_items {
                                     if c.kind == "output_text" {
-                                        content.push_str(&c.text);
+                                        if let Some(t) = &c.text {
+                                            content.push_str(t);
+                                        }
                                     }
                                 }
                             }
@@ -181,6 +214,8 @@ impl LLMAdapter for OpenAIResponsesAdapter {
                         prompt_tokens: u.input_tokens,
                         completion_tokens: u.output_tokens,
                         total_tokens: u.total_tokens,
+                        cache_read_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
                     }),
                 })
             }
@@ -225,6 +260,7 @@ impl LLMAdapter for OpenAIResponsesAdapter {
         let mut buffer = String::new();
         let mut full_content = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
+        let mut stream_usage: Option<Usage> = None;
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
@@ -269,6 +305,18 @@ impl LLMAdapter for OpenAIResponsesAdapter {
                                 }
                             }
                         }
+                        "response.completed" => {
+                            // 末尾事件携带 usage
+                            if let Some(u) = event.usage {
+                                stream_usage = Some(Usage {
+                                    prompt_tokens: u.input_tokens,
+                                    completion_tokens: u.output_tokens,
+                                    total_tokens: u.total_tokens,
+                                    cache_read_input_tokens: 0,
+                                    cache_creation_input_tokens: 0,
+                                });
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -279,7 +327,7 @@ impl LLMAdapter for OpenAIResponsesAdapter {
             .send(LLMEvent::Done(LLMResponse {
                 content: if full_content.is_empty() { None } else { Some(full_content) },
                 tool_calls,
-                usage: None,
+                usage: stream_usage,
             }))
             .await;
 
@@ -310,7 +358,11 @@ struct ResponseInputItem {
 struct ResponseContent {
     #[serde(rename = "type")]
     kind: String,
-    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    /// 图片 URL（kind="input_image" 时使用，格式 data:<media>;base64,<data>）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -359,4 +411,7 @@ struct ResponsesStreamEvent {
     delta: Option<String>,
     #[serde(default)]
     item: Option<ResponsesOutputItem>,
+    /// response.completed 事件携带的累积 usage
+    #[serde(default)]
+    usage: Option<ResponsesUsage>,
 }

@@ -1,6 +1,8 @@
 // 设计文档 §6.12: utils/format.ts - 格式化工具
 // 平台无关
 
+import type { LLMUsage } from '../rpc/sessionSnapshot.js';
+
 /// 缩写路径：/Users/mutou/projects/myapp → ~/projects/myapp
 // 平台无关：Node 环境用 process.env，浏览器/Tauri 环境无 home 概念则原样返回
 export function shortenPath(path: string): string {
@@ -11,6 +13,19 @@ export function shortenPath(path: string): string {
     return '~' + path.slice(home.length);
   }
   return path;
+}
+
+/// 格式化单轮 LLM usage：用于在 assistant 消息底下展示该轮消耗
+/// 输出形如：in 1.2k · out 340 · cache read 800 · cache write 120
+export function formatUsageDelta(u: LLMUsage | undefined | null): string {
+  if (!u) return '';
+  const fmt = (n: number) => (n > 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
+  const parts: string[] = [];
+  if (u.prompt_tokens > 0) parts.push(`in ${fmt(u.prompt_tokens)}`);
+  if (u.completion_tokens > 0) parts.push(`out ${fmt(u.completion_tokens)}`);
+  if ((u.cache_read_input_tokens ?? 0) > 0) parts.push(`cache read ${fmt(u.cache_read_input_tokens!)}`);
+  if ((u.cache_creation_input_tokens ?? 0) > 0) parts.push(`cache write ${fmt(u.cache_creation_input_tokens!)}`);
+  return parts.join(' · ');
 }
 
 /// 格式化 token 使用量：1234 / 128000 → "1.2k/128k"

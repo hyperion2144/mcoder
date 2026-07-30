@@ -87,14 +87,14 @@ impl RoleRegistry {
         // plan: 规划阶段，只能读和创建 plan
         self.register(Role {
             name: "plan".into(),
-            system_prompt: "You are in PLAN mode. Read code, explore the codebase via graph, and create a structured plan with plan_create. Do NOT modify files. After plan_create, the user will approve/reject.".into(),
+            system_prompt: "You are in PLAN mode. Read code, explore the codebase via graph, and create a structured plan with the plan tool. Do NOT modify files. After creating a plan, the user will approve/reject.".into(),
             model: None,
             allowed_tools: vec![
-                "read".into(), "read_more".into(), "read_full".into(), "read_original".into(),
+                "read".into(),
                 "ls".into(), "grep".into(),
-                "graph_query".into(), "graph_file_symbols".into(), "graph_index".into(),
-                "plan_create".into(), "plan_update".into(),
-                "memory_search".into(), "memory_list".into(),
+                "graph_search".into(), "graph_file_symbols".into(), "graph_index".into(), "graph_relations".into(),
+                "plan".into(),
+                "memory".into(),
             ],
             max_tokens: None,
             max_iters: Some(5),
@@ -122,10 +122,10 @@ impl RoleRegistry {
             system_prompt: "You are in REVIEW mode. Read code and review changes using read/grep/graph tools. Do NOT modify files or run shell commands. Switch to default mode if you need to run read-only shell commands like git log.".into(),
             model: None,
             allowed_tools: vec![
-                "read".into(), "read_more".into(), "read_full".into(), "read_original".into(),
+                "read".into(),
                 "ls".into(), "grep".into(),
-                "graph_query".into(), "graph_file_symbols".into(), "graph_index".into(),
-                "memory_search".into(), "memory_list".into(),
+                "graph_search".into(), "graph_file_symbols".into(), "graph_index".into(), "graph_relations".into(),
+                "memory".into(),
             ],
             max_tokens: None,
             max_iters: Some(10),
@@ -178,12 +178,12 @@ impl RoleRegistry {
             system_prompt: crate::workflow::prompts::PLANNER_PROMPT.into(),
             model: None,
             allowed_tools: vec![
-                "read".into(), "read_more".into(), "read_full".into(), "read_original".into(),
+                "read".into(),
                 "ls".into(), "grep".into(),
-                "graph_query".into(), "graph_file_symbols".into(), "graph_index".into(),
-                "workflow_create".into(), "workflow_query".into(), "workflow_update".into(),
-                "plan_create".into(), "plan_update".into(),
-                "memory_search".into(), "memory_list".into(),
+                "graph_search".into(), "graph_file_symbols".into(), "graph_index".into(), "graph_relations".into(),
+                "workflow".into(),
+                "plan".into(),
+                "memory".into(),
                 "subagent".into(), // 用于 op=done
             ],
             max_tokens: None,
@@ -210,16 +210,30 @@ impl RoleRegistry {
             system_prompt: crate::workflow::prompts::REVIEWER_PROMPT.into(),
             model: None,
             allowed_tools: vec![
-                "read".into(), "read_more".into(), "read_full".into(), "read_original".into(),
+                "read".into(),
                 "ls".into(), "grep".into(),
-                "graph_query".into(), "graph_file_symbols".into(), "graph_index".into(),
-                "workflow_create".into(), "workflow_query".into(), "workflow_update".into(),
-                "memory_search".into(), "memory_list".into(),
+                "graph_search".into(), "graph_file_symbols".into(), "graph_index".into(), "graph_relations".into(),
+                "workflow".into(),
+                "memory".into(),
                 "subagent".into(),
             ],
             max_tokens: None,
             max_iters: Some(20),
             timeout: Some(300),
+            loop_condition: None,
+        });
+
+        // vision: 视觉模型角色，用于图片理解
+        // 必须搭配 input 含 "image" 的模型使用
+        // 通过 view_image 工具被其他角色调用，也可直接 /mode vision 切换
+        self.register(Role {
+            name: "vision".into(),
+            system_prompt: "You are a vision assistant. You receive images and describe them according to the user's requirements. Be precise, thorough, and structured in your descriptions. If the user asks about code in the image, transcribe it accurately.".into(),
+            model: None,
+            allowed_tools: vec![], // 全部（vision role 主要被 view_image 工具内部调用，不直接用工具）
+            max_tokens: None,
+            max_iters: Some(1),
+            timeout: Some(120),
             loop_condition: None,
         });
     }
@@ -267,5 +281,5 @@ impl RoleRegistry {
 /// 内置 role 名列表（设计文档 §3.4 + §8.5）
 /// 包含 7 个核心 role + 3 个 workflow 子代理 role
 pub fn builtin_role_names() -> Vec<&'static str> {
-    vec!["default", "plan", "execute", "review", "goal", "loop", "subagent", "planner", "executor", "reviewer"]
+    vec!["default", "plan", "execute", "review", "goal", "loop", "subagent", "planner", "executor", "reviewer", "vision"]
 }

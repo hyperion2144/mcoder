@@ -7,7 +7,9 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::path::PathBuf;
 
-/// bash 工具：执行单条 shell 命令
+/// bash 工具：执行 shell 命令
+/// - 单条命令：传 cmd 字符串
+/// - 批量命令：传 cmds 数组（合并自原 BashBatchTool）
 /// - 智能判断 async（watch/&/tail -f/serve 等 + timeout>60s 且 build/test/install）
 /// - 执行前后做项目快照，diff 变动文件记入 FileJournal
 /// - 大输出存 sandbox，返回 summary + handle
@@ -24,22 +26,42 @@ impl Tool for BashTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "bash".into(),
-            description: "Execute a shell command. Smart async detection (watch/&/tail -f/serve/start or long build/test/install). File changes auto-recorded to journal (undoable). Large output stored to sandbox with handle.".into(),
+            description: "Execute shell command(s). Single: pass 'cmd' string. Batch: pass 'cmds' array of {cmd, cwd?, timeout?} with stop_on_error (default true) and parallel (default false). Smart async detection for long-running commands. File changes auto-recorded to journal (undoable). Large output stored to sandbox with handle.".into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "cmd": { "type": "string", "description": "Command to run" },
+                    "cmd": { "type": "string", "description": "Single command to run" },
+                    "cmds": {
+                        "type": "array",
+                        "description": "Batch mode: array of commands. Each item: {cmd, cwd?, timeout?}",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "cmd": { "type": "string" },
+                                "cwd": { "type": "string" },
+                                "timeout": { "type": "integer" }
+                            },
+                            "required": ["cmd"]
+                        }
+                    },
                     "cwd": { "type": "string", "description": "Working directory, default project root" },
                     "timeout": { "type": "integer", "description": "Timeout in seconds, default 120" },
                     "env": { "type": "object", "description": "Additional env vars" },
-                    "async": { "type": "boolean", "description": "Override smart async detection" }
-                },
-                "required": ["cmd"]
+                    "async": { "type": "boolean", "description": "Override smart async detection" },
+                    "stop_on_error": { "type": "boolean", "default": true, "description": "Batch mode: stop on first error" },
+                    "parallel": { "type": "boolean", "default": false, "description": "Batch mode: run commands in parallel" }
+                }
             }),
         }
     }
 
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        // 批量模式：cmds 数组存在时走 batch 逻辑
+        if args.get("cmds").and_then(|v| v.as_array()).is_some() {
+            return Self::run_batch(args, ctx).await;
+        }
+
+        // 单条命令模式
         let cmd: String = serde_json::from_value(args["cmd"].clone())
             .context("cmd required")?;
         let cwd = args["cwd"].as_str().map(|s| s.to_string());
@@ -124,52 +146,18 @@ impl BashTool {
             status_msg: format!("bash running in background: {}", &cmd_for_msg[..cmd_for_msg.len().min(60)]),
         })
     }
-}
 
-/// bash_batch 工具：批量执行多条命令
-/// - stop_on_error 默认 true
-/// - parallel 默认 false
-/// - 整个批次共享一个 journal batch
-pub struct BashBatchTool;
-
-#[async_trait]
-impl Tool for BashBatchTool {
-    fn name(&self) -> &str { "bash_batch" }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "bash_batch".into(),
-            description: "Execute multiple shell commands as a batch. Saves tokens vs multiple bash calls. stop_on_error=true by default. parallel=false by default.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "cmds": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "cmd": { "type": "string" },
-                                "cwd": { "type": "string" },
-                                "timeout": { "type": "integer" }
-                            },
-                            "required": ["cmd"]
-                        }
-                    },
-                    "stop_on_error": { "type": "boolean", "default": true },
-                    "parallel": { "type": "boolean", "default": false }
-                },
-                "required": ["cmds"]
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+    /// 批量执行多条命令（合并自原 BashBatchTool）
+    /// - stop_on_error 默认 true
+    /// - parallel 默认 false
+    /// - 整个批次共享一个 journal batch
+    async fn run_batch(args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let cmds: Vec<Value> = serde_json::from_value(args["cmds"].clone())
             .context("cmds array required")?;
         let stop_on_error = args["stop_on_error"].as_bool().unwrap_or(true);
         let parallel = args["parallel"].as_bool().unwrap_or(false);
 
-        let batch_id = ctx.journal.begin_batch(&ctx.project_dir, "bash_batch")?;
+        let batch_id = ctx.journal.begin_batch(&ctx.project_dir, "bash")?;
 
         let mut results: Vec<serde_json::Value> = Vec::new();
         let mut had_error = false;
@@ -268,7 +256,7 @@ impl Tool for BashBatchTool {
             }
         }
 
-        let changed = ctx.journal.end_batch(&batch_id, "bash_batch")?;
+        let changed = ctx.journal.end_batch(&batch_id, "bash")?;
 
         Ok(ToolOutput::Sync { result: serde_json::json!({
             "results": results,

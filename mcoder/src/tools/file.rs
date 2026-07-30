@@ -8,9 +8,11 @@ use crate::tools::ToolContext;
 use crate::types::{ToolOutput, ToolSchema};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use calamine::{DataType as _, Reader as _};
 use regex::Regex;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -21,13 +23,9 @@ fn hash_line(line: &str) -> String {
     result.iter().take(8).map(|b| format!("{:02x}", b)).collect()
 }
 
-// ==================== read 工具族 ====================
+// ==================== read 工具（通用内容读取：文本/URL/目录/压缩包/Excel/Word/PPT/PDF/HTML/图片）===================
 
-/// read 工具：读文件，返回带 hash 前缀的行
-/// 设计文档 §4.4: 截断规则
-/// - 行数 ≤ 500：全返回
-/// - 行数 > 500：返回首 100 + 末 100 + 中间摘要 + handle
-/// - 单行 > 500 字符：折行显示，全量存 sandbox
+/// read 工具：通用读取入口，自动检测内容类型并分发；通过 action 选择 sandbox 模式
 pub struct ReadTool;
 
 const READ_FULL_THRESHOLD: usize = 500;
@@ -42,21 +40,877 @@ impl Tool for ReadTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "read".into(),
-            description: "Read file with hash-prefixed lines (for use with edit tool). Auto-truncates >500 lines: head 100 + tail 100 + handle. Long lines (>500 chars) wrap and go to sandbox. Set with_hashes=false for raw.".into(),
+            description: "Universal read tool. Auto-detects content type (text/url/directory/archive/excel/word/ppt/pdf/html/image/gzipped). Use action='more'/'full'/'original' with a handle for paged access to large content. Use 'format' to force a specific format.".into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "file": { "type": "string" },
-                    "start": { "type": "integer", "description": "Start line (1-indexed), default 1" },
-                    "end": { "type": "integer", "description": "End line (inclusive)" },
-                    "with_hashes": { "type": "boolean", "default": true }
-                },
-                "required": ["file"]
+                    "path": { "type": "string", "description": "File path, directory path, or URL (http/https)" },
+                    "action": {
+                        "type": "string",
+                        "enum": ["default", "more", "full", "original"],
+                        "description": "Sandbox mode. When omitted, auto-detect content type. 'more'/'full'/'original' require a handle."
+                    },
+                    "handle": { "type": "string", "description": "[more/full/original] Sandbox handle" },
+                    "offset": { "type": "integer", "description": "[more] Line offset (0-indexed), default 0" },
+                    "limit": { "type": "integer", "description": "[more] Max lines. Also limits Excel rows per sheet (default 100)" },
+                    "start": { "type": "integer", "description": "[default] Start line (1-indexed), default 1" },
+                    "end": { "type": "integer", "description": "[default] End line (inclusive)" },
+                    "with_hashes": { "type": "boolean", "default": true, "description": "Include line hashes" },
+                    "entry": { "type": "string", "description": "Path inside archive (for zip/tar)" },
+                    "depth": { "type": "integer", "default": 2, "description": "Directory recursion depth" },
+                    "format": {
+                        "type": "string",
+                        "enum": ["text", "url", "excel", "word", "ppt", "pdf", "image", "html", "archive", "directory"],
+                        "description": "Force a specific format if auto-detection fails"
+                    },
+                    "prompt": { "type": "string", "description": "[image] Custom question to ask the vision model; defaults to 'Describe this image concisely.'" }
+                }
             }),
         }
     }
 
     async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let action = args.get("action").and_then(|v| v.as_str());
+        match action {
+            Some("more") => Self::read_more(args, ctx),
+            Some("full") => Self::read_full(args, ctx),
+            Some("original") => Self::read_original(args, ctx),
+            Some("default") | None => Self::read_auto(args, ctx).await,
+            Some(other) => anyhow::bail!("unknown action '{}': expected default|more|full|original", other),
+        }
+    }
+}
+
+impl ReadTool {
+    /// action omitted or "default": 自动检测内容类型并读取
+    async fn read_auto(args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let path_str: String = serde_json::from_value(args["path"].clone())
+            .or_else(|_| serde_json::from_value(args["file"].clone()))
+            .context("path required")?;
+        let start = args["start"].as_u64().or_else(|| args["offset"].as_u64()).unwrap_or(1) as usize;
+        let end = args["end"].as_u64().map(|n| n as usize);
+        let with_hashes = args["with_hashes"].as_bool().unwrap_or(true);
+        let limit = args["limit"].as_u64().map(|n| n as usize);
+        let depth = args["depth"].as_u64().unwrap_or(2) as usize;
+        let entry: Option<String> = args["entry"].as_str().map(|s| s.to_string());
+        let format: Option<String> = args["format"].as_str().map(|s| s.to_string());
+        let prompt: Option<String> = args["prompt"].as_str().map(|s| s.to_string());
+
+        // 1. URL
+        if path_str.starts_with("http://") || path_str.starts_with("https://") {
+            return Self::read_url(&path_str, start, end, with_hashes, ctx).await;
+        }
+
+        let path = PathBuf::from(&path_str);
+
+        // 2. Directory
+        if path.is_dir() {
+            return Self::read_directory(&path, depth, ctx);
+        }
+        if !path.exists() {
+            anyhow::bail!("path does not exist: {}", path.display());
+        }
+
+        // 3. 强制 format 或自动检测
+        let fmt = format.unwrap_or_else(|| detect_format(&path).to_string());
+
+        match fmt.as_str() {
+            "text" => Self::read_text_file(&path, &path_str, start, end, with_hashes, ctx),
+            "url" => Self::read_url(&path_str, start, end, with_hashes, ctx).await,
+            "excel" => Self::read_excel(&path, &path_str, limit, start, end, with_hashes, ctx),
+            "word" => Self::read_word(&path, &path_str, start, end, with_hashes, ctx),
+            "ppt" => Self::read_ppt(&path, &path_str, start, end, with_hashes, ctx),
+            "pdf" => Self::read_pdf(&path, &path_str, start, end, with_hashes, ctx),
+            "image" => Self::read_image(&path, prompt.as_deref(), ctx).await,
+            "html" => Self::read_html_file(&path, &path_str, start, end, with_hashes, ctx),
+            "archive" => Self::read_archive(&path, &path_str, entry.as_deref(), start, end, with_hashes, ctx),
+            "directory" => Self::read_directory(&path, depth, ctx),
+            "gzipped" => Self::read_gzipped(&path, &path_str, start, end, with_hashes, ctx),
+            other => anyhow::bail!("unknown format: {}", other),
+        }
+    }
+
+    /// 通用分页：对已读取的文本内容应用 hash 前缀 + 截断逻辑（原 read_default 核心）
+    fn paginate_content(
+        content: &str,
+        path_str: &str,
+        start: usize,
+        end: Option<usize>,
+        with_hashes: bool,
+        project_dir: &PathBuf,
+    ) -> Result<ToolOutput> {
+        let all_lines: Vec<&str> = content.lines().collect();
+        let total = all_lines.len();
+
+        let s = start.max(1);
+        let e = end.unwrap_or(total).min(total);
+        if s > total {
+            return Ok(ToolOutput::Sync { result: serde_json::json!({
+                "file": path_str,
+                "content": "",
+                "note": "start beyond file end"
+            }) });
+        }
+        let range: &[&str] = &all_lines[s-1..e];
+
+        // 检查长行：任一行 > 500 字符 -> 全量存 sandbox，返回折行摘要
+        let has_long_line = range.iter().any(|l| l.chars().count() > READ_LONG_LINE_THRESHOLD);
+        if has_long_line {
+            let full: String = range.iter().enumerate().map(|(i, l)| {
+                let ln = s + i;
+                if with_hashes {
+                    format!("{}|{:>4}| {}", hash_line(l), ln, l)
+                } else {
+                    format!("{:>4}| {}", ln, l)
+                }
+            }).collect::<Vec<_>>().join("\n");
+            let handle = SandboxStore::store(project_dir, &full)?;
+            const WRAP_WIDTH: usize = 100;
+            const MAX_SUMMARY_LINES: usize = 200;
+            let mut wrapped: Vec<String> = Vec::new();
+            let mut total_wrapped_lines = 0;
+            for l in range.iter() {
+                if total_wrapped_lines >= MAX_SUMMARY_LINES {
+                    wrapped.push(format!("... (more lines omitted, see handle)"));
+                    break;
+                }
+                let h = &hash_line(l)[..8];
+                let chars: Vec<char> = l.chars().collect();
+                if chars.len() <= WRAP_WIDTH {
+                    wrapped.push(format!("{}| {}", h, l));
+                    total_wrapped_lines += 1;
+                } else {
+                    for (idx, chunk) in chars.chunks(WRAP_WIDTH).enumerate() {
+                        if total_wrapped_lines >= MAX_SUMMARY_LINES {
+                            wrapped.push(format!("... (more lines omitted, see handle)"));
+                            break;
+                        }
+                        let chunk_str: String = chunk.iter().collect();
+                        if idx == 0 {
+                            wrapped.push(format!("{}| {}", h, chunk_str));
+                        } else {
+                            wrapped.push(format!("    > {}", chunk_str));
+                        }
+                        total_wrapped_lines += 1;
+                    }
+                }
+            }
+            return Ok(ToolOutput::Sync { result: serde_json::json!({
+                "file": path_str,
+                "start_line": s,
+                "end_line": e,
+                "total_lines": total,
+                "content": wrapped.join("\n"),
+                "handle": handle,
+                "truncated": true,
+                "reason": "long_line_wrapped",
+                "hint": "Use read action=more/full with handle for full content."
+            }) });
+        }
+
+        // 截断规则：>500 行只返回首尾
+        if range.len() > READ_FULL_THRESHOLD {
+            let head: Vec<String> = range.iter().take(READ_HEAD_LINES).map(format_line_with_hash).collect();
+            let tail_start = range.len().saturating_sub(READ_TAIL_LINES);
+            let tail: Vec<String> = range[tail_start..].iter().map(format_line_with_hash).collect();
+            let middle_count = range.len() - READ_HEAD_LINES - READ_TAIL_LINES;
+
+            let full: String = range.iter().enumerate().map(|(i, l)| {
+                let ln = s + i;
+                if with_hashes {
+                    format!("{}|{:>4}| {}", hash_line(l), ln, l)
+                } else {
+                    format!("{:>4}| {}", ln, l)
+                }
+            }).collect::<Vec<_>>().join("\n");
+            let handle = SandboxStore::store(project_dir, &full)?;
+
+            let mut out = format!("{}\n... ({} lines omitted, handle={})\n{}",
+                head.join("\n"), middle_count, handle, tail.join("\n"));
+            if !with_hashes { out = strip_hashes(&out); }
+
+            return Ok(ToolOutput::Sync { result: serde_json::json!({
+                "file": path_str,
+                "start_line": s,
+                "end_line": e,
+                "total_lines": total,
+                "content": out,
+                "handle": handle,
+                "truncated": true,
+                "hint": "Use read action=more or action=full with handle for omitted lines."
+            }) });
+        }
+
+        // 小范围：全返回
+        let out: String = range.iter().enumerate().map(|(i, l)| {
+            let ln = s + i;
+            if with_hashes {
+                format!("{}|{:>4}| {}", hash_line(l), ln, l)
+            } else {
+                format!("{:>4}| {}", ln, l)
+            }
+        }).collect::<Vec<_>>().join("\n");
+
+        Ok(ToolOutput::Sync { result: serde_json::json!({
+            "file": path_str,
+            "start_line": s,
+            "end_line": e,
+            "total_lines": total,
+            "content": out,
+            "truncated": false
+        }) })
+    }
+
+    /// 读取纯文本文件（含二进制检查）
+    fn read_text_file(
+        path: &Path,
+        path_str: &str,
+        start: usize,
+        end: Option<usize>,
+        with_hashes: bool,
+        ctx: &ToolContext,
+    ) -> Result<ToolOutput> {
+        // 二进制检查：读前 1KB，含 NULL 字节则视为二进制
+        if let Ok(mut f) = std::fs::File::open(path) {
+            let mut buf = [0u8; 1024];
+            let n = f.read(&mut buf).unwrap_or(0);
+            if buf[..n].contains(&0u8) {
+                anyhow::bail!("binary file, cannot read: {}", path.display());
+            }
+        }
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        Self::paginate_content(&content, path_str, start, end, with_hashes, &ctx.project_dir)
+    }
+
+    /// 读取 URL：抓取 HTML 并转为文本
+    async fn read_url(
+        url: &str,
+        start: usize,
+        end: Option<usize>,
+        with_hashes: bool,
+        ctx: &ToolContext,
+    ) -> Result<ToolOutput> {
+        let resp = reqwest::Client::new()
+            .get(url)
+            .send()
+            .await
+            .with_context(|| format!("fetching {}", url))?;
+        let html = resp.text().await
+            .with_context(|| format!("reading body from {}", url))?;
+        // 提取 <title>
+        let title = Regex::new(r"(?is)<title[^>]*>(.*?)</title>")
+            .ok()
+            .and_then(|re| re.captures(&html))
+            .and_then(|c| c.get(1).map(|m| m.as_str().trim().to_string()))
+            .unwrap_or_default();
+        // HTML -> 文本（html2text 会忽略 script/style 内容）
+        let content = html2text::from_read(html.as_bytes(), 120)
+            .map_err(|e| anyhow::anyhow!("html2text: {}", e))?;
+        let paginated = Self::paginate_content(&content, url, start, end, with_hashes, &ctx.project_dir)?;
+        if let ToolOutput::Sync { result } = paginated {
+            let mut obj = result.as_object().cloned().unwrap_or_default();
+            obj.insert("source".into(), serde_json::json!(url));
+            obj.insert("title".into(), serde_json::json!(title));
+            return Ok(ToolOutput::Sync { result: serde_json::Value::Object(obj) });
+        }
+        Ok(ToolOutput::Sync { result: serde_json::json!({
+            "source": url,
+            "title": title,
+            "content": content
+        }) })
+    }
+
+    /// 读取目录：递归列出树形结构
+    fn read_directory(path: &Path, depth: usize, _ctx: &ToolContext) -> Result<ToolOutput> {
+        let mut tree = String::new();
+        let count = Self::build_dir_tree(path, &mut tree, "", 0, depth)?;
+        Ok(ToolOutput::Sync { result: serde_json::json!({
+            "path": path.display().to_string(),
+            "type": "directory",
+            "content": tree,
+            "file_count": count
+        }) })
+    }
+
+    /// 递归构建目录树
+    fn build_dir_tree(
+        dir: &Path,
+        out: &mut String,
+        prefix: &str,
+        level: usize,
+        max_depth: usize,
+    ) -> Result<usize> {
+        let mut entries: Vec<(String, std::fs::Metadata)> = Vec::new();
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') { continue; }
+            let meta = entry.metadata()?;
+            entries.push((name, meta));
+        }
+        // 排序：目录在前，文件在后，字母序
+        entries.sort_by(|a, b| {
+            let ad = a.1.is_dir();
+            let bd = b.1.is_dir();
+            match (ad, bd) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => a.0.cmp(&b.0),
+            }
+        });
+
+        let mut count = 0usize;
+        let total = entries.len();
+        for (i, (name, meta)) in entries.iter().enumerate() {
+            let is_dir = meta.is_dir();
+            let last = i == total - 1;
+            let connector = if last { "`-- " } else { "|-- " };
+            let size_str = if is_dir {
+                String::new()
+            } else {
+                format!(" ({})", format_size(meta.len()))
+            };
+            out.push_str(&format!("{}{}{}{}\n", prefix, connector, name, size_str));
+            count += 1;
+            if is_dir && level + 1 < max_depth {
+                let new_prefix = if last {
+                    format!("{}    ", prefix)
+                } else {
+                    format!("{}|   ", prefix)
+                };
+                count += Self::build_dir_tree(
+                    &dir.join(name),
+                    out,
+                    &new_prefix,
+                    level + 1,
+                    max_depth,
+                )?;
+            }
+        }
+        Ok(count)
+    }
+
+    /// 读取压缩包：列出内容或提取指定 entry
+    fn read_archive(
+        path: &Path,
+        path_str: &str,
+        entry: Option<&str>,
+        start: usize,
+        end: Option<usize>,
+        with_hashes: bool,
+        ctx: &ToolContext,
+    ) -> Result<ToolOutput> {
+        let lower = path_str.to_lowercase();
+        let is_tar = lower.ends_with(".tar") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz");
+
+        if let Some(entry_path) = entry {
+            let content = if is_tar {
+                Self::extract_tar_entry(path, entry_path, path_str)?
+            } else {
+                Self::extract_zip_entry(path, entry_path)?
+            };
+            if content.as_bytes().contains(&0u8) {
+                anyhow::bail!("binary entry, cannot read: {}", entry_path);
+            }
+            Self::paginate_content(&content, entry_path, start, end, with_hashes, &ctx.project_dir)
+        } else {
+            let listing = if is_tar {
+                Self::list_tar(path, path_str)?
+            } else {
+                Self::list_zip(path)?
+            };
+            Ok(ToolOutput::Sync { result: serde_json::json!({
+                "path": path_str,
+                "type": "archive",
+                "content": listing
+            }) })
+        }
+    }
+
+    fn list_zip(path: &Path) -> Result<String> {
+        let file = std::fs::File::open(path)?;
+        let mut archive = zip::ZipArchive::new(file)?;
+        let mut out = String::new();
+        for i in 0..archive.len() {
+            let entry = archive.by_index(i)?;
+            let name = entry.name().to_string();
+            let size = entry.size();
+            let marker = if name.ends_with('/') { "/" } else { "" };
+            out.push_str(&format!("{}{} ({})\n", name, marker, format_size(size)));
+        }
+        Ok(out)
+    }
+
+    fn list_tar(path: &Path, path_str: &str) -> Result<String> {
+        let file = std::fs::File::open(path)?;
+        let lower = path_str.to_lowercase();
+        let reader: Box<dyn Read> = if lower.ends_with(".gz") || lower.ends_with(".tgz") {
+            Box::new(flate2::read::GzDecoder::new(file))
+        } else {
+            Box::new(file)
+        };
+        let mut tar = tar::Archive::new(reader);
+        let mut out = String::new();
+        for entry in tar.entries()? {
+            let entry = entry?;
+            let name = entry.path()?.display().to_string();
+            let size = entry.size();
+            let is_dir = entry.header().entry_type().is_dir();
+            let marker = if is_dir { "/" } else { "" };
+            out.push_str(&format!("{}{} ({})\n", name, marker, format_size(size)));
+        }
+        Ok(out)
+    }
+
+    fn extract_zip_entry(path: &Path, entry: &str) -> Result<String> {
+        let file = std::fs::File::open(path)?;
+        let mut archive = zip::ZipArchive::new(file)?;
+        let mut e = archive.by_name(entry)
+            .with_context(|| format!("entry not found in archive: {}", entry))?;
+        let mut buf = String::new();
+        e.read_to_string(&mut buf)?;
+        Ok(buf)
+    }
+
+    fn extract_tar_entry(path: &Path, entry: &str, path_str: &str) -> Result<String> {
+        let file = std::fs::File::open(path)?;
+        let lower = path_str.to_lowercase();
+        let reader: Box<dyn Read> = if lower.ends_with(".gz") || lower.ends_with(".tgz") {
+            Box::new(flate2::read::GzDecoder::new(file))
+        } else {
+            Box::new(file)
+        };
+        let mut tar = tar::Archive::new(reader);
+        for e in tar.entries()? {
+            let mut e = e?;
+            if e.path()?.display().to_string() == entry {
+                let mut buf = String::new();
+                e.read_to_string(&mut buf)?;
+                return Ok(buf);
+            }
+        }
+        anyhow::bail!("entry not found in archive: {}", entry)
+    }
+
+    /// 读取 Excel：每个 sheet 输出前 N 行 Markdown 表格
+    fn read_excel(
+        path: &Path,
+        path_str: &str,
+        limit: Option<usize>,
+        start: usize,
+        end: Option<usize>,
+        with_hashes: bool,
+        ctx: &ToolContext,
+    ) -> Result<ToolOutput> {
+        let max_rows = limit.unwrap_or(100);
+        let mut workbook = calamine::open_workbook_auto(path)
+            .with_context(|| format!("opening excel {}", path.display()))?;
+        let sheets = workbook.sheet_names().to_vec();
+        let mut out = String::new();
+        for sheet in &sheets {
+            out.push_str(&format!("## {}\n\n", sheet));
+            if let Ok(range) = workbook.worksheet_range(sheet) {
+                let rows: Vec<_> = range.rows().collect();
+                for (ri, row) in rows.iter().enumerate() {
+                    if ri == 0 {
+                        out.push_str("| ");
+                        out.push_str(&row.iter().map(|c| cell_to_str(c)).collect::<Vec<_>>().join(" | "));
+                        out.push_str(" |\n");
+                        out.push_str(&format!("|{}|\n", "|".repeat(row.len().max(1))));
+                    } else {
+                        if ri > max_rows {
+                            out.push_str(&format!("\n... ({} more rows omitted)\n", rows.len() - 1 - max_rows));
+                            break;
+                        }
+                        out.push_str("| ");
+                        out.push_str(&row.iter().map(|c| cell_to_str(c)).collect::<Vec<_>>().join(" | "));
+                        out.push_str(" |\n");
+                    }
+                }
+            }
+            out.push('\n');
+        }
+        Self::paginate_content(&out, path_str, start, end, with_hashes, &ctx.project_dir)
+    }
+
+    /// 读取 Word (.docx)：从 word/document.xml 提取文本
+    fn read_word(
+        path: &Path,
+        path_str: &str,
+        start: usize,
+        end: Option<usize>,
+        with_hashes: bool,
+        ctx: &ToolContext,
+    ) -> Result<ToolOutput> {
+        let file = std::fs::File::open(path)?;
+        let mut archive = zip::ZipArchive::new(file)?;
+        let mut xml = String::new();
+        archive.by_name("word/document.xml")?
+            .read_to_string(&mut xml)
+            .with_context(|| "reading word/document.xml")?;
+        let text = extract_docx_text(&xml);
+        Self::paginate_content(&text, path_str, start, end, with_hashes, &ctx.project_dir)
+    }
+
+    /// 读取 PPT (.pptx)：提取每张幻灯片的文本
+    fn read_ppt(
+        path: &Path,
+        path_str: &str,
+        start: usize,
+        end: Option<usize>,
+        with_hashes: bool,
+        ctx: &ToolContext,
+    ) -> Result<ToolOutput> {
+        let file = std::fs::File::open(path)?;
+        let mut archive = zip::ZipArchive::new(file)?;
+        let mut slides: Vec<(u32, String)> = Vec::new();
+        for i in 0..archive.len() {
+            let entry = archive.by_index(i)?;
+            let name = entry.name().to_string();
+            if name.starts_with("ppt/slides/slide") && name.ends_with(".xml") {
+                let num: u32 = name.trim_start_matches("ppt/slides/slide")
+                    .trim_end_matches(".xml")
+                    .parse()
+                    .unwrap_or(0);
+                slides.push((num, name));
+            }
+        }
+        slides.sort_by_key(|(n, _)| *n);
+        let mut out = String::new();
+        for (i, (_, name)) in slides.iter().enumerate() {
+            let mut xml = String::new();
+            archive.by_name(name)?.read_to_string(&mut xml)?;
+            let text = extract_pptx_text(&xml);
+            out.push_str(&format!("## Slide {}\n{}\n\n", i + 1, text));
+        }
+        Self::paginate_content(&out, path_str, start, end, with_hashes, &ctx.project_dir)
+    }
+
+    /// 读取 PDF
+    fn read_pdf(
+        path: &Path,
+        path_str: &str,
+        start: usize,
+        end: Option<usize>,
+        with_hashes: bool,
+        ctx: &ToolContext,
+    ) -> Result<ToolOutput> {
+        let text = pdf_extract::extract_text(path)
+            .map_err(|e| anyhow::anyhow!("PDF extract failed for {}: {}", path.display(), e))?;
+        Self::paginate_content(&text, path_str, start, end, with_hashes, &ctx.project_dir)
+    }
+
+    /// 读取 HTML 文件并转为文本
+    fn read_html_file(
+        path: &Path,
+        path_str: &str,
+        start: usize,
+        end: Option<usize>,
+        with_hashes: bool,
+        ctx: &ToolContext,
+    ) -> Result<ToolOutput> {
+        let html = std::fs::read_to_string(path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        let content = html2text::from_read(html.as_bytes(), 120)
+            .map_err(|e| anyhow::anyhow!("html2text: {}", e))?;
+        Self::paginate_content(&content, path_str, start, end, with_hashes, &ctx.project_dir)
+    }
+
+    /// 读取图片：base64 编码 + 视觉模型描述（若有）
+    /// 返回结构：
+    ///   {type: "image", path, media_type, width, height, size_bytes, description}
+    /// description 由 ctx.app_config 中找到的视觉模型异步生成（超时由 app_config.image_description_timeout_secs 决定）；失败/无视觉模型时为 null
+    /// `prompt` 为可选自定义问题；为 None 时使用默认提示
+    async fn read_image(path: &Path, prompt: Option<&str>, ctx: &ToolContext) -> Result<ToolOutput> {
+        let size_bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+
+        // 读取字节并解析尺寸
+        let bytes = std::fs::read(path)
+            .with_context(|| format!("reading image bytes {}", path.display()))?;
+        // bytes 用于 image::io::Reader 解析尺寸，之后不需要保留
+        drop(bytes);
+
+        let (width, height) = image::io::Reader::open(path)
+            .ok()
+            .and_then(|r| r.into_dimensions().ok())
+            .unwrap_or((0, 0));
+
+        // 推断 media_type
+        let media_type = infer_image_media_type(&path.display().to_string());
+
+        // 准备 JSON 对象（description 后续填充）
+        // 注：不构造 data_url，因为 ContentBlock::Image 只有 path + media_type，
+        // 各 LLM adapter 会自己读文件再 base64 编码；data_url 是冗余的 MB 级内存浪费。
+        let mut result = serde_json::json!({
+            "type": "image",
+            "path": path.display().to_string(),
+            "media_type": media_type,
+            "width": width,
+            "height": height,
+            "size_bytes": size_bytes,
+            "description": serde_json::Value::Null,
+        });
+
+        // 仅在主模型不支持图片输入时才调用视觉模型生成描述。
+        // 主模型支持图片时，ContentBlock::Image 直接发给 LLM 看图，
+        // description 冗余且会浪费 token + 延迟；直接返回 null。
+        if !ctx.current_model.supports_image() {
+            if let Some(description) = Self::try_describe_image(path, media_type, prompt, ctx).await {
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("description".to_string(), serde_json::Value::String(description));
+                }
+            }
+        }
+
+        Ok(ToolOutput::Sync { result })
+    }
+
+    /// 用 ctx.app_config 中找到的视觉模型描述图片
+    /// 超时由 `app_config.image_description_timeout_secs` 控制（默认 8 秒）
+    /// `prompt` 为自定义问题；为 None 时使用默认提示
+    /// 失败/超时/无视觉模型：返回 None
+    async fn try_describe_image(
+        path: &Path,
+        media_type: &str,
+        prompt: Option<&str>,
+        ctx: &ToolContext,
+    ) -> Option<String> {
+        use crate::llm::create_adapter;
+        use crate::tools::image::find_vision_model;
+        use crate::types::{ContentBlock, Message as McoderMessage, Role};
+
+        // m13: 复用 image 工具的 find_vision_model（vision role 优先，否则任意 supports_image）
+        let vision_model = find_vision_model(&ctx.app_config)?;
+        let path_str = path.display().to_string();
+
+        let llm = match create_adapter(&vision_model) {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!("failed to create vision adapter: {}", e);
+                return None;
+            }
+        };
+
+        // m10: 系统提示设角色，用户消息直接发图片（无重复文本）
+        let system_msg = McoderMessage::system(
+            "You are a vision assistant. Describe images concisely."
+        );
+        // m11: 调用方传入的 prompt 优先；否则用默认
+        let user_text = prompt.unwrap_or("Describe this image concisely.");
+        let user_msg = McoderMessage::new(Role::User, vec![
+            ContentBlock::Text {
+                text: user_text.to_string(),
+            },
+            ContentBlock::Image {
+                path: path_str.clone(),
+                media_type: media_type.to_string(),
+            },
+        ]);
+        let messages = vec![system_msg, user_msg];
+
+        // m9: 超时从 app_config 读；默认 8 秒
+        let timeout_secs = ctx.app_config.image_description_timeout_secs;
+        let fut = async move {
+            llm.chat(&messages, &[], &vision_model).await
+        };
+        let resp = match tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            fut,
+        ).await {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => {
+                tracing::warn!("vision model call failed for {}: {}", path_str, e);
+                return None;
+            }
+            Err(_) => {
+                tracing::warn!("vision model call timed out for {}", path_str);
+                return None;
+            }
+        };
+
+        let description = resp.content.unwrap_or_default();
+        if description.trim().is_empty() {
+            None
+        } else {
+            Some(description)
+        }
+    }
+
+    /// 读取 gzip 压缩文本
+    fn read_gzipped(
+        path: &Path,
+        path_str: &str,
+        start: usize,
+        end: Option<usize>,
+        with_hashes: bool,
+        ctx: &ToolContext,
+    ) -> Result<ToolOutput> {
+        let file = std::fs::File::open(path)?;
+        let mut decoder = flate2::read::GzDecoder::new(file);
+        let mut content = String::new();
+        decoder.read_to_string(&mut content)
+            .with_context(|| format!("decompressing {}", path.display()))?;
+        Self::paginate_content(&content, path_str, start, end, with_hashes, &ctx.project_dir)
+    }
+}
+
+/// 根据扩展名检测内容格式
+fn detect_format(path: &Path) -> &'static str {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+    let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
+    if name.ends_with(".tar.gz") || ext == "tgz" || ext == "tar" {
+        "archive"
+    } else if ext == "gz" {
+        "gzipped"
+    } else if ext == "zip" {
+        "archive"
+    } else if ext == "xlsx" || ext == "xls" {
+        "excel"
+    } else if ext == "docx" {
+        "word"
+    } else if ext == "pptx" {
+        "ppt"
+    } else if ext == "pdf" {
+        "pdf"
+    } else if ext == "html" || ext == "htm" {
+        "html"
+    } else if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp") {
+        "image"
+    } else {
+        "text"
+    }
+}
+
+/// 格式化文件大小
+fn format_size(bytes: u64) -> String {
+    if bytes < 1024 { format!("{}B", bytes) }
+    else if bytes < 1024 * 1024 { format!("{:.1}KB", bytes as f64 / 1024.0) }
+    else if bytes < 1024 * 1024 * 1024 { format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0)) }
+    else { format!("{:.1}GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0)) }
+}
+
+/// 根据文件路径推断图片的 MIME 类型
+fn infer_image_media_type(path_str: &str) -> &'static str {
+    let lower = path_str.to_lowercase();
+    if lower.ends_with(".png") {
+        "image/png"
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if lower.ends_with(".gif") {
+        "image/gif"
+    } else if lower.ends_with(".webp") {
+        "image/webp"
+    } else if lower.ends_with(".bmp") {
+        "image/bmp"
+    } else {
+        "image/png"
+    }
+}
+
+/// Excel 单元格转字符串（用访问器避免依赖具体枚举变体）
+fn cell_to_str(cell: &calamine::Data) -> String {
+    if cell.is_empty() { return String::new(); }
+    if let Some(s) = cell.as_string() { return s.to_string(); }
+    if let Some(f) = cell.as_f64() {
+        if f.fract() == 0.0 { return format!("{}", f as i64); }
+        return f.to_string();
+    }
+    format!("{:?}", cell)
+}
+
+/// 从 docx 的 word/document.xml 提取纯文本（<w:t> 文本，<w:p> 段落换行）
+fn extract_docx_text(xml: &str) -> String {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut out = String::new();
+    let mut in_t = false;
+    let mut paragraph_text = String::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                match e.name().as_ref() {
+                    b"w:p" => { paragraph_text.clear(); }
+                    b"w:t" => { in_t = true; }
+                    _ => {}
+                }
+            }
+            Ok(Event::End(e)) => {
+                match e.name().as_ref() {
+                    b"w:p" => {
+                        if !paragraph_text.is_empty() {
+                            out.push_str(&paragraph_text);
+                            out.push('\n');
+                            paragraph_text.clear();
+                        }
+                    }
+                    b"w:t" => { in_t = false; }
+                    _ => {}
+                }
+            }
+            Ok(Event::Text(e)) => {
+                if in_t {
+                    if let Ok(t) = e.unescape() {
+                        paragraph_text.push_str(&t);
+                    }
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                if e.name().as_ref() == b"w:p" {
+                    out.push('\n');
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    out
+}
+
+/// 从 pptx 的 slideN.xml 提取文本（<a:t> 元素，每个元素后换行）
+fn extract_pptx_text(xml: &str) -> String {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut out = String::new();
+    let mut in_t = false;
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                if e.name().as_ref() == b"a:t" { in_t = true; }
+            }
+            Ok(Event::End(e)) => {
+                if e.name().as_ref() == b"a:t" {
+                    in_t = false;
+                    out.push('\n');
+                }
+            }
+            Ok(Event::Text(e)) => {
+                if in_t {
+                    if let Ok(t) = e.unescape() {
+                        out.push_str(&t);
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    out
+}
+
+impl ReadTool {
+    /// action="default": 读文件，返回带 hash 前缀的行（原 ReadTool 逻辑）
+    async fn read_default(args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
         let path: PathBuf = serde_json::from_value(args["file"].clone())
             .or_else(|_| serde_json::from_value(args["path"].clone()))
             .context("file required")?;
@@ -135,7 +989,7 @@ impl Tool for ReadTool {
                 "handle": handle,
                 "truncated": true,
                 "reason": "long_line_wrapped",
-                "hint": "Use read_more/read_full with handle for full content."
+                "hint": "Use read action=more/full with handle for full content."
             }) });
         }
 
@@ -168,7 +1022,7 @@ impl Tool for ReadTool {
                 "content": out,
                 "handle": handle,
                 "truncated": true,
-                "hint": "Use read_more or read_full with handle for omitted lines."
+                "hint": "Use read action=more or action=full with handle for omitted lines."
             }) });
         }
 
@@ -191,6 +1045,43 @@ impl Tool for ReadTool {
             "truncated": false
         }) })
     }
+
+    /// action="more": 按 handle + offset/limit 分页读取（原 ReadMoreTool 逻辑）
+    fn read_more(args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let handle: String = serde_json::from_value(args["handle"].clone())?;
+        let offset = args["offset"].as_u64().unwrap_or(0) as usize;
+        let limit = args["limit"].as_u64().unwrap_or(200) as usize;
+        let lines = SandboxStore::read_range(&ctx.project_dir, &handle, offset, limit)?
+            .unwrap_or_default();
+        Ok(ToolOutput::Sync { result: serde_json::json!({
+            "handle": handle,
+            "offset": offset,
+            "returned": lines.len(),
+            "lines": lines
+        }) })
+    }
+
+    /// action="full": 返回 handle 对应的完整内容（原 ReadFullTool 逻辑）
+    fn read_full(args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let handle: String = serde_json::from_value(args["handle"].clone())?;
+        let content = SandboxStore::read(&ctx.project_dir, &handle)?.unwrap_or_default();
+        Ok(ToolOutput::Sync { result: serde_json::json!({
+            "handle": handle,
+            "content": content,
+            "bytes": content.len()
+        }) })
+    }
+
+    /// action="original": 获取摘要对应的原文（原 ReadOriginalTool 逻辑）
+    fn read_original(args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
+        let handle: String = serde_json::from_value(args["handle"].clone())?;
+        let content = SandboxStore::read(&ctx.project_dir, &handle)?.unwrap_or_default();
+        Ok(ToolOutput::Sync { result: serde_json::json!({
+            "handle": handle,
+            "original": content,
+            "bytes": content.len()
+        }) })
+    }
 }
 
 fn format_line_with_hash(l: &&str) -> String {
@@ -205,108 +1096,6 @@ fn strip_hashes(s: &str) -> String {
         }
         l.to_string()
     }).collect::<Vec<_>>().join("\n")
-}
-
-/// read_more 工具：按 handle + offset/limit 分页读取
-pub struct ReadMoreTool;
-
-#[async_trait]
-impl Tool for ReadMoreTool {
-    fn name(&self) -> &str { "read_more" }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "read_more".into(),
-            description: "Read more lines from a truncated read result by handle + offset.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "handle": { "type": "string" },
-                    "offset": { "type": "integer", "description": "Line offset (0-indexed), default 0" },
-                    "limit": { "type": "integer", "description": "Max lines, default 200" }
-                },
-                "required": ["handle"]
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
-        let handle: String = serde_json::from_value(args["handle"].clone())?;
-        let offset = args["offset"].as_u64().unwrap_or(0) as usize;
-        let limit = args["limit"].as_u64().unwrap_or(200) as usize;
-        let lines = SandboxStore::read_range(&ctx.project_dir, &handle, offset, limit)?
-            .unwrap_or_default();
-        Ok(ToolOutput::Sync { result: serde_json::json!({
-            "handle": handle,
-            "offset": offset,
-            "returned": lines.len(),
-            "lines": lines
-        }) })
-    }
-}
-
-/// read_full 工具：返回 handle 对应的完整内容（走 sandbox）
-pub struct ReadFullTool;
-
-#[async_trait]
-impl Tool for ReadFullTool {
-    fn name(&self) -> &str { "read_full" }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "read_full".into(),
-            description: "Read full content by handle from sandbox. Prefer read_more for paging.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "handle": { "type": "string" }
-                },
-                "required": ["handle"]
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
-        let handle: String = serde_json::from_value(args["handle"].clone())?;
-        let content = SandboxStore::read(&ctx.project_dir, &handle)?.unwrap_or_default();
-        Ok(ToolOutput::Sync { result: serde_json::json!({
-            "handle": handle,
-            "content": content,
-            "bytes": content.len()
-        }) })
-    }
-}
-
-/// read_original 工具：获取摘要对应的原文
-pub struct ReadOriginalTool;
-
-#[async_trait]
-impl Tool for ReadOriginalTool {
-    fn name(&self) -> &str { "read_original" }
-
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "read_original".into(),
-            description: "Get original content behind a summary/handle. Use when you need the raw source after a summary.".into(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "handle": { "type": "string" }
-                },
-                "required": ["handle"]
-            }),
-        }
-    }
-
-    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput> {
-        let handle: String = serde_json::from_value(args["handle"].clone())?;
-        let content = SandboxStore::read(&ctx.project_dir, &handle)?.unwrap_or_default();
-        Ok(ToolOutput::Sync { result: serde_json::json!({
-            "handle": handle,
-            "original": content,
-            "bytes": content.len()
-        }) })
-    }
 }
 
 // ==================== write 工具 ====================
