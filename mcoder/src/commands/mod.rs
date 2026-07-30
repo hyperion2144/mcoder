@@ -53,8 +53,6 @@ pub enum MetaCommandResult {
     Undo { id: Option<String> },
     /// 查看差异
     Diff,
-    /// 压缩上下文
-    Compact,
     /// 取消当前 agent loop
     Cancel,
     /// 任务管理
@@ -80,12 +78,14 @@ pub enum MetaCommandResult {
     Help,
     /// 消息树视图（分叉/切换）
     Tree,
+    /// 设置面板
+    Setting,
 }
 
 /// 内置元命令名
 pub const META_COMMANDS: &[&str] = &[
-    "help", "mode", "model", "sessions", "undo", "diff", "compact", "cancel",
-    "task", "config", "pair", "exit", "quit", "workflow", "tree",
+    "help", "mode", "model", "sessions", "undo", "diff", "cancel",
+    "task", "config", "pair", "exit", "quit", "workflow", "tree", "setting",
 ];
 
 /// 判断是否为元命令
@@ -107,10 +107,14 @@ pub fn parse_meta_command(name: &str, args: &[&str]) -> Result<MetaCommandResult
             })
         }
         "model" => {
-            let action = args.first().copied().unwrap_or("list");
+            let action = args.first().copied().unwrap_or("picker");
             match action {
                 "list" => Ok(MetaCommandResult::Model {
                     action: "list".into(),
+                    model: None,
+                }),
+                "picker" => Ok(MetaCommandResult::Model {
+                    action: "picker".into(),
                     model: None,
                 }),
                 "set" => {
@@ -122,7 +126,7 @@ pub fn parse_meta_command(name: &str, args: &[&str]) -> Result<MetaCommandResult
                         model: Some(model.to_string()),
                     })
                 }
-                _ => anyhow::bail!("usage: /model <list|set <name>>"),
+                _ => anyhow::bail!("usage: /model [list|set <name>]"),
             }
         }
         "sessions" => {
@@ -148,7 +152,6 @@ pub fn parse_meta_command(name: &str, args: &[&str]) -> Result<MetaCommandResult
             id: args.first().map(|s| s.to_string()),
         }),
         "diff" => Ok(MetaCommandResult::Diff),
-        "compact" => Ok(MetaCommandResult::Compact),
         "cancel" => Ok(MetaCommandResult::Cancel),
         "task" => {
             let action = args.first().copied().unwrap_or("list");
@@ -199,6 +202,7 @@ pub fn parse_meta_command(name: &str, args: &[&str]) -> Result<MetaCommandResult
         }
         "pair" => Ok(MetaCommandResult::Pair),
         "tree" => Ok(MetaCommandResult::Tree),
+        "setting" => Ok(MetaCommandResult::Setting),
         "workflow" => {
             let action = args.first().copied().unwrap_or("list");
             let valid = ["init", "propose", "plan", "apply", "review", "archive", "continue", "loop", "list"];
@@ -488,11 +492,10 @@ fn meta_command_description(name: &str) -> &'static str {
     match name {
         "help" => "show available commands",
         "mode" => "switch role (normal|plan|goal|loop|execute|review)",
-        "model" => "model management (list|set)",
+        "model" => "switch model (interactive picker; list|set <name>)",
         "sessions" => "session management (list|new|open|delete)",
         "undo" => "undo file changes",
         "diff" => "view git diff",
-        "compact" => "compact context",
         "cancel" => "cancel current agent loop",
         "task" => "background task management",
         "config" => "config management (get|set)",
@@ -500,6 +503,7 @@ fn meta_command_description(name: &str) -> &'static str {
         "exit" | "quit" => "exit",
         "workflow" => "spec-driven workflow orchestration (init|propose|plan|apply|review|archive|continue|list) - returns orchestration prompt injected into the agent loop",
         "tree" => "view message tree (fork/switch branches)",
+        "setting" => "open settings panel",
         _ => "",
     }
 }

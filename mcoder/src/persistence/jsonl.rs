@@ -123,6 +123,14 @@ impl JsonlSession {
         Ok(())
     }
 
+    /// 更新 model 并持久化到 meta.json（用于运行时切换模型）
+    pub fn update_model(&mut self, model: impl Into<String>) -> Result<()> {
+        self.meta.model = model.into();
+        let meta_path = self.path.with_extension("meta.json");
+        std::fs::write(&meta_path, serde_json::to_string_pretty(&self.meta)?)?;
+        Ok(())
+    }
+
     pub fn append(&self, msg: &Message) -> Result<()> {
         let line = serde_json::to_string(msg)?;
         let mut file = std::fs::OpenOptions::new()

@@ -3,12 +3,10 @@
 import { create } from 'zustand';
 
 // 设计文档 §6.7: 视图类型
-export type ViewType = 'chat' | 'sessions' | 'todos' | 'tasks' | 'config' | 'help' | 'diff' | 'tree';
+export type ViewType = 'chat' | 'sessions' | 'todos' | 'tasks' | 'config' | 'help' | 'diff' | 'tree' | 'model' | 'setting';
 
 interface UiState {
   currentView: ViewType;
-  // 设计文档 §6.5: 紧凑模式（合并 ContextLine + ProjectLine）
-  compact: boolean;
   // 设计文档 §6.2: 消息滚动偏移
   scrollOffset: number;
   // 设计文档 §6.8: 文件路径补全
@@ -16,7 +14,6 @@ interface UiState {
   fileCompletionIndex: number;
 
   setView: (v: ViewType) => void;
-  toggleCompact: () => void;
   setScrollOffset: (n: number) => void;
   scrollUp: (lines: number) => void;
   scrollDown: (lines: number) => void;
@@ -27,13 +24,11 @@ interface UiState {
 
 export const useUiStore = create<UiState>((set, get) => ({
   currentView: 'chat',
-  compact: false,
   scrollOffset: 0,
   fileCompletions: null,
   fileCompletionIndex: 0,
 
   setView: (v) => set({ currentView: v }),
-  toggleCompact: () => set((st) => ({ compact: !st.compact })),
   setScrollOffset: (n) => set({ scrollOffset: Math.max(0, n) }),
   scrollUp: (lines) => set((st) => ({ scrollOffset: st.scrollOffset + lines })),
   scrollDown: (lines) => set((st) => ({ scrollOffset: Math.max(0, st.scrollOffset - lines) })),

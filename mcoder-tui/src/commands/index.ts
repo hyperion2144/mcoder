@@ -30,7 +30,6 @@ export type MetaCommandResult =
   | { type: 'sessions'; action: string; session_id: string | null }
   | { type: 'undo'; id: string | null }
   | { type: 'diff' }
-  | { type: 'compact' }
   | { type: 'cancel' }
   | { type: 'task'; action: string; task_id: string | null }
   | { type: 'config'; key: string; value: string | null }
@@ -38,6 +37,7 @@ export type MetaCommandResult =
   | { type: 'exit' }
   | { type: 'help' }
   | { type: 'tree' }
+  | { type: 'setting' }
   | { type: 'workflow'; action: string; change_id: string | null; args: string[]; prompt: string };
 
 /// 客户端处理结果：告诉调用方需要做什么 UI 动作
@@ -45,7 +45,7 @@ export interface CommandResult {
   /// 需要添加到消息流的系统消息（可选）
   systemMessage?: string;
   /// 是否需要切换视图
-  switchView?: 'chat' | 'sessions' | 'todos' | 'tasks' | 'config' | 'help' | 'diff' | 'tree';
+  switchView?: 'chat' | 'sessions' | 'todos' | 'tasks' | 'config' | 'help' | 'diff' | 'tree' | 'model' | 'setting';
   /// 是否需要重新加载会话列表
   loadSessions?: boolean;
   /// 是否需要退出
@@ -131,6 +131,9 @@ async function handleMetaCommand(
     case 'tree':
       return { switchView: 'tree' };
 
+    case 'setting':
+      return { switchView: 'setting' };
+
     case 'exit':
       return { exit: true };
 
@@ -147,18 +150,32 @@ async function handleMetaCommand(
     }
 
     case 'model': {
-      if (meta.action === 'list') {
+      const sid = sessionStore.currentSessionId;
+      if (meta.action === 'picker') {
+        // /model (no args) -> open model picker view
+        return { switchView: 'model' };
+      } else if (meta.action === 'list') {
         try {
-          const result = await client.request('config.list_models');
-          return { systemMessage: 'Available models:\n' + JSON.stringify(result, null, 2) };
+          const result = await client.request('config.list_models', {});
+          const models = (result as any)?.models || result || [];
+          const lines = Array.isArray(models)
+            ? models.map((m: any) => `  ${m.name}${m.model ? `  (${m.model})` : ''}${m.context_window ? `  ctx=${m.context_window}` : ''}`)
+            : [JSON.stringify(models, null, 2)];
+          return { systemMessage: 'Available models:\n' + lines.join('\n') };
         } catch (e: any) {
           return { error: e.message };
         }
       } else if (meta.action === 'set' && meta.model) {
-        sessionStore.setModel(meta.model);
-        return {};
+        if (!sid) return { error: 'no active session' };
+        try {
+          await client.request('session.model.set', { session_id: sid, model: meta.model });
+          sessionStore.setModel(meta.model);
+          return {};
+        } catch (e: any) {
+          return { error: e.message };
+        }
       }
-      return { error: 'usage: /model <list|set <name>>' };
+      return { error: 'usage: /model [list|set <name>]' };
     }
 
     case 'sessions': {
@@ -224,6 +241,8 @@ async function handleMetaCommand(
           });
           useSessionStore.getState().setLoopState(snapshot.session.loop_state, snapshot.session.stop_reason);
           useSessionStore.getState().setCanResume(snapshot.can_resume);
+          useSessionStore.getState().setVersion(snapshot.session.version);
+          useSessionStore.getState().setLspServers(snapshot.session.lsp_servers);
           return {};
         } catch (e: any) {
           return { error: e.message };
@@ -268,10 +287,6 @@ async function handleMetaCommand(
         return { error: e.message };
       }
     }
-
-    case 'compact':
-      // 设计文档 §8.3.4: 手动触发上下文压缩
-      return { systemMessage: '[compact requested - will apply on next LLM call]' };
 
     case 'cancel': {
       const sid = sessionStore.currentSessionId;

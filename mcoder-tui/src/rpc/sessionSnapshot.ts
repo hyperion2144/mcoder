@@ -27,6 +27,8 @@ export interface SessionSnapshotSession {
   model: string;
   loop_state: 'idle' | 'running' | 'stopped' | string;
   stop_reason: string | null;
+  version: string;
+  lsp_servers: string[];
 }
 
 export interface LLMUsage {

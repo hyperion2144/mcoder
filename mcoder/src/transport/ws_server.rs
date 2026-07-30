@@ -326,6 +326,13 @@ where
                             })),
                             Some(session_id),
                         ),
+                        ServerEvent::ModelChanged { session_id, model } => (
+                            make_notification("session.model_changed", serde_json::json!({
+                                "session_id": session_id,
+                                "model": model
+                            })),
+                            Some(session_id),
+                        ),
                         ServerEvent::SessionDone { session_id, reason, unfinished_todos } => (
                             make_notification("session.done", serde_json::json!({
                                 "session_id": session_id,
@@ -601,7 +608,43 @@ async fn handle_request(
                 Ok(role) => JsonRpcResponse::ok(req.id, serde_json::json!({"role": role})),
                 Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
             }
-        }
+        },
+
+        "session.model.set" => {
+            let params = req.params.unwrap_or_default();
+            let session_id = params["session_id"].as_str().unwrap_or("");
+            let model = params["model"].as_str().unwrap_or("");
+            if session_id.is_empty() {
+                return JsonRpcResponse::err(
+                    req.id,
+                    -32602,
+                    "session_id required for session.model.set".to_string(),
+                );
+            }
+            if model.is_empty() {
+                return JsonRpcResponse::err(
+                    req.id,
+                    -32602,
+                    "model required for session.model.set".to_string(),
+                );
+            }
+            match mgr.set_model(session_id, model).await {
+                Ok(_) => {
+                    // set_model 内部已广播 ModelChanged 事件，此处不再重复
+                    JsonRpcResponse::ok(req.id, serde_json::json!({"model": model}))
+                }
+                Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+            }
+        },
+
+        "session.model.get" => {
+            let params = req.params.unwrap_or_default();
+            let session_id = params["session_id"].as_str().unwrap_or("");
+            match mgr.current_model(session_id).await {
+                Ok(model) => JsonRpcResponse::ok(req.id, serde_json::json!({"model": model})),
+                Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+            }
+        },
 
         "session.mode.list" => {
             let roles = mgr.list_roles();

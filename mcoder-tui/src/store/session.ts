@@ -27,6 +27,10 @@ interface SessionState {
   loopState: string;
   stopReason: string | null;
   canResume: boolean;
+  /** mcoder 版本号（来自 SessionSnapshot.session.version） */
+  version: string;
+  /** 已启动的 LSP 语言服务器名称列表（来自 SessionSnapshot.session.lsp_servers） */
+  lspServers: string[];
 
   setConnected: (v: boolean) => void;
   setSessions: (s: SessionMeta[]) => void;
@@ -45,6 +49,8 @@ interface SessionState {
   setBackgroundTasks: (t: SessionSnapshotTask[] | null) => void;
   setLoopState: (state: string, reason: string | null) => void;
   setCanResume: (v: boolean) => void;
+  setVersion: (v: string) => void;
+  setLspServers: (v: string[]) => void;
   reset: () => void;
 }
 
@@ -77,6 +83,8 @@ export const useSessionStore = create<SessionState>((set) => ({
   loopState: 'idle',
   stopReason: null,
   canResume: true,
+  version: '',
+  lspServers: [],
 
   setConnected: (v) => set({ connected: v }),
   setSessions: (s) => set({ sessions: s }),
@@ -95,6 +103,8 @@ export const useSessionStore = create<SessionState>((set) => ({
   setBackgroundTasks: (t) => set({ backgroundTasks: t }),
   setLoopState: (state, reason) => set({ loopState: state, stopReason: reason }),
   setCanResume: (v) => set({ canResume: v }),
+  setVersion: (v) => set({ version: v }),
+  setLspServers: (v) => set({ lspServers: v }),
   reset: () => set({
     currentSessionId: null,
     currentSessionTitle: '',
@@ -107,5 +117,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     pendingPlan: null,
     pendingTodos: null,
     backgroundTasks: null,
+    version: '',
+    lspServers: [],
   }),
 }));

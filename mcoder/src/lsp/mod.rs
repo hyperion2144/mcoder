@@ -706,6 +706,12 @@ impl LspManager {
             c.shutdown().await;
         }
     }
+
+    /// Returns the list of active (started) LSP server language names
+    pub async fn active_languages(&self) -> Vec<String> {
+        let clients = self.clients.lock().await;
+        clients.keys().map(|lang| lang.language_id().to_string()).collect()
+    }
 }
 
 // ==================== TextEdit 应用工具 ====================

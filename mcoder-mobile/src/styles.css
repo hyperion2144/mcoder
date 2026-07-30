@@ -141,6 +141,159 @@ html, body, #root {
   font-variant-numeric: tabular-nums;
 }
 
+/* ===== TopInfo（随消息滚动） ===== */
+.top-info {
+  padding: 8px 4px 12px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.top-info-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 2px;
+}
+
+.top-info-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  line-height: 1.4;
+}
+
+.top-info-lsp {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  margin-top: 1px;
+}
+
+/* ===== BottomStatus（固定底部） ===== */
+.bottom-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  font-size: 11px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
+  flex-shrink: 0;
+}
+
+.bottom-status .status-connected { color: var(--success); }
+.bottom-status .status-disconnected { color: var(--error); }
+.bottom-status .status-model {
+  color: var(--mauve);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.bottom-status .status-model:active { opacity: 0.6; }
+.bottom-status .status-ctx {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.bottom-status .status-cost {
+  color: var(--warning);
+  font-variant-numeric: tabular-nums;
+}
+.bottom-status .status-running {
+  color: var(--accent);
+}
+
+/* ===== 模型选择 sheet ===== */
+.model-sheet-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 200;
+  display: flex;
+  align-items: flex-end;
+}
+
+.model-sheet {
+  width: 100%;
+  max-height: 60vh;
+  background: var(--bg-surface);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.model-sheet-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.model-sheet-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.model-sheet-close {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 22px;
+  line-height: 1;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.model-sheet-close:active {
+  background: var(--bg-hover);
+}
+
+.model-sheet-list {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 8px;
+}
+
+.model-sheet-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  color: var(--text-primary);
+  cursor: pointer;
+  min-height: 44px;
+  margin-bottom: 2px;
+}
+
+.model-sheet-option:active {
+  background: var(--bg-elevated);
+}
+
+.model-sheet-option-active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.model-sheet-option-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.model-sheet-option-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
 /* ===== 消息列表 ===== */
 .message-list {
   flex: 1;
@@ -1676,4 +1829,138 @@ html, body, #root {
   background: var(--blue);
   color: var(--bg-base);
   border-color: var(--blue);
+}
+
+/* Settings */
+.settings-button {
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 20px;
+  padding: 0 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.drawer-settings {
+  color: var(--text-primary);
+}
+.settings-page {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--bg-base);
+  z-index: 1000;
+  overflow-y: auto;
+}
+.settings-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-header span {
+  font-weight: bold;
+  font-size: 16px;
+}
+.settings-header button {
+  font-size: 20px;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+}
+.settings-body {
+  padding: 12px;
+}
+.setting-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.setting-row-info {
+  border-bottom: none;
+}
+.setting-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.setting-name {
+  font-weight: 500;
+  font-size: 14px;
+}
+.setting-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.setting-control input,
+.setting-control select {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 8px;
+  border-radius: var(--radius-md);
+  width: 100px;
+  font-size: 14px;
+}
+.setting-control-text {
+  color: var(--text-secondary);
+  font-size: 12px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+.setting-model-btn {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 8px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  width: 100px;
+  font-size: 14px;
+  text-align: left;
+}
+.setting-section-title {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 12px;
+  padding: 4px 0;
+}
+.setting-toggle {
+  width: 44px;
+  height: 24px;
+  border-radius: 12px;
+  cursor: pointer;
+  border: none;
+  position: relative;
+  transition: background 0.2s;
+}
+.setting-toggle.on {
+  background: var(--success);
+}
+.setting-toggle.off {
+  background: var(--bg-hover);
+}
+.setting-toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: white;
+  transition: left 0.2s;
+}
+.setting-toggle.on::after {
+  left: 22px;
 }

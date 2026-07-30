@@ -18,6 +18,7 @@ interface Props {
   onSelectSession: (id: string) => void;
   onNewSession: () => void;
   onDisconnect: () => void;
+  onOpenSettings: () => void;
   commands: CommandInfo[];
 }
 
@@ -29,6 +30,7 @@ export function Drawer({
   onSelectSession,
   onNewSession,
   onDisconnect,
+  onOpenSettings,
   commands,
 }: Props) {
   return (
@@ -56,6 +58,12 @@ export function Drawer({
               </div>
             </button>
           ))}
+        </div>
+
+        <div className="drawer-section">
+          <button className="drawer-item drawer-settings" onClick={onOpenSettings}>
+            ⚙ Settings
+          </button>
         </div>
 
         <div className="drawer-section">

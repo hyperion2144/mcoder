@@ -21,6 +21,14 @@ interface Props {
   onError?: (m: string) => void;
   /** 按 tool_use id 索引的 result（来自消息流全局配对） */
   resultsById?: Map<string, any>;
+  /** TopInfo: mcoder 版本号 */
+  version?: string;
+  /** TopInfo: 当前模型名 */
+  model?: string;
+  /** TopInfo: 项目路径 */
+  projectPath?: string;
+  /** TopInfo: 已启动的 LSP 服务器列表 */
+  lspServers?: string[];
 }
 
 // 简单 markdown 行内渲染：`code` → <code>，**bold** → <strong>
@@ -48,7 +56,7 @@ function renderInline(text: string): React.ReactNode[] {
   return nodes;
 }
 
-export function MessageList({ messages, streaming, error, pendingCount, client, currentSessionId, onError, resultsById }: Props) {
+export function MessageList({ messages, streaming, error, pendingCount, client, currentSessionId, onError, resultsById, version, model, projectPath, lspServers }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -106,6 +114,16 @@ export function MessageList({ messages, streaming, error, pendingCount, client, 
 
   return (
     <div className="message-list">
+      {/* TopInfo: mcoder 版本 / model / project / lsp，随消息滚动 */}
+      <div className="top-info">
+        <div className="top-info-title">mcoder v{version || '?'}</div>
+        <div className="top-info-meta">
+          model: {model || '-'}  project: {projectPath || '-'}
+        </div>
+        {lspServers && lspServers.length > 0 && (
+          <div className="top-info-lsp">lsp: {lspServers.join(', ')}</div>
+        )}
+      </div>
       {messages.length === 0 && !streaming && !error && (
         <div className="message-empty">
           <div className="message-empty-text">No messages yet</div>

@@ -1,5 +1,5 @@
 // 设计文档 §6.2 / §6.3: 主应用组件
-// 布局：消息区（可滚动） + 固定区（ContextLine + ProjectLine + 输入框）
+// 布局：顶部信息（可滚动） + 消息区（可滚动） + 固定区（BottomStatus + 输入框）
 // 设计文档 §6.7: 多视图切换（chat/sessions/todos/tasks/config/help）
 
 import { useState, useEffect, useMemo } from 'react';
@@ -16,11 +16,12 @@ import { hydrateSnapshot, type SessionSnapshot } from './rpc/sessionSnapshot.js'
 import { computeResumeEntry as computeResumeEntryPure } from './resume/state.js';
 import { clearSessionUiState } from './store/clearSessionUiState.js';
 import {
-  ContextLine, ProjectLine, CompactLine,
   MessageList, PlanApproval,
   SessionList, TodoView, TodoSummaryBar, TaskMonitor, ConfigView, HelpView,
-  InputBox, AskUserCard, AskUserSummary, ResumeBar, TreeView,
+  InputBox, AskUserCard, AskUserSummary, ResumeBar, TreeView, ModelView,
+  SettingView,
 } from './components/index.js';
+import { formatContext, formatCost } from './utils/format.js';
 
 interface Props {
   client: WsClient;
@@ -63,6 +64,9 @@ export function App({ client }: Props) {
           break;
         case 'session.mode_event':
           sessionStore.setRole(notif.params.role);
+          break;
+        case 'session.model_changed':
+          sessionStore.setModel(notif.params.model);
           break;
         case 'session.plan_created':
           sessionStore.setPendingPlan(notif.params.plan);
@@ -418,7 +422,10 @@ export function App({ client }: Props) {
       return;
     }
     if (key.escape) {
-      uiStore.setView('chat');
+      // SettingView and ModelView handle their own Escape (e.g., exiting edit mode)
+      if (uiStore.currentView !== 'setting' && uiStore.currentView !== 'model') {
+        uiStore.setView('chat');
+      }
       return;
     }
     // Phase 3: Ctrl+R → session.resume
@@ -450,7 +457,7 @@ export function App({ client }: Props) {
       return;
     }
     if (key.ctrl && inputChar === ',') {
-      uiStore.setView('config');
+      uiStore.setView('setting');
       return;
     }
     if (key.pageUp) {
@@ -506,16 +513,14 @@ export function App({ client }: Props) {
     void kind;
   };
 
+  const ctxPctNum = sessionStore.contextWindow > 0
+    ? (sessionStore.contextUsed / sessionStore.contextWindow * 100)
+    : 0;
+  const ctxStr = formatContext(sessionStore.contextUsed, sessionStore.contextWindow);
+  const costStr = formatCost(sessionStore.sessionCost);
+
   return (
     <Box flexDirection="column" height="100%">
-      {/* Header */}
-      <Box justifyContent="space-between" paddingX={1}>
-        <Text bold color="cyan">mcoder</Text>
-        <Text color={sessionStore.connected ? 'green' : 'red'}>
-          {sessionStore.connected ? '● connected' : '● disconnected'}
-        </Text>
-      </Box>
-
       {/* 消息区（可滚动）。ask 卡片在 MessageList 内联渲染（由 store 中的 pending / lastSubmission 决定）*/}
       <MessageList
         askRenderState={
@@ -526,6 +531,8 @@ export function App({ client }: Props) {
               : null
         }
         sessionId={sid}
+        version={sessionStore.version}
+        lspServers={sessionStore.lspServers}
       />
 
       {/* Plan 审批（独立保留；ask 是另一套） */}
@@ -538,6 +545,8 @@ export function App({ client }: Props) {
       {currentView === 'config' && <ConfigView />}
       {currentView === 'help' && <HelpView client={client} />}
       {currentView === 'tree' && <TreeView client={client} />}
+      {currentView === 'model' && <ModelView client={client} />}
+      {currentView === 'setting' && <SettingView client={client} />}
 
       {/* Todo 摘要条（消息区下方、输入框上方）；全部完成时隐藏 */}
       <TodoSummaryBar />
@@ -545,15 +554,19 @@ export function App({ client }: Props) {
       {/* Phase 3: Resume 入口（固定状态提示附近；非模态） */}
       <ResumeBar sessionId={sid} />
 
-      {/* 设计文档 §6.5: 紧凑模式 */}
-      {uiStore.compact ? (
-        <CompactLine />
-      ) : (
-        <>
-          <ContextLine />
-          <ProjectLine />
-        </>
-      )}
+      {/* Bottom status bar - fixed */}
+      <Box justifyContent="space-between" paddingX={1} flexShrink={0}>
+        <Text color={sessionStore.connected ? 'green' : 'red'}>
+          {sessionStore.connected ? '●' : '○'} {sessionStore.connected ? 'connected' : 'disconnected'}
+        </Text>
+        <Text>
+          <Text color={ctxPctNum > 90 ? 'red' : ctxPctNum > 70 ? 'yellow' : 'green'}>
+            {ctxStr} ({ctxPctNum.toFixed(1)}%)
+          </Text>
+          {costStr && <Text color="gray"> {costStr}</Text>}
+          {msgStore.streaming && <Text color="blue"> running</Text>}
+        </Text>
+      </Box>
 
       {/* 输入框。ask 模式下显示 ask 提示 */}
       <InputBox

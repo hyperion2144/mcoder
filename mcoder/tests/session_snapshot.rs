@@ -155,6 +155,8 @@ fn session_snapshot_struct_has_all_required_fields() {
             model: "m".into(),
             loop_state: "idle".into(),
             stop_reason: None,
+            version: "0.0.0".into(),
+            lsp_servers: vec![],
         },
         messages: vec![],
         todos: vec![],
@@ -191,6 +193,8 @@ fn session_snapshot_struct_has_all_required_fields() {
         "model",
         "loop_state",
         "stop_reason",
+        "version",
+        "lsp_servers",
     ] {
         assert!(s.contains_key(k), "missing session field: {}", k);
     }
@@ -216,6 +220,8 @@ fn session_snapshot_can_resume_default_rules() {
             model: "m".into(),
             loop_state: loop_state.into(),
             stop_reason: None,
+            version: "0.0.0".into(),
+            lsp_servers: vec![],
         },
         messages: vec![],
         todos: vec![],

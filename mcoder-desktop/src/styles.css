@@ -114,7 +114,6 @@ body {
 
 /* 交互元素取消拖动，保持可点击 */
 .header-back,
-.header-info button,
 .header button {
   app-region: no-drag;
   -webkit-app-region: no-drag;
@@ -153,42 +152,6 @@ body {
   white-space: nowrap;
 }
 
-.header-info {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 12px;
-}
-
-.header-role {
-  color: var(--warning);
-  font-weight: 600;
-  padding: 2px 8px;
-  background: var(--warning-dim);
-  border-radius: var(--radius-sm);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-}
-
-.header-model {
-  color: var(--mauve);
-  font-size: 12px;
-}
-
-.header-ctx {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.ctx-text {
-  color: var(--text-muted);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-
 .ctx-bar {
   display: inline-block;
   width: 50px;
@@ -203,11 +166,6 @@ body {
   height: 100%;
   background: var(--accent);
   transition: width 0.3s ease;
-}
-
-.header-cost {
-  color: var(--warning);
-  font-variant-numeric: tabular-nums;
 }
 
 /* ===== Main 三栏布局 ===== */
@@ -742,6 +700,79 @@ body {
   transition: opacity var(--transition);
 }
 .cancel-btn:hover { opacity: 0.85; }
+
+/* ===== 底部状态栏 ===== */
+.bottom-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--bg-base);
+  background: var(--bg-surface);
+  flex-shrink: 0;
+  position: relative;
+}
+.bottom-status .status-dot { font-size: 10px; }
+.bottom-status .status-dot.connected { color: var(--success); }
+.bottom-status .status-dot.disconnected { color: var(--error); }
+.bottom-status .status-role {
+  background: var(--peach); color: var(--bg-base); padding: 1px 6px;
+  border-radius: 3px; font-size: 10px; text-transform: uppercase;
+}
+.bottom-status .status-model { color: var(--mauve); }
+.bottom-status .status-ctx { color: var(--text-primary); }
+.bottom-status .status-cost { color: var(--warning); }
+.bottom-status .status-running { color: var(--accent); }
+
+/* ===== 模型选择下拉 ===== */
+.bottom-status .status-model:hover { text-decoration: underline; }
+
+.model-dropdown {
+  position: absolute;
+  bottom: 28px;
+  left: 12px;
+  min-width: 240px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  z-index: 50;
+  padding: 4px;
+}
+
+.model-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition);
+}
+
+.model-option:hover {
+  background: var(--bg-hover);
+}
+
+.model-option-active {
+  background: var(--accent-dim);
+}
+
+.model-option-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.model-option-desc {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
 
 /* ===== 右栏 ===== */
 .right-panel {
@@ -1720,4 +1751,150 @@ body {
   background: var(--blue);
   color: var(--bg-base);
   border-color: var(--blue);
+}
+
+/* Settings */
+.header-settings {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 8px;
+}
+.header-settings:hover {
+  color: var(--text-primary);
+}
+.settings-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.settings-panel {
+  background: var(--bg-base);
+  border-radius: var(--radius-lg);
+  width: 500px;
+  max-height: 80vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+}
+.settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  border-bottom: 1px solid var(--bg-surface);
+}
+.settings-header span {
+  font-weight: bold;
+  font-size: 16px;
+}
+.settings-header button {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+}
+.settings-header button:hover {
+  color: var(--text-primary);
+}
+.settings-body {
+  padding: 16px;
+}
+.setting-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--bg-surface);
+}
+.setting-row-info {
+  border-bottom: none;
+}
+.setting-label {
+  display: flex;
+  flex-direction: column;
+}
+.setting-name {
+  font-weight: 500;
+}
+.setting-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.setting-control input,
+.setting-control select {
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-elevated);
+  color: var(--text-primary);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  width: 120px;
+}
+.setting-control-text {
+  color: var(--text-secondary);
+  font-size: 12px;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+.setting-model-btn {
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-elevated);
+  color: var(--text-primary);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  width: 120px;
+  text-align: left;
+}
+.setting-model-btn:hover {
+  background: var(--bg-hover);
+}
+.setting-section-title {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 12px;
+  padding: 4px 0;
+}
+.setting-toggle {
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  cursor: pointer;
+  border: none;
+  position: relative;
+  transition: background 0.2s;
+}
+.setting-toggle.on {
+  background: var(--success);
+}
+.setting-toggle.off {
+  background: var(--bg-hover);
+}
+.setting-toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: white;
+  transition: left 0.2s;
+}
+.setting-toggle.on::after {
+  left: 18px;
 }

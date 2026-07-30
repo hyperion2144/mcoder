@@ -5,13 +5,13 @@
 
 import { Box, Text } from 'ink';
 import Image from 'ink-picture';
-import { useMessagesStore, useUiStore } from '../store/index.js';
+import { useMessagesStore, useUiStore, useSessionStore } from '../store/index.js';
 import { ToolCard } from './ToolCard.js';
 import { AskUserCard, AskUserSummary } from './AskUserCard.js';
 import type { Message, ContentBlock } from '../rpc/types.js';
 import { ASK_USER_TOOL } from '../ask/types.js';
 import { useAskStore } from '../ask/store.js';
-import { formatUsageDelta } from '../utils/format.js';
+import { formatUsageDelta, shortenPath } from '../utils/format.js';
 
 function MessageView({
   msg,
@@ -148,9 +148,20 @@ export type AskRenderState =
       submission: { cancelled: boolean; answers: Record<number, any> };
     };
 
-export function MessageList({ askRenderState, sessionId }: { askRenderState?: AskRenderState | null; sessionId?: string | null }) {
+export function MessageList({
+  askRenderState,
+  sessionId,
+  version = '0.1.0',
+  lspServers = [],
+}: {
+  askRenderState?: AskRenderState | null;
+  sessionId?: string | null;
+  version?: string;
+  lspServers?: string[];
+}) {
   const { messages, streaming, error } = useMessagesStore();
   const { scrollOffset } = useUiStore();
+  const { currentModel, projectPath } = useSessionStore();
 
   const visibleMessages = scrollOffset > 0
     ? messages.slice(0, Math.max(0, messages.length - scrollOffset))
@@ -170,6 +181,16 @@ export function MessageList({ askRenderState, sessionId }: { askRenderState?: As
 
   return (
     <Box flexDirection="column" paddingX={1} flexGrow={1} overflow="hidden">
+      {/* Top info - visible at bottom (scrollOffset=0), scrolls away when user scrolls up */}
+      {scrollOffset === 0 && (
+        <Box flexDirection="column" flexShrink={0} marginBottom={1}>
+          <Text bold color="cyan">mcoder v{version}</Text>
+          <Text color="gray">model: {currentModel || '-'}  project: {shortenPath(projectPath) || '-'}</Text>
+          {lspServers.length > 0 && (
+            <Text color="gray">lsp: {lspServers.join(', ')}</Text>
+          )}
+        </Box>
+      )}
       {visibleMessages.map((msg, i) => (
         <MessageView key={i} msg={msg} askRenderState={askRenderState} sessionId={sessionId} resultsById={resultsById} />
       ))}

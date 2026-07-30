@@ -40,6 +40,10 @@ pub struct SessionSnapshotSession {
     /// 上次结束的原因（completed / cancelled / failed / max_iters_reached ...）
     /// None 表示尚未结束过
     pub stop_reason: Option<String>,
+    /// mcoder version (from CARGO_PKG_VERSION)
+    pub version: String,
+    /// Active LSP server language names (e.g., ["rust", "typescript"])
+    pub lsp_servers: Vec<String>,
 }
 
 /// Context 用量与费用估算（agent loop 每轮刷新）
@@ -266,6 +270,11 @@ pub enum ServerEvent {
     RoleChanged {
         session_id: String,
         role: String,
+    },
+    /// 模型切换后广播（/model set 或 session.model.set RPC）
+    ModelChanged {
+        session_id: String,
+        model: String,
     },
     /// 设计文档 §3.5: agent loop 结束通知（无工具调用、达到 max_iters、被取消等）
     /// unfinished_todos: 该 session 当前未完成（pending/in_progress）的 todos 完整结构
@@ -811,6 +820,49 @@ impl SessionManager {
         let entry = sessions.get(session_id).context("session not found")?;
         let agent = entry.session.lock().await;
         Ok(agent.current_role.clone())
+    }
+
+    /// 切换 session 的 model（/model set 命令 / session.model.set RPC）
+    /// 解析新模型配置，重建 LLM adapter，替换 agent 的 model_config + llm，
+    /// 并广播 ModelChanged 事件让所有订阅 client 同步更新 UI。
+    pub async fn set_model(&self, session_id: &str, model_name: &str) -> Result<()> {
+        let new_config = Arc::new(self.resolve_model(Some(model_name))?);
+        let new_llm = create_adapter(&new_config)?;
+        let sessions = self.sessions.read().await;
+        let entry = sessions.get(session_id).context("session not found")?;
+        let mut agent = entry.session.lock().await;
+        agent.set_model(new_config, new_llm)?;
+        drop(agent);
+        // 持久化 model 到 session_state（"key_value" 表），重启后 snapshot/attach 复原
+        if let Some(store) = SessionStateStore::for_session(session_id).await {
+            if let Err(e) = store.set_kv(session_id, "model", model_name).await {
+                tracing::warn!("session_state set model persist failed: {}", e);
+            }
+        }
+        // 广播 ModelChanged 事件（确保所有订阅 client 同步看到）
+        let _ = self.event_tx.send(ServerEvent::ModelChanged {
+            session_id: session_id.to_string(),
+            model: model_name.to_string(),
+        });
+        tracing::info!("session {} switched to model: {}", session_id, model_name);
+        Ok(())
+    }
+
+    /// 获取当前 model 名称
+    pub async fn current_model(&self, session_id: &str) -> Result<String> {
+        let sessions = self.sessions.read().await;
+        let entry = sessions.get(session_id).context("session not found")?;
+        let agent = entry.session.lock().await;
+        Ok(agent.model_config.name.clone())
+    }
+
+    /// 广播 model 切换事件
+    pub async fn broadcast_model_changed(&self, session_id: &str, model: &str) -> Result<()> {
+        let _ = self.event_tx.send(ServerEvent::ModelChanged {
+            session_id: session_id.to_string(),
+            model: model.to_string(),
+        });
+        Ok(())
     }
 
     /// 列出所有可用 role
@@ -2512,7 +2564,7 @@ impl SessionManager {
             (
                 agent.current_role.clone(),
                 meta.project_path.to_string_lossy().to_string(),
-                meta.model.clone(),
+                agent.model_config.name.clone(),
                 agent.estimate_total_tokens(),
                 agent.model_config().context_window as usize,
                 entry.loop_running.load(std::sync::atomic::Ordering::SeqCst),
@@ -2644,6 +2696,12 @@ impl SessionManager {
             .map(|s| s.meta().title.clone())
             .unwrap_or_default();
 
+        // 10. lsp_servers：从 per-project LspManager 获取已启动的语言服务器
+        let lsp_servers = match self.get_or_create_resources(Path::new(&project_path_str)).await {
+            Ok(res) => res.lsp_manager.active_languages().await,
+            Err(_) => Vec::new(),
+        };
+
         Ok(SessionSnapshot {
             session: SessionSnapshotSession {
                 session_id: session_id.to_string(),
@@ -2653,6 +2711,8 @@ impl SessionManager {
                 model: model_name,
                 loop_state,
                 stop_reason,
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                lsp_servers,
             },
             messages,
             todos,

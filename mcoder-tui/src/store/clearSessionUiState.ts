@@ -67,4 +67,7 @@ export function clearSessionUiState(opts: ClearSessionUiOptions = {}): void {
   // loop state：清回 idle（除非有显式传入）
   sessionStore.setLoopState('idle', null);
   sessionStore.setCanResume(true);
+  // version / lsp_servers：切 session 时清空，attach 后由 snapshot 重新填充
+  sessionStore.setVersion('');
+  sessionStore.setLspServers([]);
 }

@@ -27,7 +27,6 @@ import { TodoSummaryBar } from './components/TodoSummaryBar.js';
 import { ResumeBar } from './components/ResumeBar.js';
 import { TreeView } from './components/TreeView.js';
 import { ToolCard } from '@mcoder/shared/toolCard/ToolCardHtml.js';
-import { ContextRing } from '@mcoder/shared/components/ContextRing.js';
 import { formatUsageDelta } from '@mcoder/shared/utils/format.js';
 
 type RightPanel = 'graph' | 'diff' | 'file' | 'tree' | 'none';
@@ -188,6 +187,10 @@ export function App() {
   const [rightPanel, setRightPanel] = useState<RightPanel>('none');
   const [previewFile, setPreviewFile] = useState<{ path: string; content: string } | null>(null);
   const [pendingImages, setPendingImages] = useState<{data: string; media_type: string; name: string; preview: string}[]>([]);
+  const [showModelDropdown, setShowModelDropdown] = useState(false);
+  const [availableModels, setAvailableModels] = useState<{name: string; description?: string; model?: string; context_window?: number}[]>([]);
+  const [showSettings, setShowSettings] = useState(false);
+  const [configValues, setConfigValues] = useState<Record<string, any>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sessionStore = useSessionStore();
   const msgStore = useMessagesStore();
@@ -257,6 +260,8 @@ export function App() {
       // 同步 loop_state / can_resume（由 hydrateSnapshot 不在 store 上的字段）
       sessionStore.setLoopState(snapshot.session.loop_state, snapshot.session.stop_reason);
       sessionStore.setCanResume(snapshot.can_resume);
+      sessionStore.setVersion(snapshot.session.version);
+      sessionStore.setLspServers(snapshot.session.lsp_servers);
       // 若 snapshot 带 pending ask 且消息流中没有 tool_use，补一条占位 assistant message
       const ask = snapshot.pending_ask;
       if (ask && !hasToolUse(msgStore.messages, ask.tool_call_id)) {
@@ -354,6 +359,9 @@ export function App() {
           break;
         case 'session.mode_event':
           sessionStore.setRole(notif.params.role);
+          break;
+        case 'session.model_changed':
+          sessionStore.setModel(notif.params.model);
           break;
         case 'session.plan_created':
           sessionStore.setPendingPlan(notif.params.plan);
@@ -622,6 +630,85 @@ export function App() {
     }
   };
 
+  const handleModelClick = async () => {
+    if (showModelDropdown) { setShowModelDropdown(false); return; }
+    if (!client) return;
+    try {
+      const result: any = await client.request('config.list_models', {});
+      setAvailableModels(result.models || result || []);
+      setShowModelDropdown(true);
+    } catch (e: any) {
+      msgStore.setError(`fetch models failed: ${e.message}`);
+    }
+  };
+
+  const handleModelSelect = async (modelName: string) => {
+    if (!client || !currentSessionId) {
+      setShowModelDropdown(false);
+      return;
+    }
+    try {
+      await client.request('session.model.set', { session_id: currentSessionId, model: modelName });
+      sessionStore.setModel(modelName);
+    } catch (e: any) {
+      msgStore.setError(`set model failed: ${e.message}`);
+    }
+    setShowModelDropdown(false);
+  };
+
+  // Settings: 拉取 config 值（loop_max_iters / compact / memory）
+  useEffect(() => {
+    if (showSettings && client && currentSessionId) {
+      Promise.all([
+        client.request('config.get', { key: 'loop_max_iters' }).catch(() => null),
+        client.request('config.get', { key: 'compact' }).catch(() => null),
+        client.request('config.get', { key: 'memory' }).catch(() => null),
+      ]).then(([iters, compact, memory]) => {
+        setConfigValues({ loop_max_iters: iters, compact, memory });
+      });
+    }
+  }, [showSettings, client, currentSessionId]);
+
+  // M2: Escape 键关闭 settings overlay
+  useEffect(() => {
+    if (!showSettings) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowSettings(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showSettings]);
+
+  const handleConfigSet = async (key: string, value: any) => {
+    if (!client) return;
+    try {
+      await client.request('config.set', { key, value });
+      setConfigValues((prev) => {
+        const next = { ...prev };
+        if (key === 'loop_max_iters') {
+          next.loop_max_iters = value;
+        } else if (key.startsWith('compact.')) {
+          next.compact = { ...(next.compact || {}), [key.slice('compact.'.length)]: value };
+        } else if (key.startsWith('memory.')) {
+          next.memory = { ...(next.memory || {}), [key.slice('memory.'.length)]: value };
+        }
+        return next;
+      });
+    } catch (e: any) {
+      msgStore.setError(`config.set failed: ${e.message}`);
+    }
+  };
+
+  const handleRoleChange = async (role: string) => {
+    if (!client || !currentSessionId) return;
+    try {
+      await client.request('session.mode.set', { session_id: currentSessionId, role });
+      sessionStore.setRole(role);
+    } catch (e: any) {
+      msgStore.setError(`set role failed: ${e.message}`);
+    }
+  };
+
   const onInputKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -635,8 +722,7 @@ export function App() {
   };
 
   const { messages, streaming, error } = msgStore;
-  const { connected, currentModel, currentRole, contextUsed, contextWindow, sessionCost } = sessionStore;
-  const ctxPct = contextWindow > 0 ? Math.round((contextUsed / contextWindow) * 100) : 0;
+  const { connected, currentModel, currentRole, contextUsed, contextWindow, sessionCost, version, lspServers, projectPath } = sessionStore;
 
   // 全局配对 tool_use → tool_result（按 id）
   const resultsById = new Map<string, any>();
@@ -654,32 +740,24 @@ export function App() {
 
   return (
     <div className={`app platform-${platform}`}>
-      {/* Header：同时也是窗口拖动区，左侧留出交通灯占位 */}
+      {/* Header：minimal — title + connection + navigation */}
       <div className="header" data-tauri-drag-region>
         <div className="header-traffic-light" data-tauri-drag-region aria-hidden />
         <span className="header-title" data-tauri-drag-region>mcoder</span>
         <span className={`header-status ${connected ? 'connected' : 'disconnected'}`}>
           {connected ? '●' : '○'}
         </span>
+        <button className="header-settings" onClick={() => setShowSettings(true)} title="Settings">
+          ⚙
+        </button>
         {view === 'sessions' && currentProject && (
           <>
-            <button className="header-back" onClick={handleBack} title="Back to projects">
-              ←
-            </button>
+            <button className="header-back" onClick={handleBack} title="Back to projects">←</button>
             <span className="header-project" title={currentProject}>
               {currentProject.split('/').pop() || currentProject}
             </span>
           </>
         )}
-        <span className="header-info">
-          {currentRole !== 'default' && <span className="header-role">{currentRole}</span>}
-          {currentModel && <span className="header-model">{currentModel}</span>}
-          <span className="header-ctx" title={`${contextUsed}/${contextWindow} tokens · ${ctxPct}%`}>
-            <ContextRing used={contextUsed} window={contextWindow} size={22} strokeWidth={3} />
-            <span className="ctx-text">{contextUsed > 1000 ? `${(contextUsed / 1000).toFixed(1)}k` : contextUsed}/{contextWindow > 1000 ? `${(contextWindow / 1000).toFixed(0)}k` : contextWindow}</span>
-          </span>
-          {sessionCost > 0 && <span className="header-cost">${sessionCost.toFixed(3)}</span>}
-        </span>
         {/* Windows 窗口按钮右侧占位（仅 platform-win 显示） */}
         <div className="header-window-controls" data-tauri-drag-region aria-hidden />
       </div>
@@ -796,6 +874,36 @@ export function App() {
                   )}
                 </div>
               </div>
+              <div className="bottom-status">
+                <span className={`status-dot ${connected ? 'connected' : 'disconnected'}`}>
+                  {connected ? '●' : '○'}
+                </span>
+                {currentRole !== 'default' && <span className="status-role">{currentRole}</span>}
+                {currentModel && (
+                  <span className="status-model" onClick={handleModelClick} style={{ cursor: 'pointer' }}>
+                    {currentModel} ▾
+                  </span>
+                )}
+                {showModelDropdown && (
+                  <div className="model-dropdown">
+                    {availableModels.map((m) => (
+                      <div
+                        key={m.name}
+                        className={`model-option ${m.name === currentModel ? 'model-option-active' : ''}`}
+                        onClick={() => handleModelSelect(m.name)}
+                      >
+                        <span className="model-option-name">{m.name}</span>
+                        {m.model && <span className="model-option-desc">{m.model}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <span className="status-ctx" title={`${contextUsed}/${contextWindow} tokens`}>
+                  {contextUsed > 1000 ? `${(contextUsed / 1000).toFixed(1)}k` : contextUsed}/{contextWindow > 1000 ? `${(contextWindow / 1000).toFixed(0)}k` : contextWindow}
+                </span>
+                {sessionCost > 0 && <span className="status-cost">${sessionCost.toFixed(3)}</span>}
+                {streaming && <span className="status-running">running</span>}
+              </div>
             </div>
 
             {/* 右栏：图谱/Diff/文件预览 标签页 */}
@@ -841,6 +949,108 @@ export function App() {
                     <div>Select Graph, Diff, or click a file</div>
                   </div>
                 )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {showSettings && (
+        <div className="settings-overlay" onClick={(e) => { if (e.target === e.currentTarget) setShowSettings(false); }}>
+          <div className="settings-panel">
+            <div className="settings-header">
+              <span>Settings</span>
+              <button onClick={() => setShowSettings(false)}>✕</button>
+            </div>
+            <div className="settings-body">
+              <div className="setting-row">
+                <div className="setting-label">
+                  <span className="setting-name">Model</span>
+                  <span className="setting-desc">LLM model for this session</span>
+                </div>
+                <div className="setting-control">
+                  <button className="setting-model-btn" onClick={() => { setShowSettings(false); handleModelClick(); }}>
+                    {currentModel || '(not set)'} ▾
+                  </button>
+                </div>
+              </div>
+              <div className="setting-row">
+                <div className="setting-label">
+                  <span className="setting-name">Role</span>
+                  <span className="setting-desc">Agent role / mode</span>
+                </div>
+                <div className="setting-control">
+                  <select value={currentRole} onChange={(e) => handleRoleChange(e.target.value)}>
+                    <option value="default">default</option>
+                    <option value="coder">coder</option>
+                    <option value="plan">plan</option>
+                    <option value="goal">goal</option>
+                    <option value="loop">loop</option>
+                  </select>
+                </div>
+              </div>
+              <div className="setting-row">
+                <div className="setting-label">
+                  <span className="setting-name">Max Iterations</span>
+                  <span className="setting-desc">Max agent loop iterations</span>
+                </div>
+                <div className="setting-control">
+                  <input type="number" min={1} key={`iters-${configValues.loop_max_iters}`} defaultValue={configValues.loop_max_iters ?? ''} onBlur={(e) => { const v = e.target.value; if (v !== '') handleConfigSet('loop_max_iters', Number(v)); }} />
+                </div>
+              </div>
+              <div className="setting-row">
+                <div className="setting-label">
+                  <span className="setting-name">Compact Threshold</span>
+                  <span className="setting-desc">Context fill ratio (0-1) to trigger compaction</span>
+                </div>
+                <div className="setting-control">
+                  <input type="number" min={0} max={1} step={0.1} key={`threshold-${configValues.compact?.threshold}`} defaultValue={configValues.compact?.threshold ?? ''} onBlur={(e) => { const v = e.target.value; if (v !== '') handleConfigSet('compact.threshold', Number(v)); }} />
+                </div>
+              </div>
+              <div className="setting-row">
+                <div className="setting-label">
+                  <span className="setting-name">Compact Keep Recent</span>
+                  <span className="setting-desc">Messages to keep after compaction</span>
+                </div>
+                <div className="setting-control">
+                  <input type="number" min={0} key={`keeprecent-${configValues.compact?.keep_recent}`} defaultValue={configValues.compact?.keep_recent ?? ''} onBlur={(e) => { const v = e.target.value; if (v !== '') handleConfigSet('compact.keep_recent', Number(v)); }} />
+                </div>
+              </div>
+              <div className="setting-row">
+                <div className="setting-label">
+                  <span className="setting-name">Memory Auto Recall</span>
+                  <span className="setting-desc">Automatically recall relevant memories</span>
+                </div>
+                <div className="setting-control">
+                  <button className={`setting-toggle ${configValues.memory?.auto_recall ? 'on' : 'off'}`} onClick={() => handleConfigSet('memory.auto_recall', !configValues.memory?.auto_recall)} />
+                </div>
+              </div>
+              <div className="setting-row">
+                <div className="setting-label">
+                  <span className="setting-name">Memory Auto Capture</span>
+                  <span className="setting-desc">Automatically capture memories from conversations</span>
+                </div>
+                <div className="setting-control">
+                  <button className={`setting-toggle ${configValues.memory?.auto_capture ? 'on' : 'off'}`} onClick={() => handleConfigSet('memory.auto_capture', !configValues.memory?.auto_capture)} />
+                </div>
+              </div>
+              <div className="setting-section-title">Info</div>
+              <div className="setting-row setting-row-info">
+                <div className="setting-label">
+                  <span className="setting-name">Version</span>
+                </div>
+                <div className="setting-control setting-control-text">{version || '-'}</div>
+              </div>
+              <div className="setting-row setting-row-info">
+                <div className="setting-label">
+                  <span className="setting-name">Project Path</span>
+                </div>
+                <div className="setting-control setting-control-text" title={projectPath}>{projectPath || '-'}</div>
+              </div>
+              <div className="setting-row setting-row-info">
+                <div className="setting-label">
+                  <span className="setting-name">LSP Servers</span>
+                </div>
+                <div className="setting-control setting-control-text">{lspServers.length > 0 ? lspServers.join(', ') : '-'}</div>
               </div>
             </div>
           </div>

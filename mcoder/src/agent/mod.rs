@@ -169,6 +169,20 @@ impl AgentSession {
         Ok(())
     }
 
+    /// Switch the LLM model at runtime. Updates model_config and recreates the LLM adapter.
+    /// The next run_once() call will use the new model.
+    pub fn set_model(&mut self, model_config: Arc<ModelConfig>, llm: SharedLLM) -> Result<()> {
+        self.model_config = model_config;
+        self.llm = llm;
+        // Persist new model to JSONL meta so server restart restores the correct model
+        if let Err(e) = self.session.update_model(&self.model_config.name) {
+            tracing::warn!("failed to persist model to session meta: {}", e);
+        }
+        // Refresh system prompt since it depends on model_config (model name, context window)
+        self.refresh_system_prompt();
+        Ok(())
+    }
+
     /// 确保会话以 system prompt 开头
     /// 根据 current_role 选择对应的 system prompt
     pub fn ensure_system_prompt(&mut self) {

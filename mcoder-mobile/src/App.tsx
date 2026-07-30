@@ -18,7 +18,6 @@ import { PairingScreen } from './components/PairingScreen.js';
 import { Drawer } from './components/Drawer.js';
 import { MessageList } from './components/MessageList.js';
 import { InputBar, type PendingImage } from './components/InputBar.js';
-import { StatusBar } from './components/StatusBar.js';
 import { ProjectList } from './components/ProjectList.js';
 import { SessionTabs } from './components/SessionTabs.js';
 import { TodoSummaryBar } from './components/TodoSummaryBar.js';
@@ -179,6 +178,11 @@ export function App() {
   const [openTabs, setOpenTabs] = useState<string[]>([]);
   // 从服务端获取的命令列表（供 Drawer 展示）
   const [commands, setCommands] = useState<{ name: string; description: string }[]>([]);
+  // 模型选择 sheet
+  const [showModelSheet, setShowModelSheet] = useState(false);
+  const [availableModels, setAvailableModels] = useState<{ name: string; description?: string }[]>([]);
+  const [showSettings, setShowSettings] = useState(false);
+  const [configValues, setConfigValues] = useState<Record<string, any>>({});
   const sessionStore = useSessionStore();
   const msgStore = useMessagesStore();
   const networkMonitor = useRef<NetworkMonitor | null>(null);
@@ -273,6 +277,9 @@ export function App() {
           break;
         case 'session.mode_event':
           sessionStore.setRole(notif.params.role);
+          break;
+        case 'session.model_changed':
+          sessionStore.setModel(notif.params.model);
           break;
         case 'session.plan_created':
           sessionStore.setPendingPlan(notif.params.plan);
@@ -414,6 +421,8 @@ export function App() {
       // 同步 loop_state / can_resume（由 hydrateSnapshot 不在 store 上的字段）
       sessionStore.setLoopState(snapshot.session.loop_state, snapshot.session.stop_reason);
       sessionStore.setCanResume(snapshot.can_resume);
+      sessionStore.setVersion(snapshot.session.version);
+      sessionStore.setLspServers(snapshot.session.lsp_servers);
       // 若 snapshot 带 pending ask 且消息流中没有 tool_use，补一条占位 assistant message
       const ask = snapshot.pending_ask;
       if (ask && !hasToolUse(msgStore.messages, ask.tool_call_id)) {
@@ -638,6 +647,36 @@ export function App() {
     }
   }, [handleSlash, sendMessage]);
 
+  // 模型选择：点击 model 名称拉取可用模型列表，弹出 sheet
+  const handleModelTap = useCallback(async () => {
+    if (!client) return;
+    try {
+      const result: any = await client.request('config.list_models', {});
+      setAvailableModels(result.models || result || []);
+      setShowModelSheet(true);
+    } catch (e: any) {
+      msgStore.setError(`fetch models failed: ${e.message}`);
+    }
+  }, [client, msgStore]);
+
+  // 选择模型：调用 session.model.set RPC，更新 store，关闭 sheet
+  const handleModelSelect = useCallback(async (name: string) => {
+    if (!client || !sessionStore.currentSessionId) {
+      setShowModelSheet(false);
+      return;
+    }
+    try {
+      await client.request('session.model.set', {
+        session_id: sessionStore.currentSessionId,
+        model: name,
+      });
+      sessionStore.setModel(name);
+    } catch (e: any) {
+      msgStore.setError(`set model failed: ${e.message}`);
+    }
+    setShowModelSheet(false);
+  }, [client, sessionStore, msgStore]);
+
   // 断开连接
   // 终审修复 #17：断开连接时同时清 ask store，避免残留卡片
   // Phase 5c: 改用 clearSessionUiState({ clearAll: true }) 统一清理
@@ -663,6 +702,49 @@ export function App() {
     }
     prefs.remove('mcoder_pairing');
   }, [client]);
+
+  // Settings: 拉取 config 值（loop_max_iters / compact / memory）
+  useEffect(() => {
+    if (showSettings && client && sessionStore.currentSessionId) {
+      Promise.all([
+        client.request('config.get', { key: 'loop_max_iters' }).catch(() => null),
+        client.request('config.get', { key: 'compact' }).catch(() => null),
+        client.request('config.get', { key: 'memory' }).catch(() => null),
+      ]).then(([iters, compact, memory]) => {
+        setConfigValues({ loop_max_iters: iters, compact, memory });
+      });
+    }
+  }, [showSettings, client, sessionStore.currentSessionId]);
+
+  const handleConfigSet = useCallback(async (key: string, value: any) => {
+    if (!client) return;
+    try {
+      await client.request('config.set', { key, value });
+      setConfigValues((prev) => {
+        const next = { ...prev };
+        if (key === 'loop_max_iters') {
+          next.loop_max_iters = value;
+        } else if (key.startsWith('compact.')) {
+          next.compact = { ...(next.compact || {}), [key.slice('compact.'.length)]: value };
+        } else if (key.startsWith('memory.')) {
+          next.memory = { ...(next.memory || {}), [key.slice('memory.'.length)]: value };
+        }
+        return next;
+      });
+    } catch (e: any) {
+      msgStore.setError(`config.set failed: ${e.message}`);
+    }
+  }, [client, msgStore]);
+
+  const handleRoleChange = useCallback(async (role: string) => {
+    if (!client || !sessionStore.currentSessionId) return;
+    try {
+      await client.request('session.mode.set', { session_id: sessionStore.currentSessionId, role });
+      sessionStore.setRole(role);
+    } catch (e: any) {
+      msgStore.setError(`set role failed: ${e.message}`);
+    }
+  }, [client, sessionStore, msgStore]);
 
   // 当前项目内 tab 对应的会话列表（按创建时间排序）
   const currentProjectSessions = useMemo(() => {
@@ -693,21 +775,10 @@ export function App() {
   }
 
   // 会话页（tab 组织）
-  const { connected, currentModel, currentRole, contextUsed, contextWindow, sessionCost } = sessionStore;
+  const { connected, currentModel, contextUsed, contextWindow, sessionCost, version, lspServers, projectPath } = sessionStore;
 
   return (
     <div className="app">
-      <StatusBar
-        connected={connected}
-        networkStatus={networkStatus}
-        role={currentRole}
-        model={currentModel}
-        contextUsed={contextUsed}
-        contextWindow={contextWindow}
-        cost={sessionCost}
-        onMenuClick={() => setDrawerOpen(true)}
-      />
-
       <div className="session-nav-bar">
         <button
           className="back-button"
@@ -723,6 +794,13 @@ export function App() {
           onCloseSession={handleCloseTab}
           onNewSession={handleNewSessionInTabs}
         />
+        <button
+          className="settings-button"
+          onClick={() => setShowSettings(true)}
+          aria-label="settings"
+        >
+          ⚙
+        </button>
       </div>
 
       {/* Plan/Todo 浮层（设计 §6.2/§6.7） */}
@@ -746,6 +824,10 @@ export function App() {
         client={client}
         currentSessionId={sessionStore.currentSessionId}
         onError={(m) => msgStore.setError(m)}
+        version={sessionStore.version}
+        model={currentModel}
+        projectPath={sessionStore.projectPath}
+        lspServers={sessionStore.lspServers}
         resultsById={(() => {
           const m = new Map<string, any>();
           for (const msg of msgStore.messages) {
@@ -765,12 +847,53 @@ export function App() {
       {/* Phase 3: Resume 入口（固定状态提示附近；非模态） */}
       <ResumeBar client={client} sessionId={sessionStore.currentSessionId} />
 
+      {/* BottomStatus: 连接状态 / model / ctx / cost / running */}
+      <div className="bottom-status">
+        <span className={connected ? 'status-connected' : 'status-disconnected'}>
+          {connected ? '●' : '○'}
+        </span>
+        {currentModel && (
+          <span className="status-model" onClick={handleModelTap}>
+            {currentModel} ▾
+          </span>
+        )}
+        <span className="status-ctx">
+          {contextUsed > 1000 ? `${(contextUsed / 1000).toFixed(1)}k` : contextUsed}/{contextWindow > 1000 ? `${(contextWindow / 1000).toFixed(0)}k` : contextWindow}
+        </span>
+        {sessionCost > 0 && <span className="status-cost">${sessionCost.toFixed(3)}</span>}
+        {msgStore.streaming && <span className="status-running">running</span>}
+      </div>
+
       <InputBar
         onSubmit={onSubmit}
         onCancel={cancelStreaming}
         streaming={msgStore.streaming}
         disabled={networkStatus === 'offline'}
       />
+
+      {/* 模型选择 sheet */}
+      {showModelSheet && (
+        <div className="model-sheet-overlay" onClick={() => setShowModelSheet(false)}>
+          <div className="model-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="model-sheet-header">
+              <span className="model-sheet-title">Select Model</span>
+              <button className="model-sheet-close" onClick={() => setShowModelSheet(false)}>×</button>
+            </div>
+            <div className="model-sheet-list">
+              {availableModels.map((m) => (
+                <button
+                  key={m.name}
+                  className={`model-sheet-option ${m.name === currentModel ? 'model-sheet-option-active' : ''}`}
+                  onClick={() => handleModelSelect(m.name)}
+                >
+                  <span className="model-sheet-option-name">{m.name}</span>
+                  {(m as any).model && <span className="model-sheet-option-desc">{(m as any).model}</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 消息树模态 */}
       {showTree && client && (
@@ -785,8 +908,111 @@ export function App() {
         onSelectSession={handleDrawerSelectSession}
         onNewSession={handleNewSessionInTabs}
         onDisconnect={disconnect}
+        onOpenSettings={() => { setDrawerOpen(false); setShowSettings(true); }}
         commands={commands}
       />
+
+      {/* Settings 全屏页 */}
+      {showSettings && (
+        <div className="settings-page">
+          <div className="settings-header">
+            <button onClick={() => setShowSettings(false)}>←</button>
+            <span>Settings</span>
+          </div>
+          <div className="settings-body">
+            <div className="setting-row">
+              <div className="setting-label">
+                <span className="setting-name">Model</span>
+                <span className="setting-desc">LLM model for this session</span>
+              </div>
+              <div className="setting-control">
+                <button className="setting-model-btn" onClick={() => { setShowSettings(false); handleModelTap(); }}>
+                  {currentModel || '(not set)'} ▾
+                </button>
+              </div>
+            </div>
+            <div className="setting-row">
+              <div className="setting-label">
+                <span className="setting-name">Role</span>
+                <span className="setting-desc">Agent role / mode</span>
+              </div>
+              <div className="setting-control">
+                <select value={sessionStore.currentRole} onChange={(e) => handleRoleChange(e.target.value)}>
+                  <option value="default">default</option>
+                  <option value="coder">coder</option>
+                  <option value="plan">plan</option>
+                  <option value="goal">goal</option>
+                  <option value="loop">loop</option>
+                </select>
+              </div>
+            </div>
+            <div className="setting-row">
+              <div className="setting-label">
+                <span className="setting-name">Max Iterations</span>
+                <span className="setting-desc">Max agent loop iterations</span>
+              </div>
+              <div className="setting-control">
+                <input type="number" min={1} key={`iters-${configValues.loop_max_iters}`} defaultValue={configValues.loop_max_iters ?? ''} onBlur={(e) => { const v = e.target.value; if (v !== '') handleConfigSet('loop_max_iters', Number(v)); }} />
+              </div>
+            </div>
+            <div className="setting-row">
+              <div className="setting-label">
+                <span className="setting-name">Compact Threshold</span>
+                <span className="setting-desc">Context fill ratio (0-1) to trigger compaction</span>
+              </div>
+              <div className="setting-control">
+                <input type="number" min={0} max={1} step={0.1} key={`threshold-${configValues.compact?.threshold}`} defaultValue={configValues.compact?.threshold ?? ''} onBlur={(e) => { const v = e.target.value; if (v !== '') handleConfigSet('compact.threshold', Number(v)); }} />
+              </div>
+            </div>
+            <div className="setting-row">
+              <div className="setting-label">
+                <span className="setting-name">Compact Keep Recent</span>
+                <span className="setting-desc">Messages to keep after compaction</span>
+              </div>
+              <div className="setting-control">
+                <input type="number" min={0} key={`keeprecent-${configValues.compact?.keep_recent}`} defaultValue={configValues.compact?.keep_recent ?? ''} onBlur={(e) => { const v = e.target.value; if (v !== '') handleConfigSet('compact.keep_recent', Number(v)); }} />
+              </div>
+            </div>
+            <div className="setting-row">
+              <div className="setting-label">
+                <span className="setting-name">Memory Auto Recall</span>
+                <span className="setting-desc">Automatically recall relevant memories</span>
+              </div>
+              <div className="setting-control">
+                <button className={`setting-toggle ${configValues.memory?.auto_recall ? 'on' : 'off'}`} onClick={() => handleConfigSet('memory.auto_recall', !configValues.memory?.auto_recall)} />
+              </div>
+            </div>
+            <div className="setting-row">
+              <div className="setting-label">
+                <span className="setting-name">Memory Auto Capture</span>
+                <span className="setting-desc">Automatically capture memories from conversations</span>
+              </div>
+              <div className="setting-control">
+                <button className={`setting-toggle ${configValues.memory?.auto_capture ? 'on' : 'off'}`} onClick={() => handleConfigSet('memory.auto_capture', !configValues.memory?.auto_capture)} />
+              </div>
+            </div>
+            <div className="setting-section-title">Info</div>
+            <div className="setting-row setting-row-info">
+              <div className="setting-label">
+                <span className="setting-name">Version</span>
+              </div>
+              <div className="setting-control setting-control-text">{version || '-'}</div>
+            </div>
+            <div className="setting-row setting-row-info">
+              <div className="setting-label">
+                <span className="setting-name">Project Path</span>
+              </div>
+              <div className="setting-control setting-control-text" title={projectPath}>{projectPath || '-'}</div>
+            </div>
+            <div className="setting-row setting-row-info">
+              <div className="setting-label">
+                <span className="setting-name">LSP Servers</span>
+              </div>
+              <div className="setting-control setting-control-text">{lspServers.length > 0 ? lspServers.join(', ') : '-'}</div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

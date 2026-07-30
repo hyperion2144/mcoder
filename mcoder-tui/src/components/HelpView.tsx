@@ -43,7 +43,7 @@ export function HelpView({ client }: Props) {
       <Text color="white">Ctrl+S                    sessions list</Text>
       <Text color="white">Ctrl+T                    todo view</Text>
       <Text color="white">Ctrl+K                    task monitor</Text>
-      <Text color="white">Ctrl+,                    config view</Text>
+      <Text color="white">Ctrl+,                    settings</Text>
       <Text color="white">PgUp/PgDn                 scroll messages</Text>
       <Text color="white">↑/↓                       input history</Text>
       <Text color="white">ESC                       close overlay</Text>
