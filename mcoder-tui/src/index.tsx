@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import React from 'react';
 import { render } from 'ink';
-import { InkPictureProvider } from 'ink-picture';
 import { App } from './App.js';
 import { WsClient } from './rpc/client.js';
 import { useSessionStore } from './store/index.js';
@@ -63,7 +62,7 @@ async function main() {
     sessionStore.getState().setSessions(sessions);
   } catch {}
 
-  render(React.createElement(InkPictureProvider, null, React.createElement(App, { client })));
+  render(React.createElement(App, { client }));
 }
 
 main();

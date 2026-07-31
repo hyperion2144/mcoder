@@ -875,10 +875,152 @@ Archived {name}
     body
 }
 
+pub fn roadmap_prompt() -> String {
+    r#"## Input
+
+- No parameters: operate on the current project
+
+## Orchestrator Steps
+
+> These are the steps you (orchestrator) execute in order. `/workflow roadmap` only outputs these steps - it does not auto-execute.
+
+### Step 1: Discuss project requirements
+
+Before defining milestones, understand the project goals and requirements:
+
+Use `ask` to discuss:
+- **Project goal**: What is this project trying to achieve? What problem does it solve?
+- **Target users**: Who will use this? What are their needs?
+- **Key features**: What are the main capabilities required?
+- **Constraints**: Any technical, timeline, or resource constraints?
+- **Existing codebase**: If brownfield, what exists already? What needs to change?
+
+Take notes. These inform the roadmap structure.
+
+### Step 1b: Research (do this yourself, do NOT ask the user)
+
+After the initial discussion, research the project context:
+- If brownfield: read existing source code, understand current architecture, identify what exists vs what needs to change
+- Read the project's dependency and config files to understand the tech stack
+- Read `.mcoder/workflow/specs/` if specs exist (brownfield after codebase-scanner)
+- Check for linting and formatting configuration to understand conventions
+
+### Step 1c: Follow-up questions (if needed)
+
+After research, assess whether you have enough to define milestones. If ANY of these are unclear, use `ask` to follow up:
+- User described a feature but didn't specify the approach -> ask which approach they prefer
+- User's stated tech stack contradicts what the codebase actually uses -> clarify the contradiction
+- User's scope is too large (>5 phases in one milestone) -> suggest splitting
+- User mentioned a feature but you don't know if existing code already partially implements it -> ask
+
+Do NOT proceed to Step 2 until you can answer: "What are the concrete, unambiguous deliverables for each phase?"
+
+### Step 2: Get context
+
+Read `.mcoder/workflow/config.yaml` and `.mcoder/workflow/specs/` to understand the project scope, tech stack, and existing behavioral contracts.
+
+### Step 3: Detect roadmap state
+
+Read `.mcoder/workflow/roadmap.md`. Check if it already has defined milestones (look for `## Milestone:` headers that have real content, not template placeholders).
+
+**First time (no milestones defined):**
+Continue to Step 4.
+
+**Adding a new milestone (roadmap already exists):**
+- Append new milestone(s) BELOW existing milestones, separated by `---`
+- Keep existing milestones with their status unchanged
+
+### Step 4: Choose planning mode (first time only)
+
+Use `ask` to determine the planning mode:
+
+- **MVP mode** (product-facing): each phase delivers user-facing value
+- **Technical-layer mode** (infrastructure/CLI): each phase produces a runnable/testable artifact
+
+### Step 5: Define Milestones
+
+Get the roadmap template: `workflow(action=template, type=roadmap)`. Fill with milestones and phases.
+
+**Default: 1 milestone = the entire project.** Milestones are product releases, NOT development phases.
+
+### Step 6: Validate
+
+Check before finishing:
+- All project requirements from Step 1 discussion are covered by some phase
+- Phase dependencies form a DAG (no cycles)
+- Each phase has a concrete, verifiable deliverable
+- Phase count per milestone: small 1-2, medium 2-3, large 3-4
+- First phase is always the thinnest possible end-to-end path
+- No template placeholders remaining (`{{`)
+
+## Output
+
+- `.mcoder/workflow/roadmap.md` - structured roadmap with milestone and phase info
+
+Write using `bash(commands=["cat > .mcoder/workflow/roadmap.md << 'ROADMAP_EOF'\n...\nROADMAP_EOF"])`.
+
+Then use `ask` to confirm the roadmap with the user and suggest next step: `/workflow propose`.
+
+## Guardrails
+
+- **Default: 1 milestone.** No "foundation", "setup", "scaffolding" - M1 = shippable product.
+- Mode (MVP/technical-layer) shapes phases within a milestone, not the milestones themselves.
+- First phase = thinnest end-to-end path (always first phase, never "phase 0").
+- **Adding new milestone**: append new ones below existing, don't overwrite.
+- Do NOT create milestone directories - roadmap.md is the single tracking document.
+"#.to_string()
+}
+
+pub fn ff_prompt() -> String {
+    r##"## Input
+
+- **`$ARGUMENTS`** (optional): change name. If empty, starts from current project state.
+
+## What to do
+
+Fast-forward: execute the current step, then auto-call `workflow(action=continue)` to get the next step, then execute that. Repeat until complete.
+
+### Loop
+
+For each iteration:
+
+1. **Get current step**:
+   ```bash
+   workflow(action=continue)
+   ```
+   The tool outputs the next step's full workflow instructions.
+
+2. **Execute those instructions** - dispatch sub-agents, write files, run code, etc. as the instructions describe.
+
+3. **After the step completes**, return to step 1.
+
+4. **Stop when**:
+   - `workflow(action=continue)` shows no more actionable steps (no active changes, roadmap has no `[ ]` items)
+   - OR an unrecoverable error occurs (report it and stop)
+
+### Constraints
+
+- Respect all gates: review must PASS before archive; design issues (D-prefixed) route to plan --fix; code issues route to apply --fix.
+- You MAY ask the user clarifying questions if truly blocked (e.g. ambiguous requirement). But default to proceeding with the most reasonable interpretation.
+- Each `workflow(action=continue)` invocation is independent - it re-checks artifact state.
+- Report progress to the user after each iteration.
+
+## Guardrails
+
+- Do NOT skip the review gate.
+- Do NOT auto-archive if review verdict is FAIL or NEEDS_REVISION.
+- If `workflow(action=continue)` suggests a fix loop (plan --fix or apply --fix), execute that fix loop before continuing.
+- If a step is unclear or the output is unexpected, stop and ask the user.
+
+## Context Reminder
+Context is auto-injected by mcoder at session_start and after compaction. Do NOT call `workflow(action=context)` yourself.
+"##.to_string()
+}
+
 pub fn continue_prompt() -> String {
     r##"## Input
 
-- **`$ARGUMENTS`** (optional): change name. If empty, the CLI auto-detects.
+- **`$ARGUMENTS`** (optional): change name. If empty, auto-detects.
 
 ## Note
 
@@ -886,30 +1028,30 @@ pub fn continue_prompt() -> String {
 
 ## What to do
 
-Run the command:
+Call the tool:
 
 ```bash
 workflow(action=continue)
 ```
 
-The CLI runs schema-driven detection in code and outputs:
+The tool runs schema-driven detection in code and outputs:
 1. Current artifact status (proposal/design/tasks/specs/review existence + task completion count)
 2. Next recommended step (command + description)
 3. Full workflow instructions for the next step
 
-**Follow the CLI output.** Do not manually check files or determine the next step yourself - the code does it.
+**Follow the tool output.** Do not manually check files or determine the next step yourself - the code does it.
 
 ## When to use
 
-- After `/workflow init` (CLI detects empty roadmap -> suggests /workflow roadmap)
-- After any step completes (CLI detects next step based on schema)
-- When unsure what to do next (CLI shows current progress)
+- After `/workflow init` (tool detects empty roadmap -> suggests /workflow roadmap)
+- After any step completes (tool detects next step based on schema)
+- When unsure what to do next (tool shows current progress)
 
 ## Guardrails
 
-- The CLI does ALL detection. You just follow its output.
-- If the CLI says "Next: /workflow plan <name>", run the plan workflow instructions it outputs.
-- If multiple active changes exist, the CLI lists them. Pick one and re-run `workflow(action=continue)`.
+- The tool does ALL detection. You just follow its output.
+- If the tool says "Next: /workflow plan <name>", run the plan workflow instructions it outputs.
+- If multiple active changes exist, the tool lists them. Pick one and re-run `workflow(action=continue)`.
 "##.to_string()
 }
 
@@ -934,7 +1076,7 @@ For each iteration:
    ```bash
    workflow(action=continue)
    ```
-   The CLI outputs the next step's full workflow instructions.
+   The tool outputs the next step's full workflow instructions.
 
 2. **Execute those instructions WITHOUT asking the user anything.** Make the most reasonable interpretation and proceed. If the instructions say to use `ask`, you must SKIP that ask step and use sensible defaults instead.
 

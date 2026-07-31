@@ -136,6 +136,7 @@ impl Default for AppConfig {
             memory: crate::types::MemoryConfig::default(),
             tools: crate::types::ToolsConfig::default(),
             image_description_timeout_secs: 8,
+            web_search: crate::types::WebSearchConfig::default(),
         }
     }
 }

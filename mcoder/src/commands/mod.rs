@@ -80,12 +80,14 @@ pub enum MetaCommandResult {
     Tree,
     /// 设置面板
     Setting,
+    /// 远程连接（切换到另一台 mcoder 服务器）
+    Remote { args: Vec<String> },
 }
 
 /// 内置元命令名
 pub const META_COMMANDS: &[&str] = &[
     "help", "mode", "model", "sessions", "undo", "diff", "cancel",
-    "task", "config", "pair", "exit", "quit", "workflow", "tree", "setting",
+    "task", "config", "pair", "exit", "quit", "workflow", "tree", "setting", "remote",
 ];
 
 /// 判断是否为元命令
@@ -203,12 +205,19 @@ pub fn parse_meta_command(name: &str, args: &[&str]) -> Result<MetaCommandResult
         "pair" => Ok(MetaCommandResult::Pair),
         "tree" => Ok(MetaCommandResult::Tree),
         "setting" => Ok(MetaCommandResult::Setting),
+        "remote" => {
+            // /remote <url-or-pairing-string> [token]
+            // Store the raw args, let the TUI handle reconnection
+            Ok(MetaCommandResult::Remote {
+                args: args.iter().map(|s| s.to_string()).collect(),
+            })
+        }
         "workflow" => {
             let action = args.first().copied().unwrap_or("list");
-            let valid = ["init", "propose", "plan", "apply", "review", "archive", "continue", "loop", "list"];
+            let valid = ["init", "roadmap", "propose", "plan", "apply", "review", "archive", "continue", "ff", "loop", "list"];
             if !valid.contains(&action) {
                 anyhow::bail!(
-                    "usage: /workflow <init|propose|plan|apply|review|archive|continue|loop|list> [change_id]"
+                    "usage: /workflow <init|roadmap|propose|plan|apply|review|archive|continue|ff|loop|list> [change_id]"
                 );
             }
             let workflow_args = args.get(1..).unwrap_or(&[]);
@@ -244,12 +253,14 @@ pub fn parse_meta_command(name: &str, args: &[&str]) -> Result<MetaCommandResult
 fn workflow_prompt(action: &str, change_id: Option<&str>) -> String {
     match action {
         "init" => crate::commands::workflow_prompts::init_prompt(),
+        "roadmap" => crate::commands::workflow_prompts::roadmap_prompt(),
         "propose" => crate::commands::workflow_prompts::propose_prompt(change_id.unwrap_or("")),
         "plan" => crate::commands::workflow_prompts::plan_prompt(change_id.unwrap_or(""), false),
         "apply" => crate::commands::workflow_prompts::apply_prompt(change_id.unwrap_or(""), false),
         "review" => crate::commands::workflow_prompts::review_prompt(change_id.unwrap_or(""), false),
         "archive" => crate::commands::workflow_prompts::archive_prompt(change_id.unwrap_or("")),
         "continue" => crate::commands::workflow_prompts::continue_prompt(),
+        "ff" => crate::commands::workflow_prompts::ff_prompt(),
         "loop" => crate::commands::workflow_prompts::loop_prompt(),
         "list" => "Use workflow(action=list) to list all changes.".to_string(),
         other => format!("unknown workflow action: {}", other),
@@ -501,9 +512,10 @@ fn meta_command_description(name: &str) -> &'static str {
         "config" => "config management (get|set)",
         "pair" => "show pairing info",
         "exit" | "quit" => "exit",
-        "workflow" => "spec-driven workflow orchestration (init|propose|plan|apply|review|archive|continue|list) - returns orchestration prompt injected into the agent loop",
+        "workflow" => "spec-driven workflow orchestration (init|roadmap|propose|plan|apply|review|archive|continue|ff|loop|list) - returns orchestration prompt injected into the agent loop",
         "tree" => "view message tree (fork/switch branches)",
         "setting" => "open settings panel",
+        "remote" => "switch to a remote server connection",
         _ => "",
     }
 }

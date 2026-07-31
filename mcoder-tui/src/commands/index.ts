@@ -38,6 +38,7 @@ export type MetaCommandResult =
   | { type: 'help' }
   | { type: 'tree' }
   | { type: 'setting' }
+  | { type: 'remote'; args: string[] }
   | { type: 'workflow'; action: string; change_id: string | null; args: string[]; prompt: string };
 
 /// 客户端处理结果：告诉调用方需要做什么 UI 动作
@@ -50,6 +51,8 @@ export interface CommandResult {
   loadSessions?: boolean;
   /// 是否需要退出
   exit?: boolean;
+  /// 是否需要重新连接到远程服务器
+  reconnect?: string;
   /// 错误信息
   error?: string;
 }
@@ -357,6 +360,13 @@ async function handleMetaCommand(
       } catch (e: any) {
         return { error: e.message };
       }
+    }
+
+    case 'remote': {
+      // /remote mcoder://token@host:port
+      // /remote ws://host:port token
+      const raw = meta.args.join(' ');
+      return { reconnect: raw };
     }
 
     case 'workflow': {

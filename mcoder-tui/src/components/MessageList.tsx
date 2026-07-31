@@ -4,7 +4,6 @@
 // 工具调用：统一渲染为 ToolCard（三态折叠 + 流光 loading）
 
 import { Box, Text } from 'ink';
-import Image from 'ink-picture';
 import { useMessagesStore, useUiStore, useSessionStore } from '../store/index.js';
 import { ToolCard } from './ToolCard.js';
 import { AskUserCard, AskUserSummary } from './AskUserCard.js';
@@ -115,8 +114,7 @@ function MessageView({
           const filename = block.path.split('/').pop() || block.path;
           return (
             <Box key={i} flexDirection="column" paddingLeft={1}>
-              <Image src={block.path} width={40} height={20} alt={`image: ${filename}`} />
-              <Text color="gray" dimColor>  {filename}</Text>
+              <Text color="gray">[image: {filename}]</Text>
             </Box>
           );
         }

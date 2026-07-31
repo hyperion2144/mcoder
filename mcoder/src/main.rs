@@ -69,17 +69,6 @@ enum Commands {
     },
 }
 
-/// 启动 server 的共享逻辑：返回 (WsServer, AppConfig, project_dir)
-/// 设计文档 §1.1: server 无状态外，所有状态在 SQLite
-/// 设计文档 §8.6: 当配置了域名时，自动申请 Let's Encrypt 证书
-async fn start_server(host: &str, port: u16) -> anyhow::Result<(
-    Arc<transport::ws_server::WsServer>,
-    Arc<types::AppConfig>,
-    std::path::PathBuf,
-)> {
-    start_server_full(host, port, None, None, None, None).await
-}
-
 /// 完整版启动：支持 ACME 证书 + HTTP 服务器 + Web 客户端
 async fn start_server_full(
     host: &str,
@@ -319,23 +308,17 @@ async fn start_server_full(
 /// `mcoder` 命令（无 subcommand）= fork server + 启动 TUI
 /// `mcoder tui` = 启动 TUI（若本地 server 未运行则自动拉起）
 fn spawn_tui_process(url: &str, token: &str) -> anyhow::Result<std::process::Child> {
-    // 优先使用 bundled 的 mcoder-tui（dist/index.js）
-    // 退回到全局安装的 mcoder-tui
-    let candidates: Vec<String> = vec![
-        // 1. 同目录的 mcoder-tui/dist/index.js（开发模式）
-        std::env::current_exe()?
-            .parent()
-            .and_then(|p| p.parent())
-            .map(|p| p.join("mcoder-tui").join("dist").join("index.js").to_string_lossy().to_string())
-            .unwrap_or_default(),
-        // 2. 全局安装的 mcoder-tui
-        "mcoder-tui".to_string(),
-    ];
+    // 优先级：
+    // 1. 同目录的 mcoder-tui 单文件可执行（Bun compile 产物，无 Node.js 依赖）
+    // 2. 同目录的 mcoder-tui/dist/index.js（开发模式，需要 node）
+    // 3. 全局安装的 mcoder-tui（PATH 中）
+    let exe = std::env::current_exe()?;
+    let parent = exe.parent().unwrap_or(std::path::Path::new("."));
 
-    for candidate in &candidates {
-        if candidate.is_empty() { continue; }
-        let result = std::process::Command::new("node")
-            .arg(candidate)
+    // 1. 单文件可执行
+    let standalone = parent.join("mcoder-tui");
+    if standalone.exists() {
+        let result = std::process::Command::new(&standalone)
             .arg("--url").arg(url)
             .arg("--token").arg(token)
             .stdin(std::process::Stdio::inherit())
@@ -346,7 +329,39 @@ fn spawn_tui_process(url: &str, token: &str) -> anyhow::Result<std::process::Chi
             return Ok(child);
         }
     }
-    anyhow::bail!("failed to spawn TUI process; install with `npm i -g @mcoder/tui` or run `npm run build` in mcoder-tui/")
+
+    // 2. 开发模式：node dist/index.js
+    let dev_path = parent
+        .parent()
+        .map(|p| p.join("mcoder-tui").join("dist").join("index.js"))
+        .unwrap_or_default();
+    if !dev_path.as_os_str().is_empty() && dev_path.exists() {
+        let result = std::process::Command::new("node")
+            .arg(&dev_path)
+            .arg("--url").arg(url)
+            .arg("--token").arg(token)
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
+            .spawn();
+        if let Ok(child) = result {
+            return Ok(child);
+        }
+    }
+
+    // 3. 全局安装
+    let result = std::process::Command::new("mcoder-tui")
+        .arg("--url").arg(url)
+        .arg("--token").arg(token)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn();
+    if let Ok(child) = result {
+        return Ok(child);
+    }
+
+    anyhow::bail!("failed to spawn TUI; build with `cd mcoder-tui && ./build-standalone.sh` or install with `npm i -g @mcoder/tui`")
 }
 
 /// 从 ws://host:port URL 中解析 (host, port)
@@ -588,39 +603,34 @@ async fn main() -> anyhow::Result<()> {
     // 子命令 → 单独模式
     match cli.command {
         None => {
-            // 嵌入式：启动 server，然后 spawn TUI 子进程；TUI 退出后关 server
             let host = "127.0.0.1";
             let port = 7654u16;
-            let (server, _config, _project_dir) = start_server(host, port).await?;
-
-            // 等待 server 就绪（已 listen 即可，WsServer::start 内部已 bind）
             let url = format!("ws://{}:{}", host, port);
-            let token = server.pairing_info().token.clone();
+
+            // 检测 server 是否已运行
+            if !is_server_running(host, port).await {
+                // 未运行 -> 后台拉起（detach），不随 TUI 退出而关闭
+                println!("starting server at {}...", url);
+                let pid = spawn_detached_server(&host, port)?;
+                if wait_for_server(&host, port).await {
+                    println!("server ready (pid: {})", pid);
+                } else {
+                    eprintln!("warning: server failed to start in time");
+                }
+            }
+
+            // 获取 token
+            let token = crate::transport::pairing::load_persisted_token()
+                .unwrap_or_else(|| "missing-token".into());
 
             // spawn TUI 子进程
             let mut child = match spawn_tui_process(&url, &token) {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("warning: failed to spawn TUI ({}); server continues alone", e);
-                    tokio::signal::ctrl_c().await?;
-                    return Ok(());
+                    return Err(e);
                 }
             };
-
-            // 等 TUI 退出或 Ctrl+C
-            let wait_fut = async {
-                let _ = child.wait();
-            };
-            tokio::pin!(wait_fut);
-            tokio::select! {
-                _ = wait_fut => {
-                    println!("TUI exited, shutting down server...");
-                }
-                _ = tokio::signal::ctrl_c() => {
-                    println!("\nCtrl+C received, shutting down...");
-                    let _ = child.kill();
-                }
-            }
+            let _ = child.wait();
             Ok(())
         }
 

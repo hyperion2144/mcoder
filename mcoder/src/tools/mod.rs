@@ -13,6 +13,7 @@ pub mod sandbox;
 pub mod subagent;
 pub mod task;
 pub mod undo;
+pub mod web;
 pub mod workflow;
 
 // SkillUseTool：让 LLM 能调用 skill（action=use 激活，action=list 列出）
@@ -145,6 +146,10 @@ pub fn build_full_registry() -> (
 
     // ===== Bash 工具族（无状态，从 ctx 取）=====
     reg.register(Arc::new(bash::BashTool));
+
+    // ===== Web 工具（无状态）=====
+    reg.register(Arc::new(web::WebSearchTool));
+    reg.register(Arc::new(web::WebFetchTool));
 
     // ===== 代码图谱工具（无状态，从 ctx 取 graph）=====
     reg.register(Arc::new(crate::code_graph::tools::GraphSearchTool));

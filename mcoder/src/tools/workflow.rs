@@ -683,14 +683,16 @@ impl WorkflowTool {
     fn get_step_prompt(action: &str, change: &str, fix: bool) -> String {
         match action {
             "init" => crate::commands::workflow_prompts::init_prompt(),
+            "roadmap" => crate::commands::workflow_prompts::roadmap_prompt(),
             "propose" => crate::commands::workflow_prompts::propose_prompt(change),
             "plan" => crate::commands::workflow_prompts::plan_prompt(change, fix),
             "apply" => crate::commands::workflow_prompts::apply_prompt(change, fix),
             "review" => crate::commands::workflow_prompts::review_prompt(change, fix),
             "archive" => crate::commands::workflow_prompts::archive_prompt(change),
             "continue" => crate::commands::workflow_prompts::continue_prompt(),
+            "ff" => crate::commands::workflow_prompts::ff_prompt(),
             "loop" => crate::commands::workflow_prompts::loop_prompt(),
-            other => format!("[workflow] unknown step '{}': use init|propose|plan|apply|review|archive", other),
+            other => format!("[workflow] unknown step '{}': use init|roadmap|propose|plan|apply|review|archive", other),
         }
     }
 

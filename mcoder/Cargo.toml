@@ -25,6 +25,7 @@ tungstenite = { workspace = true }
 futures-util = { workspace = true }
 async-trait = { workspace = true }
 reqwest = { workspace = true }
+urlencoding = "2"
 sha2 = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }

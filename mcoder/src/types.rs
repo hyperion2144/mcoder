@@ -313,6 +313,9 @@ pub struct AppConfig {
     /// m9: read 工具用视觉模型生成 description 时的超时秒数（默认 8）
     #[serde(default = "default_image_description_timeout_secs")]
     pub image_description_timeout_secs: u64,
+    /// Web 搜索配置
+    #[serde(default)]
+    pub web_search: WebSearchConfig,
 }
 
 fn default_image_description_timeout_secs() -> u64 {
@@ -343,6 +346,35 @@ impl ToolsConfig {
         tool_name.starts_with("browser_")
             || tool_name.starts_with("screen_")
             || tool_name.starts_with("app_")
+    }
+}
+
+/// Web 搜索配置
+/// 在 ~/.mcoder/config.toml 中配置：
+/// [web_search]
+/// provider = "tavily"        # tavily | serper | duckduckgo (默认)
+/// api_key = "tvly-xxx"       # Tavily 或 Serper 的 API key
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WebSearchConfig {
+    /// 搜索引擎：tavily | serper | duckduckgo
+    /// 默认 duckduckgo（无需 API key，但国内不稳定）
+    #[serde(default)]
+    pub provider: String,
+    /// API key（tavily / serper 需要）
+    #[serde(default)]
+    pub api_key: String,
+}
+
+impl WebSearchConfig {
+    pub fn provider(&self) -> &str {
+        match self.provider.as_str() {
+            "tavily" => "tavily",
+            "serper" => "serper",
+            _ => "duckduckgo",
+        }
+    }
+    pub fn has_api_key(&self) -> bool {
+        !self.api_key.is_empty()
     }
 }
 

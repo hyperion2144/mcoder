@@ -10,7 +10,7 @@ import { ASK_USER_TOOL } from './ask/types.js';
 import { hasToolUse } from './ask/messages.js';
 import { serializeSubmission } from './ask/validation.js';
 import { dispatchSlashCommand } from './commands/index.js';
-import type { WsClient } from './rpc/client.js';
+import { WsClient } from './rpc/client.js';
 import type { Message } from './rpc/types.js';
 import { hydrateSnapshot, type SessionSnapshot } from './rpc/sessionSnapshot.js';
 import { computeResumeEntry as computeResumeEntryPure } from './resume/state.js';
@@ -22,12 +22,14 @@ import {
   SettingView,
 } from './components/index.js';
 import { formatContext, formatCost } from './utils/format.js';
+import { parsePairingString } from './utils/pairing.js';
 
 interface Props {
   client: WsClient;
 }
 
-export function App({ client }: Props) {
+export function App({ client: initialClient }: Props) {
+  const [client, setClient] = useState(initialClient);
   const [input, setInput] = useState('');
   const uiStore = useUiStore();
   const sessionStore = useSessionStore();
@@ -377,9 +379,67 @@ export function App({ client }: Props) {
     }
   };
 
+  const handleRemoteConnect = async (raw: string) => {
+    let url = '';
+    let token = '';
+
+    if (raw.startsWith('mcoder://')) {
+      const parsed = parsePairingString(raw);
+      if (!parsed) {
+        msgStore.setError('Invalid pairing string');
+        return;
+      }
+      url = parsed.url;
+      token = parsed.token;
+    } else {
+      // ws://host:port token
+      const parts = raw.split(/\s+/);
+      url = parts[0];
+      token = parts[1] || '';
+    }
+
+    if (!url || !token) {
+      msgStore.setError('Usage: /remote <mcoder://token@host:port> or /remote <ws://host:port> <token>');
+      return;
+    }
+
+    // Close old connection
+    client.close();
+
+    // Reset stores
+    sessionStore.reset();
+    msgStore.clear();
+
+    // Create new client
+    const newClient = new WsClient(
+      url,
+      token,
+      () => useSessionStore.getState().setConnected(true),
+      () => useSessionStore.getState().setConnected(false),
+    );
+
+    setClient(newClient);
+
+    try {
+      await newClient.connect();
+      const sessions = await newClient.request('sessions.list');
+      sessionStore.setSessions(sessions);
+      msgStore.addMessage({
+        role: 'system',
+        content: [{ type: 'text', text: 'Connected to ' + url }],
+      });
+    } catch (e: any) {
+      msgStore.setError(`Failed to connect: ${e.message}`);
+    }
+  };
+
   const handleSlashCommand = async (cmd: string) => {
     try {
       const result = await dispatchSlashCommand(cmd, client);
+      if (result.reconnect) {
+        await handleRemoteConnect(result.reconnect);
+        return;
+      }
       if (result.error) msgStore.setError(result.error);
       else msgStore.setError(null);
       if (result.systemMessage) {

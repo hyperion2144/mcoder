@@ -30,3 +30,14 @@ Thumbs.db
 # mcoder runtime state
 .mcoder/
 .mcoder-test/
+
+# Bun / TUI standalone build artifacts
+mcoder-tui/mcoder-tui
+mcoder-tui/mcoder-tui.exe
+mcoder-tui/bun.lock
+
+# Generated icon sources (keep only final assets)
+mcoder-desktop/src-tauri/icons/*-prompt.txt
+mcoder-desktop/src-tauri/icons/mcoder-mlogo-transparent.png
+mcoder-desktop/src-tauri/icons/*.bak
+mcoder-desktop/src-tauri/icons/generate-icons.sh

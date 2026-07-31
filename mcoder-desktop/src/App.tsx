@@ -4,7 +4,7 @@
 // 复用 TUI 的 rpc/store/commands/utils 逻辑层
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { WsClient } from '@mcoder/shared/rpc/client.js';
 import { useSessionStore, useMessagesStore } from '@mcoder/shared/store/index.js';
 import { dispatchSlashCommand } from '@mcoder/shared/commands/index.js';
@@ -190,6 +190,7 @@ export function App() {
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [availableModels, setAvailableModels] = useState<{name: string; description?: string; model?: string; context_window?: number}[]>([]);
   const [showSettings, setShowSettings] = useState(false);
+  const [remoteInput, setRemoteInput] = useState('');
   const [configValues, setConfigValues] = useState<Record<string, any>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sessionStore = useSessionStore();
@@ -197,6 +198,8 @@ export function App() {
   const desktop = useDesktopStore();
   // Phase 5c: 跟踪当前 session id（用于切 session 时清旧）
   const currentSessionIdRef = useRef<string | null>(null);
+  // 暴露 useEffect 内的 setupClient，供设置面板切换远程服务器时复用
+  const setupClientRef = useRef<((url: string, token: string) => void) | null>(null);
 
   // 平台检测：用于区分 macOS（交通灯在左）和 Windows（窗口按钮在右）
   const platform = useMemo(() => {
@@ -298,157 +301,188 @@ export function App() {
   }, [desktop, attachSession, msgStore, sessionStore, client]);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const pairingStr = params.get('pairing') || localStorage.getItem('mcoder_pairing') || '';
-    if (!pairingStr) {
-      msgStore.setError('No pairing info. Pass ?pairing=mcoder://... in URL.');
-      return;
-    }
-    const parsed = parsePairingString(pairingStr);
-    if (!parsed) {
-      msgStore.setError('Invalid pairing string.');
-      return;
-    }
+    let cancelled = false;
+    let cleanupFn: (() => void) | undefined;
 
-    const c = new WsClient(
-      parsed.url,
-      parsed.token,
-      () => sessionStore.setConnected(true),
-      () => sessionStore.setConnected(false),
-    );
-    setClient(c);
+    // 公共的客户端初始化逻辑：创建 WsClient、注册 reconnect/notif handler、连接
+    function setupClient(url: string, token: string) {
+      if (cancelled) return;
 
-    // Phase 5c: 注册 reconnect handler，断线重连后用 offset 增量 hydrate
-    (c as any).reconnectOpts = {
-      sessionId: undefined, // 由 setReconnectSession 设置
-      onReconnect: (snapshot: unknown) => {
-        if (!snapshot) return;
-        const sid = useSessionStore.getState().currentSessionId;
-        if (!sid) return;
-        try {
-          hydrateSnapshot({
-            sessionId: sid,
-            snapshot: snapshot as SessionSnapshot,
-            currentMessageCount: useMessagesStore.getState().messages.length,
-            store: buildHydrateStore(),
-          });
-        } catch (e: any) {
-          msgStore.setError(`reconnect hydrate failed: ${e.message}`);
-        }
-      },
-      getCurrentMessageCount: () => useMessagesStore.getState().messages.length,
-    };
+      const c = new WsClient(
+        url,
+        token,
+        () => sessionStore.setConnected(true),
+        () => sessionStore.setConnected(false),
+      );
+      setClient(c);
 
-    c.connect().then(async () => {
-      try {
-        const allSessions: SessionMeta[] = await c.request('sessions.list');
-        sessionStore.setSessions(allSessions);
-        desktop.setView('projects');
-      } catch {}
-    }).catch(e => {
-      msgStore.setError(`Connection failed: ${e.message}`);
-    });
-
-    const notifHandler = (notif: any) => {
-      switch (notif.method) {
-        case 'message':
-          msgStore.addMessage(notif.params.message);
-          if (notif.params.message.role === 'assistant') {
-            msgStore.setStreaming(false);
-          }
-          break;
-        case 'session.mode_event':
-          sessionStore.setRole(notif.params.role);
-          break;
-        case 'session.model_changed':
-          sessionStore.setModel(notif.params.model);
-          break;
-        case 'session.plan_created':
-          sessionStore.setPendingPlan(notif.params.plan);
-          break;
-        case 'session.todo_updated':
-          sessionStore.setPendingTodos(notif.params.todos);
-          break;
-        case 'session.ask_pending': {
-          // 二次 review（issue 6/9）：仅更新 store；仅当消息流中无对应 tool_use 时才追加
-          const p = notif.params;
-          useAskStore.getState().setPendingIdempotent({
-            ask_id: p.ask_id,
-            tool_call_id: p.tool_call_id,
-            session_id: p.session_id,
-            request: p.request,
-            created_at: Date.now(),
-          });
-          if (!hasToolUse(msgStore.messages, p.tool_call_id)) {
-            msgStore.addMessage({
-              role: 'assistant',
-              content: [{ type: 'tool_use', id: p.tool_call_id, name: ASK_USER_TOOL, args: p.request }],
+      // Phase 5c: 注册 reconnect handler，断线重连后用 offset 增量 hydrate
+      (c as any).reconnectOpts = {
+        sessionId: undefined, // 由 setReconnectSession 设置
+        onReconnect: (snapshot: unknown) => {
+          if (!snapshot) return;
+          const sid = useSessionStore.getState().currentSessionId;
+          if (!sid) return;
+          try {
+            hydrateSnapshot({
+              sessionId: sid,
+              snapshot: snapshot as SessionSnapshot,
+              currentMessageCount: useMessagesStore.getState().messages.length,
+              store: buildHydrateStore(),
             });
+          } catch (e: any) {
+            msgStore.setError(`reconnect hydrate failed: ${e.message}`);
           }
-          break;
-        }
-        case 'session.ask_answered': {
-          const p = notif.params;
-          const ok = useAskStore.getState().setSubmissionIfMatch(
-            p.session_id,
-            p.ask_id,
-            p.tool_call_id,
-            p.submission,
-          );
-          if (ok) {
-            const haveResult = msgStore.messages.some((m) =>
-              m.content.some(
-                (b: any) => b.type === 'tool_result' && b.id === p.tool_call_id,
-              ),
-            );
-            if (!haveResult) {
+        },
+        getCurrentMessageCount: () => useMessagesStore.getState().messages.length,
+      };
+
+      c.connect().then(async () => {
+        try {
+          const allSessions: SessionMeta[] = await c.request('sessions.list');
+          sessionStore.setSessions(allSessions);
+          desktop.setView('projects');
+        } catch {}
+      }).catch(e => {
+        msgStore.setError(`Connection failed: ${e.message}`);
+      });
+
+      const notifHandler = (notif: any) => {
+        switch (notif.method) {
+          case 'message':
+            msgStore.addMessage(notif.params.message);
+            if (notif.params.message.role === 'assistant') {
+              msgStore.setStreaming(false);
+            }
+            break;
+          case 'session.mode_event':
+            sessionStore.setRole(notif.params.role);
+            break;
+          case 'session.model_changed':
+            sessionStore.setModel(notif.params.model);
+            break;
+          case 'session.plan_created':
+            sessionStore.setPendingPlan(notif.params.plan);
+            break;
+          case 'session.todo_updated':
+            sessionStore.setPendingTodos(notif.params.todos);
+            break;
+          case 'session.ask_pending': {
+            // 二次 review（issue 6/9）：仅更新 store；仅当消息流中无对应 tool_use 时才追加
+            const p = notif.params;
+            useAskStore.getState().setPendingIdempotent({
+              ask_id: p.ask_id,
+              tool_call_id: p.tool_call_id,
+              session_id: p.session_id,
+              request: p.request,
+              created_at: Date.now(),
+            });
+            if (!hasToolUse(msgStore.messages, p.tool_call_id)) {
               msgStore.addMessage({
-                role: 'tool',
-                content: [{ type: 'tool_result', id: p.tool_call_id, output: p.result }],
+                role: 'assistant',
+                content: [{ type: 'tool_use', id: p.tool_call_id, name: ASK_USER_TOOL, args: p.request }],
               });
             }
+            break;
           }
-          break;
-        }
-        case 'session.ask_cancelled': {
-          // 校验 ask_id + tool_call_id 后清空 pending（issue 8）
-          const p = notif.params;
-          if (p && p.ask_id && p.tool_call_id) {
-            useAskStore.getState().clearPendingByIds(
+          case 'session.ask_answered': {
+            const p = notif.params;
+            const ok = useAskStore.getState().setSubmissionIfMatch(
               p.session_id,
               p.ask_id,
               p.tool_call_id,
+              p.submission,
             );
+            if (ok) {
+              const haveResult = msgStore.messages.some((m) =>
+                m.content.some(
+                  (b: any) => b.type === 'tool_result' && b.id === p.tool_call_id,
+                ),
+              );
+              if (!haveResult) {
+                msgStore.addMessage({
+                  role: 'tool',
+                  content: [{ type: 'tool_result', id: p.tool_call_id, output: p.result }],
+                });
+              }
+            }
+            break;
           }
-          break;
-        }
-        case 'session.done':
-          sessionStore.setLoopState('stopped', notif.params.reason);
-          sessionStore.setCanResume(true);
-          msgStore.setStreaming(false);
-          break;
-        case 'session.usage_updated': {
-          const p = notif.params;
-          if (p && p.cumulative) {
-            const used = (p.cumulative.prompt_tokens || 0)
-              + (p.cumulative.cache_read_input_tokens || 0)
-              + (p.cumulative.cache_creation_input_tokens || 0);
-            sessionStore.setContextUsage(used, p.context_window || 0);
-            sessionStore.setUsage(p.cumulative, sessionStore.sessionCost);
+          case 'session.ask_cancelled': {
+            // 校验 ask_id + tool_call_id 后清空 pending（issue 8）
+            const p = notif.params;
+            if (p && p.ask_id && p.tool_call_id) {
+              useAskStore.getState().clearPendingByIds(
+                p.session_id,
+                p.ask_id,
+                p.tool_call_id,
+              );
+            }
+            break;
           }
-          break;
+          case 'session.done':
+            sessionStore.setLoopState('stopped', notif.params.reason);
+            sessionStore.setCanResume(true);
+            msgStore.setStreaming(false);
+            break;
+          case 'session.usage_updated': {
+            const p = notif.params;
+            if (p && p.cumulative) {
+              const used = (p.cumulative.prompt_tokens || 0)
+                + (p.cumulative.cache_read_input_tokens || 0)
+                + (p.cumulative.cache_creation_input_tokens || 0);
+              sessionStore.setContextUsage(used, p.context_window || 0);
+              sessionStore.setUsage(p.cumulative, sessionStore.sessionCost);
+            }
+            break;
+          }
+          case 'error':
+            msgStore.setError(notif.params.message);
+            msgStore.setStreaming(false);
+            break;
         }
-        case 'error':
-          msgStore.setError(notif.params.message);
-          msgStore.setStreaming(false);
-          break;
-      }
-    };
-    c.onNotification(notifHandler);
+      };
+      c.onNotification(notifHandler);
 
+      cleanupFn = () => {
+        c.offNotification(notifHandler);
+        c.close();
+      };
+    }
+
+    // 暴露 setupClient 供设置面板切换远程服务器复用
+    setupClientRef.current = setupClient;
+
+    async function init() {
+      // 1. 优先通过 Tauri 后端自动检测/拉起本地 server
+      try {
+        const info = await invoke<{ url: string; token: string }>('get_server_info');
+        setupClient(info.url, info.token);
+        return;
+      } catch (e) {
+        // 非 Tauri 环境（浏览器）或 server 启动失败 -> 降级到配对串
+        console.warn('Tauri get_server_info failed, falling back to pairing string:', e);
+      }
+
+      // 2. 降级：从 URL 参数或 localStorage 读取配对串（远程 server 场景）
+      const params = new URLSearchParams(window.location.search);
+      const pairingStr = params.get('pairing') || localStorage.getItem('mcoder_pairing') || '';
+      if (!pairingStr) {
+        msgStore.setError('No server available. Install mcoder or pass ?pairing=mcoder://...');
+        return;
+      }
+      const parsed = parsePairingString(pairingStr);
+      if (!parsed) {
+        msgStore.setError('Invalid pairing string.');
+        return;
+      }
+      setupClient(parsed.url, parsed.token);
+    }
+
+    init();
     return () => {
-      c.offNotification(notifHandler);
-      c.close();
+      cancelled = true;
+      cleanupFn?.();
     };
   }, []);
 
@@ -709,6 +743,45 @@ export function App() {
     }
   };
 
+  // 设置面板：切换到远程服务器（复用 setupClient 重建 WsClient）
+  const handleRemoteConnect = (raw: string) => {
+    let url = '';
+    let token = '';
+
+    if (raw.startsWith('mcoder://')) {
+      // Parse mcoder://token@host:port
+      const match = raw.match(/^mcoder:\/\/(.+)@(.+)$/);
+      if (!match) {
+        msgStore.setError('Invalid pairing string');
+        return;
+      }
+      token = match[1];
+      url = `ws://${match[2]}`;
+    } else if (raw.startsWith('ws://') || raw.startsWith('wss://')) {
+      const parts = raw.split(/\s+/);
+      url = parts[0];
+      token = parts[1] || '';
+    }
+
+    if (!url || !token) {
+      msgStore.setError('Usage: mcoder://token@host:port or ws://host:port token');
+      return;
+    }
+
+    // Close old connection
+    client?.close();
+
+    // Reset stores
+    sessionStore.reset();
+    desktop.reset();
+    msgStore.setMessages([]);
+    currentSessionIdRef.current = null;
+
+    // Create new client using setupClient
+    setupClientRef.current?.(url, token);
+    setShowSettings(false);
+  };
+
   const onInputKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -962,6 +1035,29 @@ export function App() {
               <button onClick={() => setShowSettings(false)}>✕</button>
             </div>
             <div className="settings-body">
+              {/* Server Connection section */}
+              <div className="setting-section-title">Server Connection</div>
+              <div className="setting-row">
+                <div className="setting-label">
+                  <span className="setting-name">Remote Server</span>
+                  <span className="setting-desc">Connect to a remote mcoder server</span>
+                </div>
+                <div className="setting-control">
+                  <input
+                    type="text"
+                    className="setting-control-text"
+                    placeholder="mcoder://token@host:port"
+                    value={remoteInput}
+                    onChange={(e) => setRemoteInput(e.target.value)}
+                  />
+                  <button
+                    className="setting-connect-btn"
+                    onClick={() => handleRemoteConnect(remoteInput)}
+                  >
+                    Connect
+                  </button>
+                </div>
+              </div>
               <div className="setting-row">
                 <div className="setting-label">
                   <span className="setting-name">Model</span>

@@ -171,21 +171,13 @@ impl RoleRegistry {
             loop_condition: None,
         });
 
-        // 设计文档 §8.5: 3 个内置子代理角色（workflow 专用）
-        // planner: 规划阶段子代理，只读 + 创建 spec/plan
+        // 设计文档 §8.5: workflow 专用子代理角色
+        // planner: 规划阶段子代理 -- 需要读源码、研究（web/code graph）、写 spec/plan 文件
         self.register(Role {
             name: "planner".into(),
             system_prompt: crate::workflow::prompts::PLANNER_PROMPT.into(),
             model: None,
-            allowed_tools: vec![
-                "read".into(),
-                "ls".into(), "grep".into(),
-                "graph_search".into(), "graph_file_symbols".into(), "graph_index".into(), "graph_relations".into(),
-                "workflow".into(),
-                "plan".into(),
-                "memory".into(),
-                "subagent".into(), // 用于 op=done
-            ],
+            allowed_tools: vec![], // 不限制 -- 需要读写文件、web 搜索、code graph、lsp 等
             max_tokens: None,
             max_iters: Some(20),
             timeout: Some(300),
@@ -204,22 +196,27 @@ impl RoleRegistry {
             loop_condition: None,
         });
 
-        // reviewer: 审查阶段子代理，只读 + 生成 review artifact
+        // reviewer: 审查阶段子代理 -- 需要读源码、git diff、写 review.md、lsp 验证
         self.register(Role {
             name: "reviewer".into(),
             system_prompt: crate::workflow::prompts::REVIEWER_PROMPT.into(),
             model: None,
-            allowed_tools: vec![
-                "read".into(),
-                "ls".into(), "grep".into(),
-                "graph_search".into(), "graph_file_symbols".into(), "graph_index".into(), "graph_relations".into(),
-                "workflow".into(),
-                "memory".into(),
-                "subagent".into(),
-            ],
+            allowed_tools: vec![], // 不限制 -- 需要 git diff、读写文件、code graph、lsp 等
             max_tokens: None,
             max_iters: Some(20),
             timeout: Some(300),
+            loop_condition: None,
+        });
+
+        // codebase-scanner: 棕地项目初始化时扫描代码库，提取行为契约到 specs/
+        self.register(Role {
+            name: "codebase-scanner".into(),
+            system_prompt: crate::workflow::prompts::CODEBASE_SCANNER_PROMPT.into(),
+            model: None,
+            allowed_tools: vec![], // 不限制 -- 需要读源码、写 specs、grep、code graph 等
+            max_tokens: None,
+            max_iters: Some(50),
+            timeout: Some(600),
             loop_condition: None,
         });
 
@@ -281,5 +278,5 @@ impl RoleRegistry {
 /// 内置 role 名列表（设计文档 §3.4 + §8.5）
 /// 包含 7 个核心 role + 3 个 workflow 子代理 role
 pub fn builtin_role_names() -> Vec<&'static str> {
-    vec!["default", "plan", "execute", "review", "goal", "loop", "subagent", "planner", "executor", "reviewer", "vision"]
+    vec!["default", "plan", "execute", "review", "goal", "loop", "subagent", "planner", "executor", "reviewer", "codebase-scanner", "vision"]
 }
