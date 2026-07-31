@@ -9,6 +9,7 @@ import type { MessageTree, MessageTreeNode } from '@mcoder/shared/rpc/types.js';
 import { hydrateSnapshot, type SessionSnapshot } from '@mcoder/shared/rpc/sessionSnapshot.js';
 import { useSessionStore, useMessagesStore } from '@mcoder/shared/store/index.js';
 import { useAskStore } from '@mcoder/shared/ask/index.js';
+import { X } from './icons.js';
 
 interface Props {
   client: WsClient;
@@ -104,7 +105,7 @@ export function TreeView({ client, onClose }: Props) {
       <div className="tree-modal" onClick={(e) => e.stopPropagation()}>
         <div className="tree-modal-header">
           <span className="tree-modal-title">Message Tree</span>
-          <button className="tree-modal-close" onClick={onClose} aria-label="close">×</button>
+          <button className="tree-modal-close" onClick={onClose} aria-label="close"><X size={18} /></button>
         </div>
         <div className="tree-modal-body">
           {loading && !tree && <div className="tree-modal-empty">Loading...</div>}

@@ -15,7 +15,7 @@ export function TaskMonitor() {
     <Box flexDirection="column" paddingX={1} borderStyle="single" borderColor={TUI_COLORS.textMuted}>
       <Box>
         <Text bold color={TUI_COLORS.accent}>Background Tasks</Text>
-        <Text color={TUI_COLORS.textMuted}> · {tasks.length}{interruptedCount > 0 ? ` · ${interruptedCount} interrupted` : ''}</Text>
+        <Text color={TUI_COLORS.textMuted}>{` ${PREFIX.sep} ${tasks.length}${interruptedCount > 0 ? ` ${PREFIX.sep} ${interruptedCount} interrupted` : ''}`}</Text>
       </Box>
       {tasks.length === 0 ? (
         <Text color={TUI_COLORS.textMuted}>empty</Text>
@@ -45,7 +45,7 @@ export function TaskMonitor() {
               {isInterrupted && task.args_json != null && (
                 <Text color={TUI_COLORS.textMuted} wrap="truncate-end">
                   {'  '}args: {JSON.stringify(task.args_json).slice(0, 80)}
-                  {task.error ? ` · error: ${task.error}` : ''}
+                  {task.error ? ` ${PREFIX.sep} error: ${task.error}` : ''}
                 </Text>
               )}
             </Box>

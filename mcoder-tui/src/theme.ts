@@ -36,6 +36,10 @@ export const PREFIX = {
   setting: '⚙',
   loading: '·',
   error: '✗',
+  thinking: '⚙',  // 思考深度图标（统一用 setting 前缀）
+  expanded: '▾',     // 折叠展开（折角朝下）
+  selected: '▸',     // 列表/选项被选中（语义化别名，与 pending 同字符）
+  sep: '·',          // 标签分隔符（与 textMuted/loading 区分用途）
 } as const;
 
 /// DESIGN.md §5: 间距节奏（8 倍数）

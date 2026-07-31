@@ -3,13 +3,14 @@
 
 use crate::llm::retry::{self, RetryError};
 use crate::llm::{LLMAdapter, LLMEvent, LLMResponse, Usage};
-use crate::types::{ContentBlock, Message, ModelConfig, ToolCall, ToolSchema};
+use crate::types::{ContentBlock, Message, ModelConfig, ThinkingDepth, ToolCall, ToolSchema};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use base64::Engine;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 
 /// Anthropic Messages API adapter (/v1/messages)
 /// Uses x-api-key header + anthropic-version header
@@ -210,6 +211,56 @@ impl AnthropicAdapter {
     }
 }
 
+/// M1 修复: 抽 build_request helper + 统一 thinking_to_native
+/// M2 修复: extra 字段冲突时忽略
+fn build_anthropic_body(
+    config: &ModelConfig,
+    msgs: Vec<AnthropicMessage>,
+    system: Option<Vec<AnthropicContent>>,
+    tools: Option<Vec<AnthropicTool>>,
+    stream: bool,
+) -> serde_json::Value {
+    use serde_json::json;
+    // L3 修复: Anthropic max_tokens 默认 4096
+    let max_tokens = config.max_tokens.unwrap_or(4096);
+    let mut body = json!({
+        "model": config.name,
+        "messages": msgs,
+        "system": system,
+        "tools": tools,
+        "max_tokens": max_tokens,
+        "temperature": config.temperature,
+        "stream": stream,
+        "top_p": config.top_p,
+        "top_k": config.top_k,
+        "stop_sequences": config.stop,
+    });
+    let body_obj = body.as_object_mut().unwrap();
+    if let Some(depth) = config.thinking_depth {
+        for (k, v) in crate::types::thinking_to_native("anthropic", depth) {
+            body_obj.insert(k.to_string(), v);
+        }
+        // L3: Anthropic max_tokens 必须 > budget_tokens
+        if let Some(budget) = body_obj.get("thinking")
+            .and_then(|t| t.get("budget_tokens"))
+            .and_then(|v| v.as_u64())
+        {
+            if (budget as u32) >= max_tokens {
+                tracing::warn!(
+                    "thinking.budget_tokens ({budget}) >= max_tokens ({max_tokens}); may be rejected by API"
+                );
+            }
+        }
+    }
+    let body_keys: std::collections::HashSet<String> = body_obj.keys().cloned().collect();
+    for (k, v) in &config.extra {
+        if !body_keys.contains(k) {
+            body_obj.insert(k.clone(), v.clone());
+        }
+    }
+    body
+}
+
 #[async_trait]
 impl LLMAdapter for AnthropicAdapter {
     fn name(&self) -> &str {
@@ -228,16 +279,13 @@ impl LLMAdapter for AnthropicAdapter {
     ) -> Result<LLMResponse> {
         let (system, msgs) = Self::build_messages(messages);
 
-        let body = AnthropicRequest {
-            model: config.name.clone(),
-            messages: msgs,
+        let body_value = build_anthropic_body(
+            config,
+            msgs,
             system,
-            tools: if tools.is_empty() { None } else { Some(Self::build_tools(tools)) },
-            max_tokens: config.max_tokens.unwrap_or(4096),
-            temperature: config.temperature,
-            stream: false,
-        };
-        let body_value = serde_json::to_value(&body).context("serializing Anthropic request")?;
+            if tools.is_empty() { None } else { Some(Self::build_tools(tools)) },
+            false,
+        );
         let url = self.build_url();
         let api_key = self.config.api_key.clone();
         let client = self.client.clone();
@@ -319,22 +367,20 @@ impl LLMAdapter for AnthropicAdapter {
     ) -> Result<()> {
         let (system, msgs) = Self::build_messages(messages);
 
-        let body = AnthropicRequest {
-            model: config.name.clone(),
-            messages: msgs,
+        let body_value = build_anthropic_body(
+            config,
+            msgs,
             system,
-            tools: if tools.is_empty() { None } else { Some(Self::build_tools(tools)) },
-            max_tokens: config.max_tokens.unwrap_or(4096),
-            temperature: config.temperature,
-            stream: true,
-        };
+            if tools.is_empty() { None } else { Some(Self::build_tools(tools)) },
+            true,
+        );
 
         let resp = self
             .client
             .post(self.build_url())
             .header("x-api-key", &self.config.api_key)
             .header("anthropic-version", "2023-06-01")
-            .json(&body)
+            .json(&body_value)
             .send()
             .await
             .context("sending Anthropic stream request")?;
@@ -452,19 +498,9 @@ impl LLMAdapter for AnthropicAdapter {
     }
 }
 
-#[derive(Serialize)]
-struct AnthropicRequest {
-    model: String,
-    messages: Vec<AnthropicMessage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<Vec<AnthropicContent>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<AnthropicTool>>,
-    max_tokens: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f32>,
-    stream: bool,
-}
+// 注意: AnthropicRequest 已被 build_anthropic_body (serde_json::Value) 取代，
+// 保留为设计文档 §7.2 forward-looking scaffolding，待流式结构稳定后启用。
+// 此处不再重复定义，避免与 build_anthropic_body 产生双源真相。
 
 #[derive(Serialize, Deserialize)]
 struct AnthropicMessage {

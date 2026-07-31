@@ -24,7 +24,7 @@ export function AskUserCard({ request, selections, focusIndex }: Props) {
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={ROLE_COLOR.interaction} paddingX={1} marginY={1}>
       <Text color={ROLE_COLOR.interaction} bold>
-        {PREFIX.pending} ask_user · 等待输入
+        {`${PREFIX.pending} ask_user ${PREFIX.sep} 等待输入`}
       </Text>
       {request.questions.map((q, i) => {
         const sel = selections?.[i] || [];
@@ -40,7 +40,7 @@ export function AskUserCard({ request, selections, focusIndex }: Props) {
               return (
                 <Text key={j} color={checked ? TUI_COLORS.success : TUI_COLORS.textSecondary}>
                   {'     '}[{j + 1}] {checked ? '●' : '○'} {opt.label}
-                  {opt.description ? ` · ${opt.description}` : ''}
+                  {opt.description ? ` ${PREFIX.sep} ${opt.description}` : ''}
                 </Text>
               );
             })}
@@ -65,7 +65,7 @@ export function AskUserSummary({
   const text = formatAskFullSummary(request, submission as any);
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={ROLE_COLOR.done} paddingX={1} marginY={1}>
-      <Text color={TUI_COLORS.textMuted} bold>ask_user · 已回答</Text>
+      <Text color={TUI_COLORS.textMuted} bold>{`ask_user ${PREFIX.sep} 已回答`}</Text>
       {text.split('\n').map((line, k) => (
         <Text key={k} color={TUI_COLORS.textPrimary}>{'  '}{line}</Text>
       ))}

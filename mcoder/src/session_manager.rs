@@ -248,6 +248,10 @@ pub struct SessionManager {
     lsp_diag_store: Arc<crate::lsp::PendingDiagnosticsStore>,
     /// launch 工具：全局后台进程管理器（跨 session 共享）
     launch_manager: crate::tools::launch::LaunchManager,
+    /// S2 修复: session-level thinking_depth override（不持久化）
+    /// key = session_id, value = 覆盖的 ThinkingDepth
+    /// 每次 LLM 调用前由 build_session_model_config 应用
+    session_thinking_overrides: RwLock<HashMap<String, crate::types::ThinkingDepth>>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -535,6 +539,7 @@ impl SessionManager {
                 launch_event_tx,
                 launch_config,
             ),
+            session_thinking_overrides: RwLock::new(HashMap::new()),
         })
     }
 
@@ -3523,6 +3528,7 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
             api_key,
             models,
             enabled: true,
+            model_params: Default::default(),
         });
         crate::config::save_config(&new_config)?;
         *guard = new_config;
@@ -3656,6 +3662,93 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
                 "hint": "cannot reach server; check network and base_url",
             })),
         }
+    }
+
+    /// config.set_model_params - 设置 per-model 参数
+    /// 写入 ProviderConfig.model_params，持久化到 config.toml
+    pub async fn set_model_params(
+        self: &Arc<Self>,
+        provider: String,
+        model: String,
+        params: crate::types::ModelParams,
+    ) -> Result<()> {
+        let mut guard = self.config.write().await;
+        let mut new_config = (*guard).clone();
+        let p = new_config.providers.get_mut(&provider)
+            .ok_or_else(|| anyhow::anyhow!("provider '{provider}' not found"))?;
+        p.model_params.insert(model, params);
+        crate::config::save_config(&new_config)?;
+        *guard = new_config;
+        drop(guard);
+        self.broadcast_config_updated("set_model_params").await;
+        Ok(())
+    }
+
+    /// config.get_model_params - 读取 per-model 参数
+    pub fn get_model_params(&self, provider: &str, model: &str) -> crate::types::ModelParams {
+        self.current_config()
+            .providers.get(provider)
+            .and_then(|p| p.model_params.get(model))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// config.get_protocol_schema - 返回协议参数 schema（供 UI 渲染控件）
+    pub fn get_protocol_schema(&self, protocol: &str) -> serde_json::Value {
+        crate::types::protocol_schema(protocol)
+    }
+
+    /// config.quick_thinking - 快捷切换当前 session 模型的思考深度
+/// S1 修复: 拒绝 streaming 中的切换（防止旧 task 与新 adapter 并存造成 tool_use id 撞车）
+/// S2 修复: 临时覆盖存到 session-level override map，不污染 agent.model_config，
+///         解决下次 hydrate 时丢失的问题（每次 LLM 调用都从 override 重新合成）
+pub async fn quick_thinking(
+        self: &Arc<Self>,
+        session_id: &str,
+        depth: crate::types::ThinkingDepth,
+    ) -> Result<()> {
+        let entry = {
+            let sessions = self.sessions.read().await;
+            sessions.get(session_id).cloned()
+                .ok_or_else(|| anyhow::anyhow!("session '{session_id}' not found"))?
+        };
+        // S1: 拒绝 streaming 中的切换（防止旧 adapter 与新 adapter 并存）
+        if entry.loop_running.load(std::sync::atomic::Ordering::SeqCst) {
+            anyhow::bail!("cannot change thinking depth while agent loop is running; wait for current request to finish");
+        }
+        // S2: 用 session-level override map 存，不修改 agent.model_config
+        let mut overrides = self.session_thinking_overrides.write().await;
+        if depth == crate::types::ThinkingDepth::None {
+            overrides.remove(session_id);
+        } else {
+            overrides.insert(session_id.to_string(), depth);
+        }
+        // 重建 adapter 并 set_model，使下一次 LLM 调用使用新参数
+        let mut agent = entry.session.lock().await;
+        let new_config = self.build_session_model_config(&agent);
+        let new_llm = create_adapter(&new_config)?;
+        agent.set_model(std::sync::Arc::new(new_config), new_llm)?;
+        Ok(())
+    }
+
+    /// S2 修复: 构造 session 当前生效的 ModelConfig（合并 provider 默认 + override）
+    /// agent.model_config 是 provider 默认值；session override 只覆盖 thinking_depth。
+    /// 这个函数把两者合并，确保 adapter 总是用最新配置。
+    fn build_session_model_config(&self, agent: &crate::agent::AgentSession) -> crate::types::ModelConfig {
+        let mut cfg = (*agent.model_config).clone();
+        let sid = agent.session.id();
+        if let Ok(overrides) = self.session_thinking_overrides.try_read() {
+            if let Some(depth) = overrides.get(sid) {
+                cfg.thinking_depth = Some(*depth);
+            }
+        }
+        cfg
+    }
+
+    /// S2 修复: 读取 session 的思考深度 override
+    pub async fn get_session_thinking(&self, session_id: &str) -> Option<crate::types::ThinkingDepth> {
+        let overrides = self.session_thinking_overrides.read().await;
+        overrides.get(session_id).copied()
     }
 
     /// config.list_models_protocols - 列出支持的协议

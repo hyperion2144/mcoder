@@ -5,6 +5,10 @@
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import {
+  Brain, ChevronDown, ArrowLeft, Settings, X, Check, CircleDot, Circle,
+  CornerDownRight,
+} from 'lucide-react';
 import { WsClient } from '@mcoder/shared/rpc/client.js';
 import { useSessionStore, useMessagesStore } from '@mcoder/shared/store/index.js';
 import { dispatchSlashCommand } from '@mcoder/shared/commands/index.js';
@@ -158,7 +162,7 @@ function MessageItem({
           })}
         </div>
         {msg.role === 'assistant' && msg.usage && formatUsageDelta(msg.usage) && (
-          <div className="message-usage">↳ {formatUsageDelta(msg.usage)}</div>
+          <div className="message-usage"><CornerDownRight size={12} /> {formatUsageDelta(msg.usage)}</div>
         )}
       </div>
     </div>
@@ -206,6 +210,8 @@ export function App() {
   const [pendingImages, setPendingImages] = useState<{data: string; media_type: string; name: string; preview: string}[]>([]);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [availableModels, setAvailableModels] = useState<{name: string; description?: string; model?: string; context_window?: number}[]>([]);
+  const [currentThinking, setCurrentThinking] = useState('none');
+  const [showThinkingDropdown, setShowThinkingDropdown] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'general' | 'providers'>('general');
   const [remoteInput, setRemoteInput] = useState('');
@@ -736,6 +742,9 @@ export function App() {
     try {
       await client.request('session.model.set', { session_id: currentSessionId, model: modelName });
       sessionStore.setModel(modelName);
+      // 切模型后 thinking depth 默认重置为 'none'：不同模型对 thinking 的支持不同，
+      // 旧 depth 可能对新模型无效，由用户主动重新选择。
+      setCurrentThinking('none');
     } catch (e: any) {
       msgStore.setError(`set model failed: ${e.message}`);
     }
@@ -764,6 +773,21 @@ export function App() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showSettings]);
+
+  // S1: 点击 dropdown 之外的区域关闭 thinking dropdown（替代之前的 fixed inset:0 backdrop，
+  // 那个 backdrop 会拦截输入区点击）。点击 status-thinking 自身不触发关闭（已 stopPropagation）。
+  useEffect(() => {
+    if (!showThinkingDropdown) return;
+    const handleMouseDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('.thinking-dropdown')) return;
+      if (target.closest('.status-thinking')) return;
+      setShowThinkingDropdown(false);
+    };
+    window.addEventListener('mousedown', handleMouseDown);
+    return () => window.removeEventListener('mousedown', handleMouseDown);
+  }, [showThinkingDropdown]);
 
   const handleConfigSet = async (key: string, value: any) => {
     if (!client) return;
@@ -870,14 +894,18 @@ export function App() {
         <div className="header-traffic-light" data-tauri-drag-region aria-hidden />
         <span className="header-title" data-tauri-drag-region>mcoder</span>
         <span className={`header-status ${connected ? 'connected' : 'disconnected'}`}>
-          {connected ? '●' : '○'}
+          {connected
+            ? <CircleDot size={14} color="var(--success)" />
+            : <Circle size={14} color="var(--error)" />}
         </span>
         <button className="header-settings" onClick={() => setShowSettings(true)} title="Settings">
-          ⚙
+          <Settings size={16} />
         </button>
         {view === 'sessions' && currentProject && (
           <>
-            <button className="header-back" onClick={handleBack} title="Back to projects">←</button>
+            <button className="header-back" onClick={handleBack} title="Back to projects">
+              <ArrowLeft size={16} />
+            </button>
             <span className="header-project" title={currentProject}>
               {currentProject.split('/').pop() || currentProject}
             </span>
@@ -1001,12 +1029,14 @@ export function App() {
               </div>
               <div className="bottom-status">
                 <span className={`status-dot ${connected ? 'connected' : 'disconnected'}`}>
-                  {connected ? '●' : '○'}
+                  {connected
+                    ? <CircleDot size={14} color="var(--success)" />
+                    : <Circle size={14} color="var(--error)" />}
                 </span>
                 {currentRole !== 'default' && <span className="status-role">{currentRole}</span>}
                 {currentModel && (
                   <span className="status-model" onClick={handleModelClick} style={{ cursor: 'pointer' }}>
-                    {currentModel} ▾
+                    {currentModel} <ChevronDown size={12} />
                   </span>
                 )}
                 {showModelDropdown && (
@@ -1019,6 +1049,38 @@ export function App() {
                       >
                         <span className="model-option-name">{m.name}</span>
                         {m.model && <span className="model-option-desc">{m.model}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {currentThinking !== 'none' && (
+                  <span className="status-thinking" onClick={(e) => { e.stopPropagation(); setShowThinkingDropdown(!showThinkingDropdown); }}>
+                    <Brain size={14} /> {currentThinking}
+                  </span>
+                )}
+                {currentThinking === 'none' && (
+                  <span className="status-thinking off" onClick={(e) => { e.stopPropagation(); setShowThinkingDropdown(!showThinkingDropdown); }}>
+                    <Brain size={14} />
+                  </span>
+                )}
+                {showThinkingDropdown && (
+                  <div className="thinking-dropdown">
+                    {['none', 'low', 'medium', 'high', 'max'].map((d) => (
+                      <div
+                        key={d}
+                        className={`thinking-option ${d === currentThinking ? 'thinking-option-active' : ''}`}
+                        onClick={async () => {
+                          try {
+                            if (!client) return;
+                            await client.request('config.quick_thinking', { session_id: currentSessionId, depth: d });
+                            setCurrentThinking(d);
+                            setShowThinkingDropdown(false);
+                          } catch (e: any) { console.error(e); }
+                        }}
+                      >
+                        <Brain size={14} />
+                        <span className="thinking-option-name">{d === 'none' ? 'Off' : d.charAt(0).toUpperCase() + d.slice(1)}</span>
+                        {d === currentThinking && <Check size={12} className="thinking-option-check" />}
                       </div>
                     ))}
                   </div>
@@ -1064,7 +1126,9 @@ export function App() {
                   <div className="file-preview">
                     <div className="file-preview-header">
                       <span className="file-preview-path">{previewFile.path}</span>
-                      <button className="file-preview-close" onClick={() => { setRightPanel('none'); setPreviewFile(null); }}>×</button>
+                      <button className="file-preview-close" onClick={() => { setRightPanel('none'); setPreviewFile(null); }}>
+                        <X size={14} />
+                      </button>
                     </div>
                     <pre className="file-preview-content">{previewFile.content}</pre>
                   </div>
@@ -1088,7 +1152,9 @@ export function App() {
                 <button className={settingsTab === 'general' ? 'tab active' : 'tab'} onClick={() => setSettingsTab('general')}>General</button>
                 <button className={settingsTab === 'providers' ? 'tab active' : 'tab'} onClick={() => setSettingsTab('providers')}>Providers</button>
               </div>
-              <button onClick={() => setShowSettings(false)}>✕</button>
+              <button onClick={() => setShowSettings(false)}>
+                <X size={16} />
+              </button>
             </div>
             <div className="settings-body">
               {settingsTab === 'providers' && client && (
@@ -1132,7 +1198,7 @@ export function App() {
                 </div>
                 <div className="setting-control">
                   <button className="setting-model-btn" onClick={() => { setShowSettings(false); handleModelClick(); }}>
-                    {currentModel || '(not set)'} ▾
+                    {currentModel || '(not set)'} <ChevronDown size={12} />
                   </button>
                 </div>
               </div>

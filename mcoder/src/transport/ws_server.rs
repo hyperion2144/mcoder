@@ -9,6 +9,67 @@ use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::protocol::Message;
 
+/// S3 修复: 应用单个字段到 ModelParams（部分更新场景）
+/// value 必须是有效 JSON（不能是 null）；null 由调用方在 patch 循环里 skip
+fn apply_param_to_model_params(params: &mut crate::types::ModelParams, key: &str, value: &serde_json::Value) {
+    use crate::types::{ThinkingDepth, ModelParams};
+    match key {
+        "thinking_depth" => {
+            if value.is_null() {
+                params.thinking_depth = None;
+            } else if let Some(s) = value.as_str() {
+                params.thinking_depth = match s {
+                    "none" => Some(ThinkingDepth::None),
+                    "low" => Some(ThinkingDepth::Low),
+                    "medium" => Some(ThinkingDepth::Medium),
+                    "high" => Some(ThinkingDepth::High),
+                    "max" => Some(ThinkingDepth::Max),
+                    _ => params.thinking_depth, // 未知值保留现状
+                };
+            }
+        }
+        "temperature" => params.temperature = value.as_f64().map(|v| v as f32),
+        "max_tokens" => params.max_tokens = value.as_u64().map(|v| v as u32),
+        "top_p" => params.top_p = value.as_f64().map(|v| v as f32),
+        "top_k" => params.top_k = value.as_u64().map(|v| v as u32),
+        "frequency_penalty" => params.frequency_penalty = value.as_f64().map(|v| v as f32),
+        "presence_penalty" => params.presence_penalty = value.as_f64().map(|v| v as f32),
+        "stop" => {
+            if value.is_null() {
+                params.stop = Vec::new();
+            } else if let Some(arr) = value.as_array() {
+                params.stop = arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect();
+            }
+        }
+        "context_window" => params.context_window = value.as_u64().map(|v| v as u32),
+        "input" => {
+            if value.is_null() {
+                params.input = Vec::new();
+            } else if let Some(arr) = value.as_array() {
+                params.input = arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect();
+            }
+        }
+        "extra" => {
+            if value.is_null() {
+                params.extra = std::collections::HashMap::new();
+            } else if let Some(obj) = value.as_object() {
+                params.extra = obj.iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+            }
+        }
+        _ => {
+            // 未知字段：静默忽略
+            let _ = params; // 抑制 unused 警告
+            let _ = ModelParams::default(); // 保持引用以防未使用
+        }
+    }
+}
+
 /// 设计文档 §5.6: 心跳与超时
 /// 客户端每 30s 发 ping，server 回 pong
 /// 60s 无任何消息 → server 视为断开
@@ -949,6 +1010,80 @@ async fn handle_request(
             let name = p["name"].as_str().unwrap_or("").to_string();
             match mgr.test_provider(name).await {
                 Ok(v) => JsonRpcResponse::ok(req.id, v),
+                Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+            }
+        }
+        "config.set_model_params" => {
+            // S3+S4 修复: 区分 absent（key 不存在）vs explicit null
+            // absent: 用该 provider/model 的现有 ModelParams（部分更新）
+            // explicit null params: 删除该 provider/model 的 ModelParams（重置）
+            // 都缺: 当作"重置为空"
+            let p = req.params.unwrap_or_default();
+            let provider = p["provider"].as_str().unwrap_or("").to_string();
+            let model = p["model"].as_str().unwrap_or("").to_string();
+            // 显式 null params -> 删除；absent -> 部分更新；非 null -> 替换
+            let result = async {
+                if p.get("params").map(|v| v.is_null()).unwrap_or(true) {
+                    // params 是 null 或 absent：先读现有 params
+                    let mut current = mgr.get_model_params(&provider, &model);
+                    // 然后 apply p.params 作为 patch（absent 表示保留）
+                    if let Some(params_val) = p.get("params") {
+                        if let Some(obj) = params_val.as_object() {
+                            for (k, v) in obj {
+                                if !v.is_null() {
+                                    apply_param_to_model_params(&mut current, k, v);
+                                }
+                                // v.is_null() 表示显式置 null：保留当前值（不做操作）
+                            }
+                        }
+                    }
+                    mgr.set_model_params(provider, model, current).await
+                } else {
+                    // params 是完整对象 -> 替换
+                    let params: crate::types::ModelParams = serde_json::from_value(p["params"].clone())
+                        .map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
+                    mgr.set_model_params(provider, model, params).await
+                }
+            }.await;
+            match result {
+                Ok(_) => JsonRpcResponse::ok(req.id, serde_json::json!({"set": true})),
+                Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+            }
+        }
+        "config.get_model_params" => {
+            let p = req.params.unwrap_or_default();
+            let provider = p["provider"].as_str().unwrap_or("");
+            let model = p["model"].as_str().unwrap_or("");
+            let params = mgr.get_model_params(provider, model);
+            JsonRpcResponse::ok(req.id, serde_json::to_value(&params).unwrap_or_default())
+        }
+        "config.get_protocol_schema" => {
+            let p = req.params.unwrap_or_default();
+            let protocol = p["protocol"].as_str().unwrap_or("");
+            let schema = mgr.get_protocol_schema(protocol);
+            JsonRpcResponse::ok(req.id, schema)
+        }
+        "config.quick_thinking" => {
+            let p = req.params.unwrap_or_default();
+            let session_id = p["session_id"].as_str().unwrap_or("").to_string();
+            let depth_str = p["depth"].as_str().unwrap_or("none");
+            let depth = match depth_str {
+                "low" => crate::types::ThinkingDepth::Low,
+                "medium" => crate::types::ThinkingDepth::Medium,
+                "high" => crate::types::ThinkingDepth::High,
+                "max" => crate::types::ThinkingDepth::Max,
+                _ => crate::types::ThinkingDepth::None,
+            };
+            match mgr.quick_thinking(&session_id, depth).await {
+                Ok(_) => {
+                    // S2: 返回当前生效的 depth（让 UI 同步状态）
+                    let applied = mgr.get_session_thinking(&session_id).await;
+                    JsonRpcResponse::ok(req.id, serde_json::json!({
+                        "applied": true,
+                        "depth": depth_str,
+                        "current": applied.map(|d| format!("{:?}", d).to_lowercase()).unwrap_or_else(|| "none".to_string()),
+                    }))
+                }
                 Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
             }
         }

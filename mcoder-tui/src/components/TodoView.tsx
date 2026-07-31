@@ -14,7 +14,7 @@ export function TodoView() {
     <Box flexDirection="column" paddingX={1} borderStyle="single" borderColor={TUI_COLORS.textMuted}>
       <Box>
         <Text bold color={TUI_COLORS.accent}>Todos</Text>
-        <Text color={TUI_COLORS.textMuted}> · {unfinished.length} unfinished</Text>
+        <Text color={TUI_COLORS.textMuted}>{` ${PREFIX.sep} ${unfinished.length} unfinished`}</Text>
       </Box>
       {!pendingTodos || pendingTodos.length === 0 ? (
         <Text color={TUI_COLORS.textMuted}>empty</Text>

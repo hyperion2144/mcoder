@@ -14,6 +14,7 @@ import {
   PLATFORM_MOBILE,
   type TodoItem,
 } from '@mcoder/shared/todo/summary.js';
+import { ChevronUp, ChevronDown, Play, Square } from './icons.js';
 
 export function TodoSummaryBar() {
   const todos = useSessionStore((s) => s.pendingTodos);
@@ -35,14 +36,14 @@ export function TodoSummaryBar() {
         <span className="todo-summary-count">
           {view.totalUnfinished} unfinished
           {canExpand && (
-            <span className="todo-summary-toggle">{expanded ? ' ▲' : ' ▼'}</span>
+            <span className="todo-summary-toggle">{expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}</span>
           )}
         </span>
       </div>
       <ul className="todo-summary-list">
         {view.visible.map((t) => (
           <li key={t.id} className={`todo-summary-item todo-status-${t.status}`}>
-            <span className="todo-summary-icon">{t.status === 'in_progress' ? '▶' : '☐'}</span>
+            <span className="todo-summary-icon">{t.status === 'in_progress' ? <Play size={14} /> : <Square size={14} />}</span>
             <span className="todo-summary-text">{t.content}</span>
           </li>
         ))}

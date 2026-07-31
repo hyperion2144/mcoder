@@ -37,7 +37,7 @@ export function PlanApproval({ client }: Props) {
 
   return (
     <Box paddingX={1} borderStyle="round" borderColor={ROLE_COLOR.interaction} flexDirection="column">
-      <Text color={ROLE_COLOR.interaction} bold>{PREFIX.pending} plan · 等待审批</Text>
+      <Text color={ROLE_COLOR.interaction} bold>{`${PREFIX.pending} plan ${PREFIX.sep} 等待审批`}</Text>
       <Box flexDirection="column" marginY={0}>
         {Array.isArray(pendingPlan.steps) ? (
           pendingPlan.steps.map((step: any, i: number) => (

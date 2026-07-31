@@ -52,7 +52,7 @@ export function ResumeBar({ sessionId }: Props) {
     <Box paddingX={1} borderStyle="single" borderColor={TUI_COLORS.textMuted} flexDirection="column">
       <Box>
         <Text color={color} bold>{prefix} {label}</Text>
-        <Text color={TUI_COLORS.textMuted}> · {entry.reason}</Text>
+        <Text color={TUI_COLORS.textMuted}>{` ${PREFIX.sep} ${entry.reason}`}</Text>
       </Box>
     </Box>
   );

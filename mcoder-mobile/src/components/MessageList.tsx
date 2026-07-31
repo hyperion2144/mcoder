@@ -13,6 +13,7 @@ import { ASK_USER_TOOL } from '@mcoder/shared/ask/types.js';
 const PERMISSION_TOOL_NAME = '__permission_pending__';
 import { ToolCard } from '@mcoder/shared/toolCard/ToolCardHtml.js';
 import { formatUsageDelta } from '@mcoder/shared/utils/format.js';
+import { CornerDownRight } from './icons.js';
 
 interface Props {
   messages: Message[];
@@ -151,7 +152,7 @@ export function MessageList({ messages, streaming, error, pendingCount, client, 
           <div className="message-body">
             {msg.content.map((block: any, j: number) => renderBlock(block, j))}
             {msg.role === 'assistant' && msg.usage && (
-              <div className="message-usage">↳ {formatUsageDelta(msg.usage)}</div>
+              <div className="message-usage"><CornerDownRight size={12} /> {formatUsageDelta(msg.usage)}</div>
             )}
           </div>
         </div>

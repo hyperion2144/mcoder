@@ -9,6 +9,7 @@ import {
 } from '@mcoder/shared/resume/state.js';
 import { useSessionStore, useMessagesStore } from '@mcoder/shared/store/index.js';
 import type { WsClient } from '@mcoder/shared/rpc/client.js';
+import { Play } from './icons.js';
 
 interface Props {
   client: WsClient | null;
@@ -37,11 +38,11 @@ export function ResumeBar({ client, sessionId }: Props) {
 
   if (!hasResumeEntry(entry)) return null;
 
-  const label = entry.kind === 'auto_resume'
-    ? '▸ Resume (auto)'
+  const labelKind = entry.kind === 'auto_resume'
+    ? 'Resume (auto)'
     : entry.kind === 'requires_input'
-      ? '▸ Resume (waiting)'
-      : '▸ Resume (ask)';
+      ? 'Resume (waiting)'
+      : 'Resume (ask)';
 
   const onClick = async () => {
     if (!client || !sessionId || busy) return;
@@ -72,7 +73,7 @@ export function ResumeBar({ client, sessionId }: Props) {
         disabled={busy}
         title={entry.reason}
       >
-        {label}
+        <Play size={12} /> {labelKind}
       </button>
     </div>
   );

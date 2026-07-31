@@ -33,7 +33,7 @@ function formatToolArgs(args: unknown): string {
     const full = JSON.stringify(obj);
     return full.length > 200 ? full.slice(0, 200) + '...' : full;
   }
-  return parts.join(' · ');
+  return parts.join(` ${PREFIX.sep} `);
 }
 
 /** pending 状态：交互卡片 */
@@ -43,7 +43,7 @@ export function PermissionCard({ request }: Props) {
     <Box flexDirection="column" borderStyle="round" borderColor={ROLE_COLOR.interaction} paddingX={1} marginY={1}>
       <Box>
         <Text color={ROLE_COLOR.interaction} bold>{PREFIX.approval} permission</Text>
-        <Text color={badge.color} bold> · [{badge.text}] · 等待确认</Text>
+        <Text color={badge.color} bold>{` ${PREFIX.sep} [${badge.text}] ${PREFIX.sep} 等待确认`}</Text>
       </Box>
       <Box marginTop={1} flexDirection="column">
         <Text color={TUI_COLORS.textPrimary}>{'  '}tool: <Text color={TUI_COLORS.accent} bold>{request.tool_name}</Text></Text>
@@ -51,7 +51,7 @@ export function PermissionCard({ request }: Props) {
         <Text color={TUI_COLORS.warning}>{'  '}reason: {request.reason}</Text>
       </Box>
       <Box marginTop={1} flexDirection="column">
-        <Text color={TUI_COLORS.textMuted}>{'  '}[A] allow · [D] deny · [Y] always allow · [Esc] deny</Text>
+        <Text color={TUI_COLORS.textMuted}>{`  [A] allow ${PREFIX.sep} [D] deny ${PREFIX.sep} [Y] always allow ${PREFIX.sep} [Esc] deny`}</Text>
       </Box>
     </Box>
   );
@@ -71,7 +71,7 @@ export function PermissionSummary({
   const color = decision === 'deny' ? TUI_COLORS.error : TUI_COLORS.success;
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={ROLE_COLOR.done} paddingX={1} marginY={1}>
-      <Text color={TUI_COLORS.textMuted} bold>permission · {label}</Text>
+      <Text color={TUI_COLORS.textMuted} bold>{`permission ${PREFIX.sep} ${label}`}</Text>
       <Text color={TUI_COLORS.textSecondary}>{'  '}tool: {request.tool_name}</Text>
       <Text color={color}>{'  '}decision: {label}</Text>
     </Box>

@@ -2,6 +2,7 @@
 // 显示当前 todo 列表，已完成/未完成状态
 
 import React from 'react';
+import { Check, Square } from './icons.js';
 
 interface Props {
   todos: any[] | null;
@@ -30,7 +31,7 @@ export function TodoPanel({ todos }: Props) {
           const isDone = todo.done || todo.status === 'done';
           return (
             <li key={i} className={`todo-item ${isDone ? 'todo-done' : ''}`}>
-              <span className="todo-check">{isDone ? '✓' : '☐'}</span>
+              <span className="todo-check">{isDone ? <Check size={14} /> : <Square size={14} />}</span>
               <span className="todo-text">
                 {todo.text || todo.description || JSON.stringify(todo)}
               </span>

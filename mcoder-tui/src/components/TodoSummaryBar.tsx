@@ -25,7 +25,7 @@ export function TodoSummaryBar({ platform = PLATFORM_TUI }: Props) {
     <Box flexDirection="column" paddingX={1} borderStyle="single" borderColor={TUI_COLORS.textMuted}>
       <Box>
         <Text bold color={TUI_COLORS.accent}>Todos</Text>
-        <Text color={TUI_COLORS.textMuted}> · {view.totalUnfinished} unfinished</Text>
+        <Text color={TUI_COLORS.textMuted}>{` ${PREFIX.sep} ${view.totalUnfinished} unfinished`}</Text>
       </Box>
       {view.visible.map((t) => {
         const color = t.status === 'in_progress' ? TUI_COLORS.accent : TUI_COLORS.textPrimary;

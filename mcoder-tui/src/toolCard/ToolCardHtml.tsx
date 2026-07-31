@@ -11,6 +11,7 @@ import {
   type FoldState,
 } from './meta.js';
 import type { ContentBlock } from '../rpc/types.js';
+import { PREFIX } from '../theme.js';
 
 /** DESIGN.md §3: 角色色（5 类统一为 4 类） */
 const ROLE_BORDER: Record<'execution' | 'thinking' | 'done' | 'error', string> = {
@@ -109,7 +110,7 @@ export function ToolCard({ block, resultBlock }: ToolCardProps) {
         style={{ color: status === 'loading' ? undefined : titleColor }}
       >
         <span className="tool-card-fold-icon">
-          {fold === 'collapsed' ? '▸' : '▾'}
+          {fold === 'collapsed' ? PREFIX.selected : PREFIX.expanded}
         </span>
         <span className="tool-card-title-text">
           {STATUS_PREFIX[status]} {meta.title}

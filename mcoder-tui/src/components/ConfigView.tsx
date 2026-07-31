@@ -4,7 +4,7 @@
 // - 统一用 accent/textPrimary/textMuted
 
 import { Box, Text } from 'ink';
-import { TUI_COLORS } from '../theme.js';
+import { TUI_COLORS, PREFIX } from '../theme.js';
 
 interface Props {
   currentModel?: string;
@@ -21,11 +21,11 @@ export function ConfigView({
   return (
     <Box flexDirection="column" paddingX={1} borderStyle="single" borderColor={TUI_COLORS.textMuted}>
       <Text bold color={TUI_COLORS.accent}>Config</Text>
-      <Text color={TUI_COLORS.textPrimary}>model · <Text color={TUI_COLORS.accent}>{currentModel || '(not set)'}</Text></Text>
-      <Text color={TUI_COLORS.textPrimary}>role · <Text color={TUI_COLORS.accent}>{currentRole}</Text></Text>
-      <Text color={TUI_COLORS.textPrimary}>project · <Text color={TUI_COLORS.textPrimary}>{projectPath || '(unknown)'}</Text></Text>
-      <Text color={TUI_COLORS.textPrimary}>branch · <Text color={TUI_COLORS.success}>{gitBranch || '(unknown)'}</Text></Text>
-      <Text color={TUI_COLORS.textPrimary}>context · {contextUsed}/{contextWindow}</Text>
+      <Text color={TUI_COLORS.textPrimary}>{`model ${PREFIX.sep} `}<Text color={TUI_COLORS.accent}>{currentModel || '(not set)'}</Text></Text>
+      <Text color={TUI_COLORS.textPrimary}>{`role ${PREFIX.sep} `}<Text color={TUI_COLORS.accent}>{currentRole}</Text></Text>
+      <Text color={TUI_COLORS.textPrimary}>{`project ${PREFIX.sep} `}<Text color={TUI_COLORS.textPrimary}>{projectPath || '(unknown)'}</Text></Text>
+      <Text color={TUI_COLORS.textPrimary}>{`branch ${PREFIX.sep} `}<Text color={TUI_COLORS.success}>{gitBranch || '(unknown)'}</Text></Text>
+      <Text color={TUI_COLORS.textPrimary}>{`context ${PREFIX.sep} ${contextUsed}/${contextWindow}`}</Text>
     </Box>
   );
 }

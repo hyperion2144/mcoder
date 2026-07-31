@@ -4,7 +4,7 @@
 
 import { Box, Text } from 'ink';
 import { useSessionStore } from '../store/index.js';
-import { TUI_COLORS } from '../theme.js';
+import { TUI_COLORS, PREFIX } from '../theme.js';
 
 export function SessionList() {
   const { sessions, currentSessionId } = useSessionStore();
@@ -12,7 +12,7 @@ export function SessionList() {
     <Box flexDirection="column" paddingX={1} borderStyle="single" borderColor={TUI_COLORS.textMuted}>
       <Box>
         <Text bold color={TUI_COLORS.accent}>Sessions</Text>
-        <Text color={TUI_COLORS.textMuted}> · {sessions.length}</Text>
+        <Text color={TUI_COLORS.textMuted}>{` ${PREFIX.sep} ${sessions.length}`}</Text>
       </Box>
       {sessions.length === 0 ? (
         <Text color={TUI_COLORS.textMuted}>empty</Text>

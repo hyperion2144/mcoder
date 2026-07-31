@@ -11,6 +11,7 @@ import {
   type PermissionLevel,
 } from './store.js';
 import { CSS_COLORS, LEVEL_BADGE, DECISION_BADGE } from './tokens.js';
+import { PREFIX } from '../theme.js';
 
 interface Props {
   request_id: string;
@@ -38,7 +39,7 @@ function formatToolArgs(args: unknown): string {
     const full = JSON.stringify(obj);
     return full.length > 200 ? full.slice(0, 200) + '...' : full;
   }
-  return parts.join(' · ');
+  return parts.join(` ${PREFIX.sep} `);
 }
 
 export function PermissionCard({
@@ -76,7 +77,7 @@ export function PermissionCard({
   return (
     <div className="permission-card" data-tool-call-id={tool_call_id}>
       <div className="permission-card-header">
-        <span className="permission-card-title">▸ permission</span>
+        <span className="permission-card-title">{PREFIX.selected} permission</span>
         <span className="permission-level-badge" style={{ backgroundColor: badge.css }}>
           {badge.text}
         </span>

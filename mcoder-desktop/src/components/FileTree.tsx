@@ -3,6 +3,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import type { WsClient } from '@mcoder/shared/rpc/client.js';
+import { ChevronDown, ChevronRight, ChevronUp } from './icons.js';
 
 interface FileNode {
   name: string;
@@ -118,7 +119,7 @@ export function FileTree({ client, onFileSelect }: FileTreeProps) {
             style={{ paddingLeft: `${depth * 12 + 8}px` }}
             onClick={() => toggleExpand(node.path)}
           >
-            <span className="file-tree-icon">{isExpanded ? '▼' : '▶'}</span>
+            <span className="file-tree-icon">{isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</span>
             <span className="file-tree-name">{node.name}/</span>
           </div>
           {isExpanded && node.children?.map(child => renderNode(child, depth + 1))}
@@ -137,7 +138,7 @@ export function FileTree({ client, onFileSelect }: FileTreeProps) {
       >
         <span className="file-tree-name">{node.name}</span>
         {lang && <span className="file-tree-lang">{lang}</span>}
-        {isActive && loading && <span className="file-tree-spinner">⋯</span>}
+        {isActive && loading && <span className="file-tree-spinner">...</span>}
       </div>
     );
   };
@@ -154,7 +155,7 @@ export function FileTree({ client, onFileSelect }: FileTreeProps) {
           }}
           title="Collapse all"
         >
-          ⊟
+          <ChevronUp size={12} />
         </button>
       </div>
       <div className="file-tree-content">

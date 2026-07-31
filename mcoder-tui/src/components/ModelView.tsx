@@ -102,7 +102,7 @@ export function ModelView({ client }: { client: WsClient | null }) {
     <Box flexDirection="column" borderStyle="single" borderColor={TUI_COLORS.textMuted} paddingX={1}>
       <Box marginBottom={1}>
         <Text bold color={TUI_COLORS.accent}>Switch Model</Text>
-        <Text color={TUI_COLORS.textMuted}> · type to filter · ↑↓ select · Enter switch · Esc cancel</Text>
+        <Text color={TUI_COLORS.textMuted}>{` ${PREFIX.sep} type to filter ${PREFIX.sep} ↑↓ select ${PREFIX.sep} Enter switch ${PREFIX.sep} Esc cancel`}</Text>
       </Box>
 
       {loading && <Text color={TUI_COLORS.textMuted}>loading</Text>}
@@ -112,7 +112,7 @@ export function ModelView({ client }: { client: WsClient | null }) {
         <>
           {filter && (
             <Box marginBottom={1}>
-              <Text color={TUI_COLORS.warning}>filter · {filter}</Text>
+              <Text color={TUI_COLORS.warning}>{`filter ${PREFIX.sep} ${filter}`}</Text>
             </Box>
           )}
           <Box flexDirection="column">
@@ -127,10 +127,10 @@ export function ModelView({ client }: { client: WsClient | null }) {
                     {m.name}
                   </Text>
                   {m.context_window ? (
-                    <Text color={TUI_COLORS.textMuted}> · ctx={m.context_window > 1000 ? `${m.context_window / 1000}k` : m.context_window}</Text>
+                    <Text color={TUI_COLORS.textMuted}>{` ${PREFIX.sep} ctx=${m.context_window > 1000 ? `${m.context_window / 1000}k` : m.context_window}`}</Text>
                   ) : null}
                   {m.protocol ? (
-                    <Text color={TUI_COLORS.textMuted}> · [{m.protocol}]</Text>
+                    <Text color={TUI_COLORS.textMuted}>{` ${PREFIX.sep} [${m.protocol}]`}</Text>
                   ) : null}
                 </Box>
               ))

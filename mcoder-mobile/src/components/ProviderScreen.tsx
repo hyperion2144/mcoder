@@ -9,6 +9,7 @@ import {
   addProvider, deleteProvider, updateProvider, setDefault, testProvider,
   type ProviderInfo, type ModelInfo, type ProtocolInfo,
 } from '../rpc/config.js';
+import { Check, AlertCircle, ArrowLeft, Plus, ChevronDown, ChevronRight, Star, Save } from './icons.js';
 
 interface Props {
   /** WS client request 函数 */
@@ -34,6 +35,11 @@ export function ProviderScreen({ req, onConfigUpdated }: Props) {
   const [apiKey, setApiKey] = useState('');
   const [modelsInput, setModelsInput] = useState('');
   const [testResults, setTestResults] = useState<Record<string, string>>({});
+  // 参数编辑
+  const [editingParams, setEditingParams] = useState<{ provider: string; model: string; protocol: string } | null>(null);
+  const [paramValues, setParamValues] = useState<any>({});
+  const [originalParams, setOriginalParams] = useState<any>({});
+  const [protocolSchema, setProtocolSchema] = useState<any>(null);
 
   const refresh = async () => {
     setBusy(true);
@@ -97,12 +103,13 @@ export function ProviderScreen({ req, onConfigUpdated }: Props) {
     setTestResults((m) => ({ ...m, [p.name]: '...' }));
     try {
       const r = await testProvider(req, p.name);
+      const detail = r.ok ? 'OK' : (r.hint || r.error || ('HTTP ' + r.status));
       setTestResults((m) => ({
         ...m,
-        [p.name]: r.ok ? '✓ OK' : `✗ ${r.hint || r.error || ('HTTP ' + r.status)}`,
+        [p.name]: r.ok ? `ok:${detail}` : `fail:${detail}`,
       }));
     } catch (e: any) {
-      setTestResults((m) => ({ ...m, [p.name]: `✗ ${e.message}` }));
+      setTestResults((m) => ({ ...m, [p.name]: `fail:${e.message}` }));
     }
   };
 
@@ -126,11 +133,94 @@ export function ProviderScreen({ req, onConfigUpdated }: Props) {
     finally { setBusy(false); }
   };
 
+  const handleEditParams = async (provider: string, model: string, protocol: string) => {
+    setBusy(true); setError(null);
+    try {
+      const [schema, params] = await Promise.all([
+        req('config.get_protocol_schema', { protocol }),
+        req('config.get_model_params', { provider, model }),
+      ]);
+      setProtocolSchema(schema);
+      const initial = params || {};
+      setParamValues(initial);
+      setOriginalParams(initial);
+      setEditingParams({ provider, model, protocol });
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSaveParams = async () => {
+    if (!editingParams) return;
+    setBusy(true); setError(null);
+    try {
+      await req('config.set_model_params', {
+        provider: editingParams.provider,
+        model: editingParams.model,
+        params: paramValues,
+      });
+      await refresh();
+      setEditingParams(null);
+      setProtocolSchema(null);
+      setParamValues({});
+      setOriginalParams({});
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (editingParams && protocolSchema) {
+    return (
+      <div className="provider-screen">
+        <div className="provider-screen-header">
+          <button className="back-btn" onClick={() => setEditingParams(null)}><ArrowLeft size={18} /></button>
+          <span>Params: {editingParams.model}</span>
+        </div>
+        <form className="provider-form" onSubmit={(e) => { e.preventDefault(); handleSaveParams(); }}>
+          {Object.entries(protocolSchema).map(([key, schema]: [string, any]) => {
+            const isModified = JSON.stringify(paramValues[key]) !== JSON.stringify(originalParams[key]);
+            return (
+            <div className={`form-row ${isModified ? 'form-row-modified' : ''}`} key={key}>
+              <label>{key} {schema.description ? `(${schema.description})` : ''}</label>
+              {schema.type === 'enum' ? (
+                <select value={paramValues[key] ?? ''} onChange={(e) => setParamValues({ ...paramValues, [key]: e.target.value || undefined })}>
+                  <option value="">(default)</option>
+                  {schema.values.map((v: string) => <option key={v} value={v}>{v}</option>)}
+                </select>
+              ) : schema.type === 'float' || schema.type === 'int' ? (
+                <input type="number" step={schema.type === 'float' ? 0.1 : 1} min={schema.min} max={schema.max}
+                  value={paramValues[key] ?? ''} onChange={(e) => setParamValues({ ...paramValues, [key]: e.target.value === '' ? undefined : Number(e.target.value) })} />
+              ) : schema.type === 'string_list' ? (
+                <input type="text" placeholder="comma-separated"
+                  value={(paramValues[key] || []).join(', ')}
+                  onChange={(e) => setParamValues({ ...paramValues, [key]: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })} />
+              ) : schema.type === 'object' ? (
+                <textarea rows={3} placeholder='JSON'
+                  value={typeof paramValues[key] === 'object' ? JSON.stringify(paramValues[key], null, 2) : (paramValues[key] || '')}
+                  onChange={(e) => { try { setParamValues({ ...paramValues, [key]: JSON.parse(e.target.value) }); } catch { setParamValues({ ...paramValues, [key]: e.target.value }); } }} />
+              ) : null}
+            </div>
+            );
+          })}
+          {error && <div className="error-banner">{error}</div>}
+          <div className="form-actions">
+            <button type="button" className="secondary-btn" onClick={() => setEditingParams(null)}>Cancel</button>
+            <button type="submit" className="primary-btn" disabled={busy}>{busy ? 'Saving...' : (<><Save size={14} /> Save</>)}</button>
+          </div>
+        </form>
+      </div>
+    );
+  }
+
   if (mode === 'add') {
     return (
       <div className="provider-screen">
         <div className="provider-screen-header">
-          <button className="back-btn" onClick={() => setMode('list')}>←</button>
+          <button className="back-btn" onClick={() => setMode('list')}><ArrowLeft size={18} /></button>
           <span>Add Provider</span>
         </div>
         <form className="provider-form" onSubmit={submitAdd}>
@@ -184,7 +274,7 @@ export function ProviderScreen({ req, onConfigUpdated }: Props) {
     <div className="provider-screen">
       <div className="provider-screen-header">
         <span>Providers</span>
-        <button className="primary-btn" disabled={busy} onClick={() => setMode('add')}>+ Add</button>
+        <button className="primary-btn" disabled={busy} onClick={() => setMode('add')}><Plus size={14} /> Add</button>
       </div>
 
       <div className="provider-summary">
@@ -215,7 +305,7 @@ export function ProviderScreen({ req, onConfigUpdated }: Props) {
               <div className="provider-status">
                 {!p.enabled && <span className="badge disabled">disabled</span>}
                 {p.has_api_key ? <span className="badge ok">key</span> : <span className="badge warn">no key</span>}
-                <span className="caret">{expandedProvider === p.name ? '▾' : '▸'}</span>
+                <span className="caret">{expandedProvider === p.name ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
               </div>
             </div>
             {expandedProvider === p.name && (
@@ -227,14 +317,21 @@ export function ProviderScreen({ req, onConfigUpdated }: Props) {
                     {p.models.map((m) => (
                       <li key={m}>
                         <code>{m}</code>
-                        <button className="link-btn" disabled={busy} onClick={() => handleSetDefault(m, p.name)} title="Set as default">★</button>
+                        <button className="link-btn" disabled={busy} onClick={() => handleSetDefault(m, p.name)} title="Set as default"><Star size={14} /></button>
+                        <button className="link-btn" disabled={busy} onClick={() => handleEditParams(p.name, m, p.protocol)} title="Edit params">Params</button>
                       </li>
                     ))}
                   </ul>
                 </div>
                 {testResults[p.name] && (
-                  <div className={`provider-test ${testResults[p.name].startsWith('✓') ? 'ok' : 'fail'}`}>
-                    {testResults[p.name]}
+                  <div className={`provider-test ${testResults[p.name].startsWith('ok:') ? 'ok' : 'fail'}`}>
+                    {testResults[p.name].startsWith('ok:') ? (
+                      <><Check size={14} /> {testResults[p.name].slice(3)}</>
+                    ) : testResults[p.name] === '...' ? (
+                      <>{testResults[p.name]}</>
+                    ) : (
+                      <><AlertCircle size={14} /> {testResults[p.name].slice(5)}</>
+                    )}
                   </div>
                 )}
                 <div className="provider-card-actions">

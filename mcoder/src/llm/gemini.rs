@@ -1,6 +1,6 @@
 use crate::llm::retry::{self, RetryError};
 use crate::llm::{LLMAdapter, LLMEvent, LLMResponse, Usage};
-use crate::types::{ContentBlock, Message, ModelConfig, Role, ToolCall, ToolSchema};
+use crate::types::{ContentBlock, Message, ModelConfig, Role, ThinkingDepth, ToolCall, ToolSchema};
 use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
 use base64::Engine;
@@ -182,6 +182,67 @@ impl GeminiAdapter {
     }
 }
 
+/// M1 修复: 抽 build_request helper + 统一 thinking_to_native
+/// M2 修复: extra 字段冲突时忽略
+/// Gemini 特殊: thinking 在 generationConfig.thinkingConfig 内（不在顶层），所以用本地映射
+fn build_gemini_body(
+    config: &ModelConfig,
+    contents: Vec<GeminiContent>,
+    system_instruction: Option<GeminiSystemInstruction>,
+    tools: Option<Vec<GeminiTools>>,
+) -> serde_json::Value {
+    use serde_json::json;
+    // Gemini 的 thinking_config 在 generationConfig 内；thinking_to_native 返回的 (k, v) 路径是顶层
+    // 我们手动提取并 nest 到 generationConfig
+    let mut gen_cfg = json!({
+        "temperature": config.temperature,
+        "maxOutputTokens": config.max_tokens,
+        "topP": config.top_p,
+        "topK": config.top_k,
+        "stopSequences": config.stop,
+    });
+    if let Some(depth) = config.thinking_depth {
+        // Gemini 专用：thinking_config 在 generationConfig 内
+        match depth {
+            crate::types::ThinkingDepth::None => {
+                gen_cfg.as_object_mut().unwrap()
+                    .insert("thinkingConfig".to_string(), serde_json::json!({"thinkingBudget": 0}));
+            }
+            crate::types::ThinkingDepth::Low => {
+                gen_cfg.as_object_mut().unwrap()
+                    .insert("thinkingConfig".to_string(), serde_json::json!({"thinkingBudget": 2048}));
+            }
+            crate::types::ThinkingDepth::Medium => {
+                gen_cfg.as_object_mut().unwrap()
+                    .insert("thinkingConfig".to_string(), serde_json::json!({"thinkingBudget": 8192}));
+            }
+            crate::types::ThinkingDepth::High => {
+                gen_cfg.as_object_mut().unwrap()
+                    .insert("thinkingConfig".to_string(), serde_json::json!({"thinkingBudget": 24576}));
+            }
+            crate::types::ThinkingDepth::Max => {
+                gen_cfg.as_object_mut().unwrap()
+                    .insert("thinkingConfig".to_string(), serde_json::json!({"thinkingBudget": 32768, "includeThoughts": true}));
+            }
+        }
+    }
+    let mut body = json!({
+        "contents": contents,
+        "systemInstruction": system_instruction,
+        "tools": tools,
+        "generationConfig": gen_cfg,
+    });
+    // M2: extra 透传，跳过冲突字段
+    let body_obj = body.as_object_mut().unwrap();
+    let body_keys: std::collections::HashSet<String> = body_obj.keys().cloned().collect();
+    for (k, v) in &config.extra {
+        if !body_keys.contains(k) {
+            body_obj.insert(k.clone(), v.clone());
+        }
+    }
+    body
+}
+
 #[async_trait]
 impl LLMAdapter for GeminiAdapter {
     fn name(&self) -> &str {
@@ -197,15 +258,12 @@ impl LLMAdapter for GeminiAdapter {
         let (system_instruction, contents) = Self::build_contents(messages);
         let tool_decls = Self::build_tools(tools);
 
-        let body = GeminiRequest {
+        let body = build_gemini_body(
+            config,
             contents,
             system_instruction,
-            tools: if tool_decls.is_empty() { None } else { Some(tool_decls) },
-            generation_config: Some(GeminiGenerationConfig {
-                temperature: config.temperature,
-                max_output_tokens: config.max_tokens,
-            }),
-        };
+            if tool_decls.is_empty() { None } else { Some(tool_decls) },
+        );
 
         let url = self.build_url(&config.name, false);
         let api_key = self.config.api_key.clone();
@@ -287,15 +345,12 @@ impl LLMAdapter for GeminiAdapter {
         let (system_instruction, contents) = Self::build_contents(messages);
         let tool_decls = Self::build_tools(tools);
 
-        let body = GeminiRequest {
+        let body = build_gemini_body(
+            config,
             contents,
             system_instruction,
-            tools: if tool_decls.is_empty() { None } else { Some(tool_decls) },
-            generation_config: Some(GeminiGenerationConfig {
-                temperature: config.temperature,
-                max_output_tokens: config.max_tokens,
-            }),
-        };
+            if tool_decls.is_empty() { None } else { Some(tool_decls) },
+        );
 
         let url = self.build_url(&config.name, true);
         let api_key = self.config.api_key.clone();
@@ -392,6 +447,8 @@ struct GeminiRequest {
     tools: Option<Vec<GeminiTools>>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "generationConfig")]
     generation_config: Option<GeminiGenerationConfig>,
+    #[serde(flatten)]
+    extra: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Serialize, Clone)]
@@ -470,6 +527,14 @@ struct GeminiGenerationConfig {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "maxOutputTokens")]
     max_output_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "topP")]
+    top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "topK")]
+    top_k: Option<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty", rename = "stopSequences")]
+    stop: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "thinkingConfig")]
+    thinking_config: Option<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------

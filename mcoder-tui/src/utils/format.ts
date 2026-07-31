@@ -2,6 +2,7 @@
 // 平台无关
 
 import type { LLMUsage } from '../rpc/sessionSnapshot.js';
+import { PREFIX } from '../theme.js';
 
 /// 缩写路径：/Users/mutou/projects/myapp → ~/projects/myapp
 // 平台无关：Node 环境用 process.env，浏览器/Tauri 环境无 home 概念则原样返回
@@ -25,7 +26,7 @@ export function formatUsageDelta(u: LLMUsage | undefined | null): string {
   if (u.completion_tokens > 0) parts.push(`out ${fmt(u.completion_tokens)}`);
   if ((u.cache_read_input_tokens ?? 0) > 0) parts.push(`cache read ${fmt(u.cache_read_input_tokens!)}`);
   if ((u.cache_creation_input_tokens ?? 0) > 0) parts.push(`cache write ${fmt(u.cache_creation_input_tokens!)}`);
-  return parts.join(' · ');
+  return parts.join(` ${PREFIX.sep} `);
 }
 
 /// 格式化 token 使用量：1234 / 128000 → "1.2k/128k"

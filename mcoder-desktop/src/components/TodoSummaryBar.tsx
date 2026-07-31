@@ -14,6 +14,7 @@ import {
   PLATFORM_DESKTOP,
   type TodoItem,
 } from '@mcoder/shared/todo/summary.js';
+import { Play, Square } from './icons.js';
 
 export function TodoSummaryBar() {
   const todos = useSessionStore((s) => s.pendingTodos);
@@ -29,7 +30,7 @@ export function TodoSummaryBar() {
       <ul className="todo-summary-list">
         {view.visible.map((t) => (
           <li key={t.id} className={`todo-summary-item todo-status-${t.status}`}>
-            <span className="todo-summary-icon">{t.status === 'in_progress' ? '▶' : '☐'}</span>
+            <span className="todo-summary-icon">{t.status === 'in_progress' ? <Play size={14} /> : <Square size={14} />}</span>
             <span className="todo-summary-text">{t.content}</span>
           </li>
         ))}

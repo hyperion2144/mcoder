@@ -4,6 +4,7 @@
 
 import React, { useState, useMemo } from 'react';
 import type { SessionMeta } from '@mcoder/shared/rpc/types.js';
+import { X } from './icons.js';
 
 interface Props {
   sessions: SessionMeta[];
@@ -106,7 +107,7 @@ export function ProjectList({ sessions, onSelectProject, onNewSession, onDisconn
               onClick={() => { setShowNew(false); setNewPath(''); }}
               aria-label="cancel"
             >
-              ✕
+              <X size={16} />
             </button>
           </div>
         )}

@@ -168,7 +168,7 @@ export function SettingView({ client }: { client: WsClient | null }) {
     <Box flexDirection="column" borderStyle="single" borderColor={TUI_COLORS.textMuted} paddingX={1}>
       <Box marginBottom={1}>
         <Text bold color={TUI_COLORS.accent}>Settings</Text>
-        <Text color={TUI_COLORS.textMuted}> · ↑↓ navigate · Enter edit/toggle · Esc close</Text>
+        <Text color={TUI_COLORS.textMuted}>{` ${PREFIX.sep} ↑↓ navigate ${PREFIX.sep} Enter edit/toggle ${PREFIX.sep} Esc close`}</Text>
       </Box>
 
       {error && <Text color={TUI_COLORS.error}>{error}</Text>}
@@ -188,7 +188,7 @@ export function SettingView({ client }: { client: WsClient | null }) {
                 {item.value}
               </Text>
             )}
-            <Text color={TUI_COLORS.textMuted}> · {item.description}</Text>
+            <Text color={TUI_COLORS.textMuted}>{` ${PREFIX.sep} ${item.description}`}</Text>
           </Box>
         ))}
       </Box>

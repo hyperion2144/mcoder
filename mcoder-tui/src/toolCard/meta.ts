@@ -2,6 +2,7 @@
 // 从 tool_use block 的 name + args 提取人类可读的标题与输入摘要
 
 import type { ContentBlock } from '../rpc/types.js';
+import { PREFIX } from '../theme.js';
 
 /** 工具类别（决定左边框颜色） */
 export type ToolCategory =
@@ -50,7 +51,7 @@ export function extractToolMeta(block: ContentBlock): ToolMeta {
       const path = args.path || args.file || '';
       return {
         name, category: 'file',
-        title: `read · ${shortPath(path)}`,
+        title: `read ${PREFIX.sep} ${shortPath(path)}`,
         inputSummary: `path: ${path}`,
         defaultFold: 'collapsed',
       };
@@ -60,7 +61,7 @@ export function extractToolMeta(block: ContentBlock): ToolMeta {
       const path = args.path || args.file || '';
       return {
         name, category: 'file',
-        title: `write · ${shortPath(path)}`,
+        title: `write ${PREFIX.sep} ${shortPath(path)}`,
         inputSummary: `path: ${path}`,
         defaultFold: 'collapsed',
       };
@@ -69,7 +70,7 @@ export function extractToolMeta(block: ContentBlock): ToolMeta {
       const path = args.path || args.file || '';
       return {
         name, category: 'file',
-        title: `edit · ${shortPath(path)}`,
+        title: `edit ${PREFIX.sep} ${shortPath(path)}`,
         inputSummary: `path: ${path}`,
         defaultFold: 'expanded',
       };
@@ -78,7 +79,7 @@ export function extractToolMeta(block: ContentBlock): ToolMeta {
       const cmd = args.command || args.cmd || '';
       return {
         name, category: 'command',
-        title: `bash · ${truncate(cmd, 50)}`,
+        title: `bash ${PREFIX.sep} ${truncate(cmd, 50)}`,
         inputSummary: `$ ${cmd}`,
         defaultFold: 'semi',
       };
@@ -88,7 +89,7 @@ export function extractToolMeta(block: ContentBlock): ToolMeta {
       const code = args.code || '';
       return {
         name, category: 'code',
-        title: `code_exec · ${lang}`,
+        title: `code_exec ${PREFIX.sep} ${lang}`,
         inputSummary: `${lang}: ${truncate(code.split('\n')[0] || '', 60)}`,
         defaultFold: 'semi',
       };
@@ -96,14 +97,14 @@ export function extractToolMeta(block: ContentBlock): ToolMeta {
     case 'ast_rename':
       return {
         name, category: 'graph',
-        title: `ast_rename · ${args.old_name || ''} → ${args.new_name || ''}`,
+        title: `ast_rename ${PREFIX.sep} ${args.old_name || ''} → ${args.new_name || ''}`,
         inputSummary: `old: ${args.old_name || ''}\nnew: ${args.new_name || ''}`,
         defaultFold: 'semi',
       };
     case 'ast_inline':
       return {
         name, category: 'graph',
-        title: `ast_inline · ${args.function || args.fn || ''}`,
+        title: `ast_inline ${PREFIX.sep} ${args.function || args.fn || ''}`,
         inputSummary: `fn: ${args.function || args.fn || ''}`,
         defaultFold: 'semi',
       };
@@ -111,7 +112,7 @@ export function extractToolMeta(block: ContentBlock): ToolMeta {
       const file = args.file || args.path || '';
       return {
         name, category: 'graph',
-        title: `ast_extract · ${shortPath(file)}`,
+        title: `ast_extract ${PREFIX.sep} ${shortPath(file)}`,
         inputSummary: `file: ${file}`,
         defaultFold: 'semi',
       };
@@ -119,35 +120,35 @@ export function extractToolMeta(block: ContentBlock): ToolMeta {
     case 'graph_query':
       return {
         name, category: 'graph',
-        title: `graph_query · ${args.op || args.name || ''}`,
+        title: `graph_query ${PREFIX.sep} ${args.op || args.name || ''}`,
         inputSummary: `op: ${args.op || args.name || ''}`,
         defaultFold: 'semi',
       };
     case 'subagent':
       return {
         name, category: 'subagent',
-        title: `subagent · ${args.role || ''}`,
+        title: `subagent ${PREFIX.sep} ${args.role || ''}`,
         inputSummary: `role: ${args.role || ''}`,
         defaultFold: 'semi',
       };
     case 'task':
       return {
         name, category: 'other',
-        title: `task · ${args.op || ''}`,
+        title: `task ${PREFIX.sep} ${args.op || ''}`,
         inputSummary: `op: ${args.op || ''}`,
         defaultFold: 'semi',
       };
     case 'plan_create':
       return {
         name, category: 'plan',
-        title: `plan_create · ${countSteps(args)} steps`,
+        title: `plan_create ${PREFIX.sep} ${countSteps(args)} steps`,
         inputSummary: `steps: ${countSteps(args)}`,
         defaultFold: 'semi',
       };
     case 'plan_update':
       return {
         name, category: 'plan',
-        title: `plan_update · step ${args.step_id || ''}`,
+        title: `plan_update ${PREFIX.sep} step ${args.step_id || ''}`,
         inputSummary: `step: ${args.step_id || ''} → ${args.status || ''}`,
         defaultFold: 'semi',
       };
@@ -161,14 +162,14 @@ export function extractToolMeta(block: ContentBlock): ToolMeta {
     case 'todo':
       return {
         name, category: 'plan',
-        title: `todo · ${args.action || ''}`,
+        title: `todo ${PREFIX.sep} ${args.action || ''}`,
         inputSummary: `action: ${args.action || ''}`,
         defaultFold: 'semi',
       };
     case 'journal':
       return {
         name, category: 'other',
-        title: `journal · ${args.op || ''}`,
+        title: `journal ${PREFIX.sep} ${args.op || ''}`,
         inputSummary: `op: ${args.op || ''}`,
         defaultFold: 'semi',
       };
@@ -177,7 +178,7 @@ export function extractToolMeta(block: ContentBlock): ToolMeta {
     case 'workflow_update':
       return {
         name, category: 'workflow',
-        title: `${name} · ${args.action || args.op || ''}`,
+        title: `${name} ${PREFIX.sep} ${args.action || args.op || ''}`,
         inputSummary: `action: ${args.action || args.op || ''}`,
         defaultFold: 'semi',
       };

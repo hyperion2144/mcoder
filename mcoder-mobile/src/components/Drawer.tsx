@@ -3,6 +3,7 @@
 
 import React from 'react';
 import type { SessionMeta } from '@mcoder/shared/rpc/types.js';
+import { Settings } from './icons.js';
 
 interface CommandInfo {
   name: string;
@@ -62,7 +63,7 @@ export function Drawer({
 
         <div className="drawer-section">
           <button className="drawer-item drawer-settings" onClick={onOpenSettings}>
-            ⚙ Settings
+            <Settings size={16} /> Settings
           </button>
         </div>
 

@@ -3,6 +3,7 @@
 
 import React from 'react';
 import type { SessionMeta } from '@mcoder/shared/rpc/types.js';
+import { X, Plus } from './icons.js';
 
 interface SessionTabsProps {
   sessions: SessionMeta[];
@@ -54,13 +55,13 @@ export function SessionTabs({
               }}
               title="Close tab"
             >
-              ×
+              <X size={12} />
             </button>
           </div>
         );
       })}
       <button className="session-tab-new" onClick={onNew} title="New session in this project">
-        +
+        <Plus size={14} />
       </button>
     </div>
   );

@@ -216,6 +216,145 @@ pub struct ToolSchema {
     pub parameters: serde_json::Value,
 }
 
+/// 统一思考深度级别（5 档）
+/// 映射到各协议的原生思考参数：
+/// - OpenAI Chat: reasoning_effort (low/medium/high)
+/// - OpenAI Responses: reasoning.effort + reasoning.summary
+/// - Anthropic: thinking.budget_tokens (5k/16k/32k/64k)
+/// - Gemini: thinkingConfig.thinkingBudget (0/2k/8k/24k/32k)
+/// - Ollama: 不支持（忽略）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ThinkingDepth {
+    #[default]
+    None,
+    Low,
+    Medium,
+    High,
+    Max,
+}
+
+impl ThinkingDepth {
+    /// 转为简短标签（UI 显示用）
+    /// L1 修复: 与 UI 端 currentThinking.charAt(0).toUpperCase() 一致（用全名而非 "Med"）
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Low => "Low",
+            Self::Medium => "Medium",
+            Self::High => "High",
+            Self::Max => "Max",
+        }
+    }
+}
+
+/// M1 修复: 统一思考深度 -> 原生 JSON 参数的映射函数（替代散落在 4 个 adapter 里的硬编码）
+/// 返回要注入到请求体里的字段列表（key, value 对）
+pub fn thinking_to_native(protocol: &str, depth: ThinkingDepth) -> Vec<(&'static str, serde_json::Value)> {
+    use serde_json::json;
+    let p = protocol.to_ascii_lowercase();
+    match depth {
+        ThinkingDepth::None => vec![],
+        ThinkingDepth::Low => match p.as_str() {
+            "anthropic" => vec![("thinking", json!({"type": "enabled", "budget_tokens": 5000}))],
+            "gemini" => vec![("thinking_config", json!({"thinkingBudget": 2048}))],
+            "openai_responses" => vec![("reasoning", json!({"effort": "low"}))],
+            // M4 修复: OpenAI Max 映射到 high（OpenAI 只支持 low/medium/high 三档）
+            "ollama" => vec![], // Ollama 不支持思考参数
+            _ => vec![("reasoning_effort", json!("low"))],
+        },
+        ThinkingDepth::Medium => match p.as_str() {
+            "anthropic" => vec![("thinking", json!({"type": "enabled", "budget_tokens": 16000}))],
+            "gemini" => vec![("thinking_config", json!({"thinkingBudget": 8192}))],
+            "openai_responses" => vec![("reasoning", json!({"effort": "medium"}))],
+            "ollama" => vec![],
+            _ => vec![("reasoning_effort", json!("medium"))],
+        },
+        ThinkingDepth::High => match p.as_str() {
+            "anthropic" => vec![("thinking", json!({"type": "enabled", "budget_tokens": 32000}))],
+            "gemini" => vec![("thinking_config", json!({"thinkingBudget": 24576}))],
+            "openai_responses" => vec![("reasoning", json!({"effort": "high"}))],
+            "ollama" => vec![],
+            _ => vec![("reasoning_effort", json!("high"))],
+        },
+        ThinkingDepth::Max => match p.as_str() {
+            "anthropic" => vec![("thinking", json!({"type": "enabled", "budget_tokens": 64000}))],
+            "gemini" => vec![("thinking_config", json!({"thinkingBudget": 32768, "includeThoughts": true}))],
+            "openai_responses" => vec![("reasoning", json!({"effort": "high", "summary": "detailed"}))],
+            "ollama" => vec![],
+            _ => vec![("reasoning_effort", json!("high"))],
+        },
+    }
+}
+
+/// L3 修复: 校验 Anthropic thinking.budget_tokens 与 max_tokens 兼容性
+/// budget_tokens 必须 < max_tokens，否则 API 拒绝
+pub fn validate_thinking_budget(protocol: &str, max_tokens: Option<u32>, budget_tokens: Option<u32>) -> Result<(), String> {
+    if protocol != "anthropic" {
+        return Ok(());
+    }
+    let Some(budget) = budget_tokens else { return Ok(()) };
+    let Some(max) = max_tokens else { return Ok(()) };
+    if budget >= max {
+        return Err(format!(
+            "thinking.budget_tokens ({budget}) must be < max_tokens ({max})"
+        ));
+    }
+    Ok(())
+}
+
+/// 每个模型的参数覆盖（存储在 ProviderConfig.model_params 中）
+/// 用于在 provider 层级下为每个模型单独配置生成参数
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModelParams {
+    /// 思考深度（None = 不启用，默认 None）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_depth: Option<ThinkingDepth>,
+
+    /// 温度（None = 使用协议默认值）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+
+    /// 最大输出 token
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+
+    /// top_p 采样
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+
+    /// top_k 采样（Gemini / Ollama 支持）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u32>,
+
+    /// 频率惩罚（OpenAI 支持）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f32>,
+
+    /// 存在惩罚（OpenAI 支持）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f32>,
+
+    /// 停止序列
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub stop: Vec<String>,
+
+    /// 上下文窗口大小（覆盖合成的默认 128000）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
+
+    /// 输入模态（覆盖合成的默认 ["text"]）
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub input: Vec<String>,
+
+    /// 自定义参数透传（协议特有的未知字段，flatten 到请求体顶层）
+    /// 例如 Ollama 的 num_ctx / num_gpu / num_thread
+    /// 或 OpenAI 的 seed / response_format / logit_bias 等
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
     pub name: String,
@@ -231,6 +370,30 @@ pub struct ModelConfig {
     /// 默认 ["text"]；视觉模型应配置为 ["text", "image"]
     #[serde(default = "default_input_modalities")]
     pub input: Vec<String>,
+
+    // ===== 扩展生成参数（全部 serde default，向后兼容旧 config.toml）=====
+
+    /// top_p 采样
+    #[serde(default)]
+    pub top_p: Option<f32>,
+    /// top_k 采样（Gemini / Ollama 支持）
+    #[serde(default)]
+    pub top_k: Option<u32>,
+    /// 频率惩罚（OpenAI 支持）
+    #[serde(default)]
+    pub frequency_penalty: Option<f32>,
+    /// 存在惩罚（OpenAI 支持）
+    #[serde(default)]
+    pub presence_penalty: Option<f32>,
+    /// 停止序列
+    #[serde(default)]
+    pub stop: Vec<String>,
+    /// 思考深度（None = 不启用）
+    #[serde(default)]
+    pub thinking_depth: Option<ThinkingDepth>,
+    /// 自定义参数透传（flatten 到请求体顶层）
+    #[serde(default)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 fn default_input_modalities() -> Vec<String> {
@@ -394,6 +557,11 @@ pub struct ProviderConfig {
     pub models: Vec<String>,
     /// 是否启用（默认 true）
     pub enabled: bool,
+    /// per-model 参数覆盖
+    /// key = model name，value = 该模型的参数配置
+    /// 合成 ModelConfig 时，这些参数会覆盖默认值
+    #[serde(default)]
+    pub model_params: HashMap<String, ModelParams>,
 }
 
 impl Default for ProviderConfig {
@@ -405,6 +573,7 @@ impl Default for ProviderConfig {
             api_key: String::new(),
             models: Vec::new(),
             enabled: true,
+            model_params: HashMap::new(),
         }
     }
 }
@@ -445,18 +614,16 @@ impl ProviderConfig {
 
     /// M11 修复: 从 ProviderConfig + model name 合成 ModelConfig（共享方法）
     /// M13 修复: "custom" 映射到 OpenaiCompatible 而非 OpenaiChat
+    /// P2 修复: 应用 model_params 中的参数覆盖
     pub fn synthesize_model_config(&self, model_name: &str) -> ModelConfig {
         let protocol = match self.normalized_protocol() {
             "openai_responses" => ModelProtocol::OpenaiResponses,
             "anthropic" => ModelProtocol::Anthropic,
             "gemini" => ModelProtocol::Gemini,
-            "custom" => ModelProtocol::OpenaiCompatible, // M13: custom -> OpenaiCompatible
-            // openai / ollama / 其他都走 OpenAI Chat（ollama 兼容 OpenAI API）
+            "custom" => ModelProtocol::OpenaiCompatible,
             _ => ModelProtocol::OpenaiChat,
         };
         let base_url = if self.normalized_protocol() == "ollama" {
-            // S3 修复: ollama 的 OpenAI 兼容端点是 /v1/chat/completions，
-            // 若 base_url 不含 /v1 后缀则自动补上
             let trimmed = self.base_url.trim_end_matches('/');
             if trimmed.ends_with("/v1") {
                 trimmed.to_string()
@@ -466,17 +633,89 @@ impl ProviderConfig {
         } else {
             self.base_url.clone()
         };
+        // P2: 应用 per-model 参数覆盖
+        let params = self.model_params.get(model_name).cloned().unwrap_or_default();
         ModelConfig {
             name: model_name.to_string(),
             protocol,
-            api_key: self.api_key.clone(), // 保留 ${ENV_VAR} 形式，由 create_adapter 展开
+            api_key: self.api_key.clone(),
             base_url,
-            context_window: 128_000, // 默认值；provider 级别不配置 context_window
-            temperature: None,
-            max_tokens: None,
-            input: vec!["text".to_string()],
+            context_window: params.context_window.unwrap_or(128_000),
+            temperature: params.temperature,
+            max_tokens: params.max_tokens,
+            input: if params.input.is_empty() { vec!["text".to_string()] } else { params.input.clone() },
+            // 扩展参数
+            top_p: params.top_p,
+            top_k: params.top_k,
+            frequency_penalty: params.frequency_penalty,
+            presence_penalty: params.presence_penalty,
+            stop: params.stop,
+            thinking_depth: params.thinking_depth,
+            extra: params.extra,
         }
     }
+}
+
+/// 协议参数 schema（供 UI 渲染控件用）
+/// M5 修复: 统一返回 `{fields: [{name, type, label?, min?, max?, options?, default?, description?}]}` 格式
+/// UI 端不再需要兼容多种 schema 格式，直接遍历 fields 渲染控件即可
+pub fn protocol_schema(protocol: &str) -> serde_json::Value {
+    use serde_json::json;
+    let p = protocol.to_ascii_lowercase();
+    let fields = |entries: Vec<serde_json::Value>| entries;
+
+    let result = match p.as_str() {
+        "openai" | "openai_compatible" | "custom" => fields(vec![
+            json!({"name": "thinking_depth", "type": "enum", "options": ["none", "low", "medium", "high"], "default": null, "label": "Thinking Depth"}),
+            json!({"name": "temperature", "type": "float", "min": 0.0, "max": 2.0, "default": null, "label": "Temperature"}),
+            json!({"name": "max_tokens", "type": "int", "min": 1, "default": null, "label": "Max Tokens"}),
+            json!({"name": "top_p", "type": "float", "min": 0.0, "max": 1.0, "default": null, "label": "Top P"}),
+            json!({"name": "frequency_penalty", "type": "float", "min": -2.0, "max": 2.0, "default": null, "label": "Frequency Penalty"}),
+            json!({"name": "presence_penalty", "type": "float", "min": -2.0, "max": 2.0, "default": null, "label": "Presence Penalty"}),
+            json!({"name": "stop", "type": "string_list", "default": [], "label": "Stop Sequences"}),
+            json!({"name": "context_window", "type": "int", "min": 1, "default": 128000, "label": "Context Window"}),
+            json!({"name": "extra", "type": "object", "default": {}, "label": "Extra", "description": "自定义参数透传（如 seed、response_format、logit_bias）"}),
+        ]),
+        "openai_responses" => fields(vec![
+            json!({"name": "thinking_depth", "type": "enum", "options": ["none", "low", "medium", "high"], "default": null, "label": "Thinking Depth"}),
+            json!({"name": "temperature", "type": "float", "min": 0.0, "max": 2.0, "default": null, "label": "Temperature"}),
+            json!({"name": "max_tokens", "type": "int", "min": 1, "default": null, "label": "Max Tokens"}),
+            json!({"name": "top_p", "type": "float", "min": 0.0, "max": 1.0, "default": null, "label": "Top P"}),
+            json!({"name": "context_window", "type": "int", "min": 1, "default": 128000, "label": "Context Window"}),
+            json!({"name": "extra", "type": "object", "default": {}, "label": "Extra"}),
+        ]),
+        "anthropic" => fields(vec![
+            json!({"name": "thinking_depth", "type": "enum", "options": ["none", "low", "medium", "high", "max"], "default": null, "label": "Thinking Depth"}),
+            json!({"name": "temperature", "type": "float", "min": 0.0, "max": 1.0, "default": null, "label": "Temperature"}),
+            json!({"name": "max_tokens", "type": "int", "min": 1, "default": 4096, "label": "Max Tokens", "required": true}),
+            json!({"name": "top_p", "type": "float", "min": 0.0, "max": 1.0, "default": null, "label": "Top P"}),
+            json!({"name": "top_k", "type": "int", "min": 0, "default": null, "label": "Top K"}),
+            json!({"name": "stop", "type": "string_list", "default": [], "label": "Stop Sequences"}),
+            json!({"name": "context_window", "type": "int", "min": 1, "default": 128000, "label": "Context Window"}),
+            json!({"name": "extra", "type": "object", "default": {}, "label": "Extra"}),
+        ]),
+        "ollama" => fields(vec![
+            json!({"name": "thinking_depth", "type": "enum", "options": ["none"], "default": null, "label": "Thinking Depth"}),
+            json!({"name": "temperature", "type": "float", "min": 0.0, "max": 2.0, "default": null, "label": "Temperature"}),
+            json!({"name": "max_tokens", "type": "int", "min": 1, "default": null, "label": "Max Tokens"}),
+            json!({"name": "top_p", "type": "float", "min": 0.0, "max": 1.0, "default": null, "label": "Top P"}),
+            json!({"name": "top_k", "type": "int", "min": 0, "default": null, "label": "Top K"}),
+            json!({"name": "context_window", "type": "int", "min": 1, "default": 128000, "label": "Context Window"}),
+            json!({"name": "extra", "type": "object", "default": {}, "label": "Extra", "description": "Ollama 特有参数（num_ctx、num_gpu、num_thread、repeat_penalty）"}),
+        ]),
+        "gemini" => fields(vec![
+            json!({"name": "thinking_depth", "type": "enum", "options": ["none", "low", "medium", "high", "max"], "default": null, "label": "Thinking Depth"}),
+            json!({"name": "temperature", "type": "float", "min": 0.0, "max": 2.0, "default": null, "label": "Temperature"}),
+            json!({"name": "max_tokens", "type": "int", "min": 1, "default": null, "label": "Max Tokens"}),
+            json!({"name": "top_p", "type": "float", "min": 0.0, "max": 1.0, "default": null, "label": "Top P"}),
+            json!({"name": "top_k", "type": "int", "min": 0, "default": null, "label": "Top K"}),
+            json!({"name": "stop", "type": "string_list", "default": [], "label": "Stop Sequences"}),
+            json!({"name": "context_window", "type": "int", "min": 1, "default": 128000, "label": "Context Window"}),
+            json!({"name": "extra", "type": "object", "default": {}, "label": "Extra"}),
+        ]),
+        _ => vec![],
+    };
+    serde_json::json!({ "fields": result })
 }
 
 fn default_image_description_timeout_secs() -> u64 {

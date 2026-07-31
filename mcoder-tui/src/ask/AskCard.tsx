@@ -9,6 +9,7 @@ import { useAskStore } from './store.js';
 import { formatAskFullSummary } from './summary.js';
 import { serializeSubmission } from './validation.js';
 import type { AskQuestionAnswer, AskRequest, AskSubmission } from './types.js';
+import { PREFIX } from '../theme.js';
 
 interface AskCardProps {
   ask_id: string;
@@ -123,7 +124,7 @@ export function AskCard({ ask_id, tool_call_id, session_id, client, onError }: A
   return (
     <div className="ask-card">
       <div className="ask-card-header">
-        <span className="ask-card-title">▸ ask_user</span>
+        <span className="ask-card-title">{PREFIX.selected} ask_user</span>
         <span className="ask-card-status">等待输入</span>
       </div>
       {request.questions.map((q, qi) => {
@@ -147,7 +148,7 @@ export function AskCard({ ask_id, tool_call_id, session_id, client, onError }: A
                       onChange={() => handleSelect(qi, opt.label)}
                     />
                     <span>{opt.label}</span>
-                    {opt.description ? <span className="ask-option-desc"> · {opt.description}</span> : null}
+                    {opt.description ? <span className="ask-option-desc">{` ${PREFIX.sep} ${opt.description}`}</span> : null}
                   </label>
                 );
               })}
@@ -191,7 +192,7 @@ export function AskCardSummary({
   const text = formatAskFullSummary(request, submission);
   return (
     <div className="ask-card ask-card-summary">
-      <div className="ask-card-header">ask_user · 已回答</div>
+      <div className="ask-card-header">{`ask_user ${PREFIX.sep} 已回答`}</div>
       <pre className="ask-card-summary-text">{text}</pre>
     </div>
   );

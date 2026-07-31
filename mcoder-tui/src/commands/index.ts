@@ -40,6 +40,7 @@ export type MetaCommandResult =
   | { type: 'setting' }
   | { type: 'provider' }
   | { type: 'providers' }
+  | { type: 'thinking' }
   | { type: 'remote'; args: string[] }
   | { type: 'workflow'; action: string; change_id: string | null; args: string[]; prompt: string };
 
@@ -48,7 +49,7 @@ export interface CommandResult {
   /// 需要添加到消息流的系统消息（可选）
   systemMessage?: string;
   /// 是否需要切换视图
-  switchView?: 'chat' | 'sessions' | 'todos' | 'tasks' | 'config' | 'help' | 'diff' | 'tree' | 'model' | 'setting' | 'provider';
+  switchView?: 'chat' | 'sessions' | 'todos' | 'tasks' | 'config' | 'help' | 'diff' | 'tree' | 'model' | 'setting' | 'provider' | 'thinking';
   /// 是否需要重新加载会话列表
   loadSessions?: boolean;
   /// 是否需要退出
@@ -74,7 +75,13 @@ export async function dispatchSlashCommand(
 
   let result: DispatchResult;
   try {
-    result = await client.request('command.call', { input: stripped });
+    // 客户端拦截 /thinking 和 /think：服务端无此 meta 命令，直接返回 thinking 视图
+    const firstWord = stripped.split(/\s+/)[0]?.toLowerCase();
+    if (firstWord === 'thinking' || firstWord === 'think') {
+      result = { kind: 'meta', result: { type: 'thinking' } };
+    } else {
+      result = await client.request('command.call', { input: stripped });
+    }
   } catch (e: any) {
     return { error: e.message };
   }
@@ -186,6 +193,10 @@ async function handleMetaCommand(
     case 'provider':
     case 'providers': {
       return { switchView: 'provider' };
+    }
+
+    case 'thinking': {
+      return { switchView: 'thinking' };
     }
 
     case 'sessions': {

@@ -3,13 +3,14 @@
 
 use crate::llm::retry::{self, RetryError};
 use crate::llm::{LLMAdapter, LLMEvent, LLMResponse, Usage};
-use crate::types::{ContentBlock, Message, ModelConfig, ToolCall, ToolSchema};
+use crate::types::{ContentBlock, Message, ModelConfig, ThinkingDepth, ToolCall, ToolSchema};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use base64::Engine;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 
 /// OpenAI Responses API adapter (/v1/responses)
 /// New API with structured input/output items, supports built-in tools
@@ -123,6 +124,39 @@ impl OpenAIResponsesAdapter {
     }
 }
 
+/// M1 修复: 抽 build_request helper + 统一 thinking_to_native
+/// M2 修复: extra 字段与已有字段冲突时忽略
+fn build_responses_body(
+    config: &ModelConfig,
+    input: Vec<ResponseInputItem>,
+    tools: Option<Vec<ResponsesTool>>,
+    stream: bool,
+) -> serde_json::Value {
+    use serde_json::json;
+    let mut body = json!({
+        "model": config.name,
+        "input": input,
+        "tools": tools,
+        "temperature": config.temperature,
+        "max_output_tokens": config.max_tokens,
+        "stream": stream,
+        "top_p": config.top_p,
+    });
+    let body_obj = body.as_object_mut().unwrap();
+    if let Some(depth) = config.thinking_depth {
+        for (k, v) in crate::types::thinking_to_native("openai_responses", depth) {
+            body_obj.insert(k.to_string(), v);
+        }
+    }
+    let body_keys: std::collections::HashSet<String> = body_obj.keys().cloned().collect();
+    for (k, v) in &config.extra {
+        if !body_keys.contains(k) {
+            body_obj.insert(k.clone(), v.clone());
+        }
+    }
+    body
+}
+
 #[async_trait]
 impl LLMAdapter for OpenAIResponsesAdapter {
     fn name(&self) -> &str {
@@ -135,15 +169,12 @@ impl LLMAdapter for OpenAIResponsesAdapter {
         tools: &[ToolSchema],
         config: &ModelConfig,
     ) -> Result<LLMResponse> {
-        let body = ResponsesRequest {
-            model: config.name.clone(),
-            input: Self::build_input(messages),
-            tools: if tools.is_empty() { None } else { Some(Self::build_tools(tools)) },
-            temperature: config.temperature,
-            max_output_tokens: config.max_tokens,
-            stream: false,
-        };
-        let body_value = serde_json::to_value(&body).context("serializing OpenAI Responses request")?;
+        let body_value = build_responses_body(
+            config,
+            Self::build_input(messages),
+            if tools.is_empty() { None } else { Some(Self::build_tools(tools)) },
+            false,
+        );
         let url = self.build_url();
         let api_key = self.config.api_key.clone();
         let client = self.client.clone();
@@ -231,20 +262,18 @@ impl LLMAdapter for OpenAIResponsesAdapter {
         tx: tokio::sync::mpsc::Sender<LLMEvent>,
     ) -> Result<()> {
         // Responses API streaming uses SSE with event types
-        let body = ResponsesRequest {
-            model: config.name.clone(),
-            input: Self::build_input(messages),
-            tools: if tools.is_empty() { None } else { Some(Self::build_tools(tools)) },
-            temperature: config.temperature,
-            max_output_tokens: config.max_tokens,
-            stream: true,
-        };
+        let body_value = build_responses_body(
+            config,
+            Self::build_input(messages),
+            if tools.is_empty() { None } else { Some(Self::build_tools(tools)) },
+            true,
+        );
 
         let resp = self
             .client
             .post(self.build_url())
             .bearer_auth(&self.config.api_key)
-            .json(&body)
+            .json(&body_value)
             .send()
             .await
             .context("sending OpenAI Responses stream request")?;
@@ -335,18 +364,9 @@ impl LLMAdapter for OpenAIResponsesAdapter {
     }
 }
 
-#[derive(Serialize)]
-struct ResponsesRequest {
-    model: String,
-    input: Vec<ResponseInputItem>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<ResponsesTool>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_output_tokens: Option<u32>,
-    stream: bool,
-}
+// 注意: ResponsesRequest 已被 build_responses_body (serde_json::Value) 取代，
+// 保留为设计文档 §7.2 forward-looking scaffolding，待流式结构稳定后启用。
+// 此处不再重复定义，避免与 build_responses_body 产生双源真相。
 
 #[derive(Serialize, Deserialize)]
 struct ResponseInputItem {

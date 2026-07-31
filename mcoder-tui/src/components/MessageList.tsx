@@ -78,7 +78,7 @@ function MessageView({
               const p = askRenderState as Extract<AskRenderState, { kind: 'pending' }>;
               return (
                 <Box key={i} flexDirection="column">
-                  <Text color={TUI_COLORS.textMuted}>  ▸ ask_user · 等待输入</Text>
+                  <Text color={TUI_COLORS.textMuted}>{`  ${PREFIX.selected} ask_user ${PREFIX.sep} 等待输入`}</Text>
                   <AskUserCard
                     ask_id={p.ask_id}
                     tool_call_id={block.id || ''}
@@ -95,7 +95,7 @@ function MessageView({
               const submittedSub = historicalSub?.submission || s.submission;
               return (
                 <Box key={i} flexDirection="column">
-                  <Text color={TUI_COLORS.textMuted}>  ▸ ask_user · 已回答</Text>
+                  <Text color={TUI_COLORS.textMuted}>{`  ${PREFIX.selected} ask_user ${PREFIX.sep} 已回答`}</Text>
                   <AskUserSummary request={(block as any).args || (s as any).request || { questions: [] }} submission={submittedSub as any} />
                 </Box>
               );
@@ -125,7 +125,7 @@ function MessageView({
           const filename = block.path.split('/').pop() || block.path;
           return (
             <Box key={i} flexDirection="column" paddingLeft={1}>
-              <Text color={TUI_COLORS.textMuted}>[image · {filename}]</Text>
+              <Text color={TUI_COLORS.textMuted}>{`[image ${PREFIX.sep} ${filename}]`}</Text>
             </Box>
           );
         }
@@ -214,7 +214,7 @@ export function MessageList({
       {scrollOffset === 0 && (
         <Box flexDirection="column" flexShrink={0} marginBottom={1}>
           <Text bold color={TUI_COLORS.accent}>mcoder v{version}</Text>
-          <Text color={TUI_COLORS.textMuted}>{currentModel || '-'} · {shortenPath(projectPath) || '-'}</Text>
+          <Text color={TUI_COLORS.textMuted}>{`${currentModel || '-'} ${PREFIX.sep} ${shortenPath(projectPath) || '-'}`}</Text>
         </Box>
       )}
       {visibleMessages.map((msg, i) => (
@@ -229,7 +229,7 @@ export function MessageList({
         <Text color={TUI_COLORS.error}>{error}</Text>
       )}
       {scrollOffset > 0 && (
-        <Text color={TUI_COLORS.textMuted}>↑ {scrollOffset} lines scrolled · PgDn to bottom</Text>
+        <Text color={TUI_COLORS.textMuted}>{`↑ ${scrollOffset} lines scrolled ${PREFIX.sep} PgDn to bottom`}</Text>
       )}
     </Box>
   );

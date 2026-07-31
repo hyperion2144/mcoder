@@ -4,6 +4,7 @@
 
 import React, { useRef, useEffect } from 'react';
 import type { SessionMeta } from '@mcoder/shared/rpc/types.js';
+import { X } from './icons.js';
 
 interface Props {
   sessions: SessionMeta[];
@@ -58,7 +59,7 @@ export function SessionTabs({
               }}
               aria-label="close tab"
             >
-              ×
+              <X size={14} />
             </button>
           </div>
         );

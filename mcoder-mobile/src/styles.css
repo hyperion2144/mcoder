@@ -39,6 +39,19 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+/* ===== 按钮 SVG 对齐（lucide-react） ===== */
+button svg {
+  display: inline-block;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+.provider-row-actions,
+.provider-card-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 html, body, #root {
   height: 100%;
   width: 100%;
@@ -2390,6 +2403,12 @@ html, body, #root {
   font-size: 13px;
   color: var(--text-muted, #6c7086);
 }
+.form-row-modified {
+  border-left: 3px solid var(--warning, #f9e2af);
+  padding-left: 10px;
+  background: rgba(249, 226, 175, 0.05);
+  border-radius: 4px;
+}
 .form-row input, .form-row select {
   background: var(--surface0, #313244);
   border: 1px solid var(--surface1, #45475a);
@@ -2413,3 +2432,18 @@ html, body, #root {
   border-radius: 8px;
   font-size: 13px;
 }
+
+/* ===== Thinking Depth (Mobile) ===== */
+.status-thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  cursor: pointer;
+  color: var(--mauve, #cba6f7);
+  font-size: 13px;
+  padding: 0 4px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+.status-thinking:active { opacity: 0.6; }

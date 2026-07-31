@@ -27,6 +27,10 @@ import { TodoSummaryBar } from './components/TodoSummaryBar.js';
 import { ResumeBar } from './components/ResumeBar.js';
 import { TreeView } from './components/TreeView.js';
 import { ProviderScreen } from './components/ProviderScreen.js';
+import {
+  Brain, X, Check, ChevronDown, ChevronRight, ChevronUp, ArrowLeft, Settings,
+  Plus, Trash2, Star, Play, Square, CircleDot, Circle, AlertCircle, CornerDownRight,
+} from 'lucide-react';
 
 // 设计文档 §6.2/§6.7: Plan 审批 + Todo 显示（移动端触摸友好版）
 function MobilePlanPanel({
@@ -57,7 +61,7 @@ function MobilePlanPanel({
     <div className="plan-panel">
       <div className="plan-panel-header">
         <span className="plan-panel-title">Plan pending approval</span>
-        <button className="plan-panel-close" onClick={onDismiss} aria-label="close">×</button>
+        <button className="plan-panel-close" onClick={onDismiss} aria-label="close"><X size={18} /></button>
       </div>
       {plan.title && <div className="plan-panel-name">{plan.title}</div>}
       <ol className="plan-steps">
@@ -94,7 +98,7 @@ function MobileTodoPanel({ todos }: { todos: any[] }) {
           const isDone = todo.done || todo.status === 'done';
           return (
             <li key={i} className={`todo-item ${isDone ? 'todo-done' : ''}`}>
-              <span className="todo-check">{isDone ? '✓' : '☐'}</span>
+              <span className="todo-check">{isDone ? <Check size={16} /> : <Square size={16} />}</span>
               <span className="todo-text">{todo.text || todo.description}</span>
             </li>
           );
@@ -185,6 +189,9 @@ export function App() {
   // 模型选择 sheet
   const [showModelSheet, setShowModelSheet] = useState(false);
   const [availableModels, setAvailableModels] = useState<{ name: string; description?: string }[]>([]);
+  // 思考深度快捷切换
+  const [currentThinking, setCurrentThinking] = useState('none');
+  const [showThinkingSheet, setShowThinkingSheet] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'general' | 'providers'>('general');
   const [configValues, setConfigValues] = useState<Record<string, any>>({});
@@ -691,6 +698,7 @@ export function App() {
     try {
       const result: any = await client.request('config.list_models', {});
       setAvailableModels(result.models || result || []);
+      setShowThinkingSheet(false);
       setShowModelSheet(true);
     } catch (e: any) {
       msgStore.setError(`fetch models failed: ${e.message}`);
@@ -823,7 +831,7 @@ export function App() {
           onClick={handleBackToProjects}
           aria-label="back to projects"
         >
-          ←
+          <ArrowLeft size={18} />
         </button>
         <SessionTabs
           sessions={currentProjectSessions}
@@ -837,7 +845,7 @@ export function App() {
           onClick={() => setShowSettings(true)}
           aria-label="settings"
         >
-          ⚙
+          <Settings size={18} />
         </button>
       </div>
 
@@ -888,13 +896,16 @@ export function App() {
       {/* BottomStatus: 连接状态 / model / ctx / cost / running */}
       <div className="bottom-status">
         <span className={connected ? 'status-connected' : 'status-disconnected'}>
-          {connected ? '●' : '○'}
+          {connected ? <CircleDot size={14} /> : <Circle size={14} />}
         </span>
         {currentModel && (
           <span className="status-model" onClick={handleModelTap}>
-            {currentModel} ▾
+            {currentModel} <ChevronDown size={14} />
           </span>
         )}
+        <span className="status-thinking" onClick={() => { setShowModelSheet(false); setShowThinkingSheet(true); }}>
+          <Brain size={14} />{currentThinking !== 'none' ? currentThinking : ''}
+        </span>
         <span className="status-ctx">
           {contextUsed > 1000 ? `${(contextUsed / 1000).toFixed(1)}k` : contextUsed}/{contextWindow > 1000 ? `${(contextWindow / 1000).toFixed(0)}k` : contextWindow}
         </span>
@@ -915,7 +926,7 @@ export function App() {
           <div className="model-sheet" onClick={(e) => e.stopPropagation()}>
             <div className="model-sheet-header">
               <span className="model-sheet-title">Select Model</span>
-              <button className="model-sheet-close" onClick={() => setShowModelSheet(false)}>×</button>
+              <button className="model-sheet-close" onClick={() => setShowModelSheet(false)}><X size={18} /></button>
             </div>
             <div className="model-sheet-list">
               {availableModels.map((m) => (
@@ -926,6 +937,41 @@ export function App() {
                 >
                   <span className="model-sheet-option-name">{m.name}</span>
                   {(m as any).model && <span className="model-sheet-option-desc">{(m as any).model}</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 思考深度选择 sheet */}
+      {showThinkingSheet && (
+        <div className="model-sheet-overlay" onClick={() => setShowThinkingSheet(false)}>
+          <div className="model-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="model-sheet-header">
+              <span className="model-sheet-title">Thinking Depth</span>
+              <button className="model-sheet-close" onClick={() => setShowThinkingSheet(false)}><X size={18} /></button>
+            </div>
+            <div className="model-sheet-list">
+              {['none', 'low', 'medium', 'high', 'max'].map((d) => (
+                <button
+                  key={d}
+                  className={`model-sheet-option ${d === currentThinking ? 'model-sheet-option-active' : ''}`}
+                  onClick={async () => {
+                    if (!client) return;
+                    try {
+                      await client.request('config.quick_thinking', { session_id: sessionStore.currentSessionId, depth: d });
+                      setCurrentThinking(d);
+                      setShowThinkingSheet(false);
+                    } catch (e: any) {
+                      msgStore.setError(`set thinking depth failed: ${e.message}`);
+                    }
+                  }}
+                >
+                  <span className="model-sheet-option-name">
+                    <Brain size={14} /> {d === 'none' ? 'Off' : d.charAt(0).toUpperCase() + d.slice(1)}
+                  </span>
+                  {d === currentThinking && <span className="model-sheet-option-desc"><Check size={14} /></span>}
                 </button>
               ))}
             </div>
@@ -954,7 +1000,7 @@ export function App() {
       {showSettings && (
         <div className="settings-page">
           <div className="settings-header">
-            <button onClick={() => setShowSettings(false)}>←</button>
+            <button onClick={() => setShowSettings(false)}><ArrowLeft size={18} /></button>
             <span>Settings</span>
             <div className="settings-tabs">
               <button className={settingsTab === 'general' ? 'tab active' : 'tab'} onClick={() => setSettingsTab('general')}>General</button>
@@ -980,7 +1026,7 @@ export function App() {
               </div>
               <div className="setting-control">
                 <button className="setting-model-btn" onClick={() => { setShowSettings(false); handleModelTap(); }}>
-                  {currentModel || '(not set)'} ▾
+                  {currentModel || '(not set)'} <ChevronDown size={14} />
                 </button>
               </div>
             </div>

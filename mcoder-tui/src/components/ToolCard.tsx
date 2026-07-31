@@ -21,7 +21,7 @@ interface ToolCardProps {
 
 /** 折叠指示符 */
 function foldIcon(f: FoldState): string {
-  return f === 'collapsed' ? PREFIX.pending : '▾';
+  return f === 'collapsed' ? PREFIX.pending : PREFIX.expanded;
 }
 
 /** 判断结果是否为错误 */

@@ -3,13 +3,14 @@
 
 use crate::llm::retry::{self, RetryError};
 use crate::llm::{LLMAdapter, LLMEvent, LLMResponse, Usage};
-use crate::types::{ContentBlock, Message, ModelConfig, ToolCall, ToolSchema};
+use crate::types::{ContentBlock, Message, ModelConfig, ThinkingDepth, ToolCall, ToolSchema};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use base64::Engine;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 
 pub struct OpenAIAdapter {
     config: ModelConfig,
@@ -131,6 +132,46 @@ impl OpenAIAdapter {
     }
 }
 
+/// M1 修复: 抽 build_request helper，避免 chat/chat_stream 重复
+/// M2 修复: extra 字段与协议字段冲突时，extra 优先级低（被忽略），避免重复 key 导致序列化失败
+fn build_oai_body(
+    config: &ModelConfig,
+    messages: Vec<OpenAIMessage>,
+    tools: Option<Vec<OpenAITool>>,
+    stream: bool,
+    stream_options: Option<OAIStreamOptions>,
+) -> serde_json::Value {
+    use serde_json::json;
+    let mut body = json!({
+        "model": config.name,
+        "messages": messages,
+        "tools": tools,
+        "temperature": config.temperature,
+        "max_tokens": config.max_tokens,
+        "stream": stream,
+        "stream_options": stream_options,
+        "top_p": config.top_p,
+        "frequency_penalty": config.frequency_penalty,
+        "presence_penalty": config.presence_penalty,
+        "stop": config.stop,
+    });
+    let body_obj = body.as_object_mut().unwrap();
+    // 注入思考深度参数（用 types::thinking_to_native 统一映射）
+    if let Some(depth) = config.thinking_depth {
+        for (k, v) in crate::types::thinking_to_native("openai", depth) {
+            body_obj.insert(k.to_string(), v);
+        }
+    }
+    // M2: 透传 extra，但与已有字段冲突的键忽略（防止重复 key）
+    let body_keys: std::collections::HashSet<String> = body_obj.keys().cloned().collect();
+    for (k, v) in &config.extra {
+        if !body_keys.contains(k) {
+            body_obj.insert(k.clone(), v.clone());
+        }
+    }
+    body
+}
+
 #[async_trait]
 impl LLMAdapter for OpenAIAdapter {
     fn name(&self) -> &str {
@@ -143,16 +184,13 @@ impl LLMAdapter for OpenAIAdapter {
         tools: &[ToolSchema],
         config: &ModelConfig,
     ) -> Result<LLMResponse> {
-        let body = OAIRequest {
-            model: config.name.clone(),
-            messages: Self::build_messages(messages),
-            tools: if tools.is_empty() { None } else { Some(Self::build_tools(tools)) },
-            temperature: config.temperature,
-            max_tokens: config.max_tokens,
-            stream: false,
-            stream_options: None,
-        };
-        let body_value = serde_json::to_value(&body).context("serializing OpenAI request")?;
+        let body_value = build_oai_body(
+            config,
+            Self::build_messages(messages),
+            if tools.is_empty() { None } else { Some(Self::build_tools(tools)) },
+            false,
+            None,
+        );
         let url = self.build_url();
         let api_key = self.config.api_key.clone();
         let client = self.client.clone();
@@ -230,21 +268,19 @@ impl LLMAdapter for OpenAIAdapter {
         config: &ModelConfig,
         tx: tokio::sync::mpsc::Sender<LLMEvent>,
     ) -> Result<()> {
-        let body = OAIRequest {
-            model: config.name.clone(),
-            messages: Self::build_messages(messages),
-            tools: if tools.is_empty() { None } else { Some(Self::build_tools(tools)) },
-            temperature: config.temperature,
-            max_tokens: config.max_tokens,
-            stream: true,
-            stream_options: Some(OAIStreamOptions { include_usage: true }),
-        };
+        let body_value = build_oai_body(
+            config,
+            Self::build_messages(messages),
+            if tools.is_empty() { None } else { Some(Self::build_tools(tools)) },
+            true,
+            Some(OAIStreamOptions { include_usage: true }),
+        );
 
         let resp = self
             .client
             .post(self.build_url())
             .bearer_auth(&self.config.api_key)
-            .json(&body)
+            .json(&body_value)
             .send()
             .await
             .context("sending OpenAI stream request")?;
@@ -346,21 +382,7 @@ impl LLMAdapter for OpenAIAdapter {
     }
 }
 
-#[derive(Serialize)]
-struct OAIRequest {
-    model: String,
-    messages: Vec<OpenAIMessage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<OpenAITool>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_tokens: Option<u32>,
-    stream: bool,
-    /// 流式时请求累积 usage（末尾 chunk 携带）
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stream_options: Option<OAIStreamOptions>,
-}
+
 
 #[derive(Serialize)]
 struct OAIStreamOptions {

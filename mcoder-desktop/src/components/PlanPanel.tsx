@@ -3,6 +3,7 @@
 
 import React from 'react';
 import type { WsClient } from '@mcoder/shared/rpc/client.js';
+import { X } from './icons.js';
 
 interface Props {
   plan: any;
@@ -41,7 +42,7 @@ export function PlanPanel({ plan, client, sessionId, onDismiss }: Props) {
       <div className="plan-panel-header">
         <span className="plan-panel-title">Plan pending approval</span>
         <button className="plan-panel-close" onClick={onDismiss} aria-label="close">
-          ×
+          <X size={14} />
         </button>
       </div>
       <div className="plan-panel-body">

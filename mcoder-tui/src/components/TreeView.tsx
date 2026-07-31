@@ -172,11 +172,11 @@ export function TreeView({ client }: Props) {
             <Text color={node.is_head ? TUI_COLORS.warning : isSel ? TUI_COLORS.accent : TUI_COLORS.textPrimary}>
               {' '}{preview}
             </Text>
-            {node.is_head && <Text color={TUI_COLORS.warning}> · head</Text>}
+            {node.is_head && <Text color={TUI_COLORS.warning}>{` ${PREFIX.sep} head`}</Text>}
           </Box>
         );
       })}
-      <Text color={TUI_COLORS.textMuted}>↑↓ navigate · Enter checkout · ESC close</Text>
+      <Text color={TUI_COLORS.textMuted}>{`↑↓ navigate ${PREFIX.sep} Enter checkout ${PREFIX.sep} ESC close`}</Text>
     </Box>
   );
 }

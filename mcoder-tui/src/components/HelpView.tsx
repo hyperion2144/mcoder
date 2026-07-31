@@ -43,6 +43,7 @@ export function HelpView({ client }: Props) {
       <Text color={TUI_COLORS.textPrimary}>Ctrl+K                    task monitor</Text>
       <Text color={TUI_COLORS.textPrimary}>Ctrl+,                    settings</Text>
       <Text color={TUI_COLORS.textPrimary}>/provider                 manage LLM providers (/providers also works)</Text>
+      <Text color={TUI_COLORS.textPrimary}>/thinking (Ctrl+T)         toggle thinking depth</Text>
       <Text color={TUI_COLORS.textPrimary}>PgUp/PgDn                 scroll messages</Text>
       <Text color={TUI_COLORS.textPrimary}>↑/↓                       input history</Text>
       <Text color={TUI_COLORS.textPrimary}>ESC                       close overlay</Text>

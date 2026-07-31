@@ -2,7 +2,7 @@
 // 布局：顶部信息（可滚动） + 消息区（可滚动） + 固定区（BottomStatus + 输入框）
 // 设计文档 §6.7: 多视图切换（chat/sessions/todos/tasks/config/help）
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Box, Text, useInput, useApp } from 'ink';
 import { useSessionStore, useMessagesStore, useUiStore } from './store/index.js';
 import { useAskStore, type PendingAsk } from './ask/store.js';
@@ -22,7 +22,7 @@ import {
   MessageList, PlanApproval,
   SessionList, TodoView, TodoSummaryBar, TaskMonitor, ConfigView, HelpView,
   InputBox, AskUserCard, AskUserSummary, ResumeBar, TreeView, ModelView,
-  SettingView, ProviderView,
+  SettingView, ProviderView, ThinkingPicker,
 } from './components/index.js';
 import { formatContext, formatCost } from './utils/format.js';
 import { parsePairingString } from './utils/pairing.js';
@@ -36,6 +36,14 @@ interface Props {
 export function App({ client: initialClient }: Props) {
   const [client, setClient] = useState(initialClient);
   const [input, setInput] = useState('');
+  // S3 修复: 思考深度按 sessionId 分别存储（quick_thinking 不写盘也不触发 config_updated）
+  const thinkingBySessionRef = useRef<Map<string, string>>(new Map());
+  const getThinkingFor = (sid: string | null): string =>
+    sid ? (thinkingBySessionRef.current.get(sid) || 'none') : 'none';
+  const setThinkingFor = (sid: string | null, depth: string): void => {
+    if (!sid) return;
+    thinkingBySessionRef.current.set(sid, depth);
+  };
   const uiStore = useUiStore();
   const sessionStore = useSessionStore();
   const msgStore = useMessagesStore();
@@ -516,6 +524,11 @@ export function App({ client: initialClient }: Props) {
       exit();
       return;
     }
+    // S2 修复: Ctrl+T (Ctrl+Shift+T 也行) 思考深度快捷切换（原 Ctrl+D 与 Emacs EOF 冲突）
+    if (key.ctrl && (inputChar === 'T' || inputChar === 't')) {
+      uiStore.setView('thinking');
+      return;
+    }
     // 设计文档 §8.8: 权限审批输入（pending 时 A/D/Y 决议；Esc 默认 Deny）
     const pendingPermission = sid ? permissionStore.pending[sid] : null;
     if (pendingPermission) {
@@ -552,7 +565,7 @@ export function App({ client: initialClient }: Props) {
     }
     if (key.escape) {
       // SettingView and ModelView handle their own Escape (e.g., exiting edit mode)
-      if (uiStore.currentView !== 'setting' && uiStore.currentView !== 'model' && uiStore.currentView !== 'provider') {
+      if (uiStore.currentView !== 'setting' && uiStore.currentView !== 'model' && uiStore.currentView !== 'provider' && uiStore.currentView !== 'thinking') {
         uiStore.setView('chat');
       }
       return;
@@ -677,6 +690,16 @@ export function App({ client: initialClient }: Props) {
       {currentView === 'model' && <ModelView client={client} />}
       {currentView === 'setting' && <SettingView client={client} />}
       {currentView === 'provider' && <ProviderView client={client} onClose={() => uiStore.setView('chat')} pendingPermission={!!(sid && permissionStore.pending[sid])} />}
+      {currentView === 'thinking' && (
+        <ThinkingPicker
+          client={client}
+          sessionId={sid}
+          currentDepth={getThinkingFor(sid)}
+          onApplied={(depth) => setThinkingFor(sid, depth)}
+          onClose={() => uiStore.setView('chat')}
+          pendingPermission={!!(sid && permissionStore.pending[sid])}
+        />
+      )}
 
       {/* Todo 摘要条（消息区下方、输入框上方）；全部完成时隐藏 */}
       <TodoSummaryBar />
@@ -694,6 +717,9 @@ export function App({ client: initialClient }: Props) {
             {ctxStr} ({ctxPctNum.toFixed(1)}%)
           </Text>
           {costStr && <Text color={TUI_COLORS.textMuted}> {costStr}</Text>}
+          {getThinkingFor(sid) !== 'none' && (
+            <Text color={TUI_COLORS.mauve}> {PREFIX.thinking}{getThinkingFor(sid)}</Text>
+          )}
           {msgStore.streaming && <ShimmerText text={`${PREFIX.running} running`} />}
         </Text>
       </Box>
@@ -704,7 +730,7 @@ export function App({ client: initialClient }: Props) {
         onChange={setInput}
         onSubmit={onSubmit}
         placeholder={askInputMode && pendingAsk
-          ? `ask Q${focusIdx + 1} · 1-${pendingAsk.request.questions[focusIdx]?.options.length || 0}`
+          ? `ask Q${focusIdx + 1} ${PREFIX.sep} 1-${pendingAsk.request.questions[focusIdx]?.options.length || 0}`
           : undefined}
       />
     </Box>
