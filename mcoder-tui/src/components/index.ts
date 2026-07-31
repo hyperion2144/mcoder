@@ -14,3 +14,4 @@ export { ResumeBar } from './ResumeBar.js';
 export { TreeView } from './TreeView.js';
 export { ModelView } from './ModelView.js';
 export { SettingView } from './SettingView.js';
+export { ProviderView } from './ProviderView.js';

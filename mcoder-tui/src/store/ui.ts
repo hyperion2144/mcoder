@@ -3,7 +3,7 @@
 import { create } from 'zustand';
 
 // 设计文档 §6.7: 视图类型
-export type ViewType = 'chat' | 'sessions' | 'todos' | 'tasks' | 'config' | 'help' | 'diff' | 'tree' | 'model' | 'setting';
+export type ViewType = 'chat' | 'sessions' | 'todos' | 'tasks' | 'config' | 'help' | 'diff' | 'tree' | 'model' | 'setting' | 'provider';
 
 interface UiState {
   currentView: ViewType;

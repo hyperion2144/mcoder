@@ -198,16 +198,62 @@ async fn start_server_full(
 
     // 设计文档 §8.5: 注入 SubagentTool 依赖（late binding）
     // 子代理根据 role 选择 model 和工具白名单
-    let default_model_config = app_config.models.get(&app_config.default_model)
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("default_model '{}' not found in config", app_config.default_model))?;
-    let default_llm = llm::create_adapter(&default_model_config)?;
-    subagent_tool.set_dependencies(Arc::new(tools::subagent::SubagentDeps {
-        default_llm,
-        default_model_config,
-        tools: tools.clone(),
-        role_registry: role_registry.clone(),
-    })).await;
+    //
+    // 设计文档 §provider: 启动兜底 - default_model 不存在时仍启动，
+    // 让 UI 引导用户添加 provider；subagent 路径依赖 default_model 时才报错
+    //
+    // S1 修复: 同时查 cfg.models 和 cfg.providers，让 provider 级别的 model
+    // 也能作为 default_model 在启动时被识别
+    let default_model_config: Option<crate::types::ModelConfig> = app_config.models.get(&app_config.default_model).cloned()
+        .or_else(|| {
+            // S1: 查 providers -- 遍历所有 provider 的 models 列表
+            for (pname, p) in &app_config.providers {
+                for mname in &p.models {
+                    if mname == &app_config.default_model {
+                        return Some(synthesize_model_from_provider(p, mname));
+                    }
+                }
+                // 也尝试 "provider/model" 形式
+                let prefixed = format!("{pname}/{}", app_config.default_model);
+                for mname in &p.models {
+                    if prefixed == *mname {
+                        return Some(synthesize_model_from_provider(p, mname));
+                    }
+                }
+            }
+            None
+        });
+    let (default_model_config, default_llm) = match default_model_config {
+        Some(m) => match llm::create_adapter(&m) {
+            Ok(llm) => (Some(m), Some(llm)),
+            Err(e) => {
+                tracing::warn!(
+                    "default_model '{}' adapter creation failed: {}; starting in setup mode",
+                    m.name, e
+                );
+                (None, None)
+            }
+        },
+        None => {
+            tracing::warn!(
+                "default_model '{}' not found in config.models or providers; starting in setup mode (use UI to add a provider)",
+                app_config.default_model
+            );
+            (None, None)
+        }
+    };
+    if let (Some(m), Some(llm)) = (default_model_config, default_llm) {
+        subagent_tool.set_dependencies(Arc::new(tools::subagent::SubagentDeps {
+            default_llm: llm,
+            default_model_config: m,
+            tools: tools.clone(),
+            role_registry: role_registry.clone(),
+        })).await;
+    } else {
+        tracing::warn!(
+            "subagent tool disabled (no valid default_model); session_manager will return friendly error on subagent spawn"
+        );
+    }
 
     // 构建 slash command 分发器
     let command_dispatcher = Arc::new(commands::CommandDispatcher::new(
@@ -591,6 +637,27 @@ async fn stop_server(host: &str, port: u16) -> anyhow::Result<()> {
         }
         Ok(r) => anyhow::bail!("server responded with {}", r.status()),
         Err(e) => anyhow::bail!("cannot connect to server at {}: {}", url, e),
+    }
+}
+
+/// S1 修复: 从 ProviderConfig + model name 合成 ModelConfig（与 SessionManager::synthesize_model_from_provider 逻辑一致）
+fn synthesize_model_from_provider(p: &types::ProviderConfig, model_name: &str) -> types::ModelConfig {
+    use types::ModelProtocol;
+    let protocol = match p.normalized_protocol() {
+        "openai_responses" => ModelProtocol::OpenaiResponses,
+        "anthropic" => ModelProtocol::Anthropic,
+        "gemini" => ModelProtocol::Gemini,
+        _ => ModelProtocol::OpenaiChat,
+    };
+    types::ModelConfig {
+        name: model_name.to_string(),
+        protocol,
+        api_key: p.api_key.clone(),
+        base_url: p.base_url.clone(),
+        context_window: 128_000,
+        temperature: None,
+        max_tokens: None,
+        input: vec!["text".to_string()],
     }
 }
 

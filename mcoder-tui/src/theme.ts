@@ -32,6 +32,10 @@ export const PREFIX = {
   done: '✓',         // 已完成
   failed: '✗',       // 失败
   approval: '?',     // 待审批
+  textMuted: '·',
+  setting: '⚙',
+  loading: '·',
+  error: '✗',
 } as const;
 
 /// DESIGN.md §5: 间距节奏（8 倍数）

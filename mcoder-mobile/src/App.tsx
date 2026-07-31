@@ -26,6 +26,7 @@ import { SessionTabs } from './components/SessionTabs.js';
 import { TodoSummaryBar } from './components/TodoSummaryBar.js';
 import { ResumeBar } from './components/ResumeBar.js';
 import { TreeView } from './components/TreeView.js';
+import { ProviderScreen } from './components/ProviderScreen.js';
 
 // 设计文档 §6.2/§6.7: Plan 审批 + Todo 显示（移动端触摸友好版）
 function MobilePlanPanel({
@@ -185,6 +186,7 @@ export function App() {
   const [showModelSheet, setShowModelSheet] = useState(false);
   const [availableModels, setAvailableModels] = useState<{ name: string; description?: string }[]>([]);
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'general' | 'providers'>('general');
   const [configValues, setConfigValues] = useState<Record<string, any>>({});
   const sessionStore = useSessionStore();
   const msgStore = useMessagesStore();
@@ -954,8 +956,23 @@ export function App() {
           <div className="settings-header">
             <button onClick={() => setShowSettings(false)}>←</button>
             <span>Settings</span>
+            <div className="settings-tabs">
+              <button className={settingsTab === 'general' ? 'tab active' : 'tab'} onClick={() => setSettingsTab('general')}>General</button>
+              <button className={settingsTab === 'providers' ? 'tab active' : 'tab'} onClick={() => setSettingsTab('providers')}>Providers</button>
+            </div>
           </div>
           <div className="settings-body">
+            {settingsTab === 'providers' && client && (
+              <ProviderScreen
+                req={client.request.bind(client)}
+                onConfigUpdated={(cb) => {
+                  const handler = (n: any) => { if (n.method === 'config_updated') cb(); };
+                  client.onNotification(handler);
+                  return () => client.offNotification(handler);
+                }}
+              />
+            )}
+            {settingsTab === 'general' && (<>
             <div className="setting-row">
               <div className="setting-label">
                 <span className="setting-name">Model</span>
@@ -1046,6 +1063,7 @@ export function App() {
               </div>
               <div className="setting-control setting-control-text">{lspServers.length > 0 ? lspServers.join(', ') : '-'}</div>
             </div>
+            </>)}
           </div>
         </div>
       )}

@@ -310,8 +310,12 @@ pub struct TuiConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppConfig {
     pub default_model: String,
+    pub default_provider: Option<String>,
+    #[serde(default)]
+    pub providers: HashMap<String, ProviderConfig>,
     #[serde(default)]
     pub models: HashMap<String, ModelConfig>,
     #[serde(default)]
@@ -348,6 +352,76 @@ pub struct AppConfig {
     /// 设计文档 §8.8: 权限级别（yolo / standard / strict）
     #[serde(default)]
     pub permission: PermissionConfig,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            default_model: "gpt-4o".into(),
+            default_provider: None,
+            providers: HashMap::new(),
+            models: HashMap::new(),
+            roles: HashMap::new(),
+            loop_max_iters: 50,
+            compact: CompactConfig::default(),
+            tui: TuiConfig::default(),
+            server: ServerConfig::default(),
+            hooks: Vec::new(),
+            mcp_servers: HashMap::new(),
+            memory: MemoryConfig::default(),
+            tools: ToolsConfig::default(),
+            image_description_timeout_secs: default_image_description_timeout_secs(),
+            web_search: WebSearchConfig::default(),
+            launch: LaunchConfig::default(),
+            permission: PermissionConfig::default(),
+        }
+    }
+}
+
+/// Provider 配置：供应商（含协议、base_url、api_key、自动发现的模型列表）
+/// 设计文档 §provider: 一个供应商包含多个 model，统一管理 base_url/api_key
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProviderConfig {
+    /// 显示名（如 "OpenAI Official"）
+    pub name: String,
+    /// 协议：openai | anthropic | ollama | gemini | openai_responses | custom
+    pub protocol: String,
+    pub base_url: String,
+    /// API key；支持 ${ENV_VAR} 语法
+    pub api_key: String,
+    /// 该供应商下用户配置的模型列表（key = model name）
+    pub models: Vec<String>,
+    /// 是否启用（默认 true）
+    pub enabled: bool,
+}
+
+impl Default for ProviderConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            protocol: "openai".into(),
+            base_url: String::new(),
+            api_key: String::new(),
+            models: Vec::new(),
+            enabled: true,
+        }
+    }
+}
+
+impl ProviderConfig {
+    /// 协议归一化（与 ModelConfig.protocol 保持一致）
+    pub fn normalized_protocol(&self) -> &str {
+        match self.protocol.as_str() {
+            "openai_responses" => "openai_responses",
+            p if p.starts_with("openai") => "openai",
+            "anthropic" => "anthropic",
+            "ollama" => "ollama",
+            "gemini" => "gemini",
+            "custom" => "custom",
+            _ => "openai",
+        }
+    }
 }
 
 fn default_image_description_timeout_secs() -> u64 {

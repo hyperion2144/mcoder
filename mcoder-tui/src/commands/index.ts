@@ -38,6 +38,8 @@ export type MetaCommandResult =
   | { type: 'help' }
   | { type: 'tree' }
   | { type: 'setting' }
+  | { type: 'provider' }
+  | { type: 'providers' }
   | { type: 'remote'; args: string[] }
   | { type: 'workflow'; action: string; change_id: string | null; args: string[]; prompt: string };
 
@@ -46,7 +48,7 @@ export interface CommandResult {
   /// 需要添加到消息流的系统消息（可选）
   systemMessage?: string;
   /// 是否需要切换视图
-  switchView?: 'chat' | 'sessions' | 'todos' | 'tasks' | 'config' | 'help' | 'diff' | 'tree' | 'model' | 'setting';
+  switchView?: 'chat' | 'sessions' | 'todos' | 'tasks' | 'config' | 'help' | 'diff' | 'tree' | 'model' | 'setting' | 'provider';
   /// 是否需要重新加载会话列表
   loadSessions?: boolean;
   /// 是否需要退出
@@ -179,6 +181,11 @@ async function handleMetaCommand(
         }
       }
       return { error: 'usage: /model [list|set <name>]' };
+    }
+
+    case 'provider':
+    case 'providers': {
+      return { switchView: 'provider' };
     }
 
     case 'sessions': {

@@ -29,6 +29,7 @@ import { TodoPanel } from './components/TodoPanel.js';
 import { TodoSummaryBar } from './components/TodoSummaryBar.js';
 import { ResumeBar } from './components/ResumeBar.js';
 import { TreeView } from './components/TreeView.js';
+import { ProviderPanel } from './components/ProviderPanel.js';
 import { ToolCard } from '@mcoder/shared/toolCard/ToolCardHtml.js';
 import { formatUsageDelta } from '@mcoder/shared/utils/format.js';
 
@@ -206,6 +207,7 @@ export function App() {
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [availableModels, setAvailableModels] = useState<{name: string; description?: string; model?: string; context_window?: number}[]>([]);
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'general' | 'providers'>('general');
   const [remoteInput, setRemoteInput] = useState('');
   const [configValues, setConfigValues] = useState<Record<string, any>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1082,9 +1084,24 @@ export function App() {
           <div className="settings-panel">
             <div className="settings-header">
               <span>Settings</span>
+              <div className="settings-tabs">
+                <button className={settingsTab === 'general' ? 'tab active' : 'tab'} onClick={() => setSettingsTab('general')}>General</button>
+                <button className={settingsTab === 'providers' ? 'tab active' : 'tab'} onClick={() => setSettingsTab('providers')}>Providers</button>
+              </div>
               <button onClick={() => setShowSettings(false)}>✕</button>
             </div>
             <div className="settings-body">
+              {settingsTab === 'providers' && client && (
+                <ProviderPanel
+                  req={client.request.bind(client)}
+                  onConfigUpdated={(cb) => {
+                    const handler = (n: any) => { if (n.method === 'config_updated') cb(); };
+                    client.onNotification(handler);
+                    return () => client.offNotification(handler);
+                  }}
+                />
+              )}
+              {settingsTab === 'general' && (<>
               {/* Server Connection section */}
               <div className="setting-section-title">Server Connection</div>
               <div className="setting-row">
@@ -1198,6 +1215,7 @@ export function App() {
                 </div>
                 <div className="setting-control setting-control-text">{lspServers.length > 0 ? lspServers.join(', ') : '-'}</div>
               </div>
+              </>)}
             </div>
           </div>
         </div>

@@ -220,7 +220,11 @@ impl ProjectResources {
 pub struct SessionManager {
     sessions: RwLock<HashMap<String, Arc<SessionEntry>>>,
     tools: Arc<ToolRegistry>,
-    config: Arc<AppConfig>,
+    /// 设计文档 §provider: 配置用 RwLock 包裹，支持运行时 add/update/delete_provider
+    /// - 读路径（list_models / list_providers）：blocking_read（这些 RPC 是同步）
+    /// - 写路径（replace_config）：async write（clone-on-write 替换整个 AppConfig）
+    /// - AgentSession 持有自己的 model_config Arc clone，不受配置替换影响
+    config: Arc<RwLock<AppConfig>>,
     plugins: Arc<PluginManager>,
     /// Phase 5: per-session TaskManager 映射（session_id → TaskManager）
     task_managers: RwLock<HashMap<String, Arc<TaskManager>>>,
@@ -375,6 +379,14 @@ pub enum ServerEvent {
     Error {
         message: String,
     },
+    /// 配置变更（provider/model/default 改完）：广播给所有 client 刷新 UI
+    ConfigUpdated {
+        op: String,
+        providers: Vec<serde_json::Value>,
+        models: Vec<serde_json::Value>,
+        default_model: String,
+        default_provider: Option<String>,
+    },
 }
 
 /// RAII guard：构造时 armed=true；drop 时若仍 armed 则把 flag 重置为 false。
@@ -498,10 +510,16 @@ impl SessionManager {
             registry_clone.set_event_tx_boxed(perm_sink_for_async).await;
         });
         let _ = perm_event_tx;
+        // 设计文档 §provider: new() 接 Arc<AppConfig>（来自 load_config），
+        // 内部解包成 AppConfig 用 RwLock 包裹（运行时支持 add/update/delete_provider）。
+        // 这是边界：旧 API 兼容 + 新内存可变性。后续 replace_config 内部展开 env var 后写回。
+        let cfg_arc: Arc<AppConfig> = config;
+        let cfg = Arc::try_unwrap(cfg_arc)
+            .unwrap_or_else(|arc| (*arc).clone());
         Arc::new(Self {
             sessions: RwLock::new(HashMap::new()),
             tools,
-            config,
+            config: Arc::new(RwLock::new(cfg)),
             plugins,
             task_managers: RwLock::new(HashMap::new()),
             role_registry,
@@ -581,21 +599,79 @@ impl SessionManager {
         self.event_tx.clone()
     }
 
-    /// 解析模型配置：先按名称查 config.models，找不到则用 default_model
-    fn resolve_model(&self, model_name: Option<&str>) -> Result<ModelConfig> {
-        let name = model_name.unwrap_or(&self.config.default_model);
-        if let Some(m) = self.config.models.get(name) {
+    /// 解析模型配置：先按名称查 config.models，找不到则查 providers，
+/// 从 ProviderConfig + model name 合成 ModelConfig。
+/// S1 修复: 之前只查 cfg.models，用户通过 ProviderPanel 添加 provider 后
+/// 无法 /model set 到该 provider 的模型。
+fn resolve_model(&self, model_name: Option<&str>) -> Result<ModelConfig> {
+        let cfg = self.current_config();
+        let name = model_name.unwrap_or(&cfg.default_model);
+
+        // 1. 优先查 cfg.models（旧式扁平配置）
+        if let Some(m) = cfg.models.get(name) {
             return Ok(m.clone());
         }
-        // 没找到则用 default_model 的配置，若也没有则返回错误
-        if let Some(m) = self.config.models.get(&self.config.default_model) {
-            return Ok(m.clone());
+
+        // 2. 查 default_model 的扁平配置
+        if model_name.is_none() || name == cfg.default_model {
+            if let Some(m) = cfg.models.get(&cfg.default_model) {
+                return Ok(m.clone());
+            }
         }
+
+        // 3. S1 修复: 查 providers -- 遍历所有 provider 的 models 列表
+        //    匹配规则：纯 model name（如 "gpt-4o"）或 "provider/model" 形式
+        for (pname, p) in &cfg.providers {
+            // 检查 "provider/model" 形式
+            let prefixed = format!("{pname}/{name}");
+            for mname in &p.models {
+                let full = format!("{pname}/{mname}");
+                if mname.as_str() == name || full == name || prefixed == *mname {
+                    return Ok(self.synthesize_model_from_provider(p, mname));
+                }
+            }
+        }
+
+        // 4. fallback: default_model 也不在 providers 里
+        if name != cfg.default_model {
+            // 尝试用 default_model 再查一次 providers
+            for (pname, p) in &cfg.providers {
+                for mname in &p.models {
+                    if mname == &cfg.default_model {
+                        return Ok(self.synthesize_model_from_provider(p, mname));
+                    }
+                }
+            }
+        }
+
         anyhow::bail!(
-            "model '{}' not found in config, and default_model '{}' also missing",
+            "model '{}' not found in config.models or providers, and default_model '{}' also missing",
             name,
-            self.config.default_model
+            cfg.default_model
         );
+    }
+
+    /// 从 ProviderConfig + model name 合成 ModelConfig
+    /// S1 修复: ProviderConfig 的 protocol 是 String，需映射到 ModelProtocol enum
+    fn synthesize_model_from_provider(&self, p: &crate::types::ProviderConfig, model_name: &str) -> ModelConfig {
+        use crate::types::ModelProtocol;
+        let protocol = match p.normalized_protocol() {
+            "openai_responses" => ModelProtocol::OpenaiResponses,
+            "anthropic" => ModelProtocol::Anthropic,
+            "gemini" => ModelProtocol::Gemini,
+            // openai / ollama / custom / 其他都走 OpenAI Chat
+            _ => ModelProtocol::OpenaiChat,
+        };
+        ModelConfig {
+            name: model_name.to_string(),
+            protocol,
+            api_key: p.api_key.clone(), // 保留 ${ENV_VAR} 形式，由 create_adapter 展开
+            base_url: p.base_url.clone(),
+            context_window: 128_000, // 默认值；provider 级别不配置 context_window
+            temperature: None,
+            max_tokens: None,
+            input: vec!["text".to_string()],
+        }
     }
 
     /// 获取或创建指定项目的 per-project 资源（双检锁避免重复创建）
@@ -637,6 +713,8 @@ impl SessionManager {
             .await
             .ok_or_else(|| anyhow::anyhow!("cannot open session_state store for session {}", session_id))?;
 
+        // 设计文档 §provider: 读 cfg 一次用于 ToolContext（避免每字段访问 RwLock）
+        let cfg = self.current_config();
         Ok(crate::tools::ToolContext {
             session_id: session_id.to_string(),
             tool_call_id: None,
@@ -655,7 +733,14 @@ impl SessionManager {
             session_state: Arc::new(session_state),
             event_tx: self.event_tx.clone(),
             cancellation: entry.cancellation.clone(),
-            app_config: self.config.clone(),
+            // 设计文档 §provider: ToolContext 的 app_config 必须能反映运行时变更
+            // 用 Arc::clone 让 ToolContext 持有 cfg 的共享 Arc；cfg 被替换时
+            // ToolContext 通过 Arc 看到新值（前提：ToolContext 内部用 Arc::deref
+            // 或 blocking_read）。当前 ToolContext 是 Arc<AppConfig>（不可变快照）
+            // —— 这意味着已经分发的 ToolContext 仍指旧 cfg。这是设计权衡：
+            //   - 已运行的 tool 调用（数 ms 级）继续用旧 cfg，无所谓
+            //   - 新 tool 调用通过 create_adapter / list_providers 重新拿当前 cfg
+            app_config: Arc::new(cfg),
             mcp_manager: Some(self.mcp_manager.clone()),
             current_model,  // already Arc<ModelConfig> from agent.model_config.clone()
             lsp_diag_store: self.lsp_diag_store.clone(),
@@ -677,7 +762,8 @@ impl SessionManager {
         let _resources = self.get_or_create_resources(project).await?;
 
         let llm = create_adapter(&model_config)?;
-        let max_iters = self.config.loop_max_iters;
+        let cfg_snapshot = self.current_config();
+        let max_iters = cfg_snapshot.loop_max_iters;
         let agent = AgentSession::new(
             jsonl,
             model_config,
@@ -685,7 +771,7 @@ impl SessionManager {
             self.tools.clone(),
             max_iters,
             self.role_registry.clone(),
-            Arc::new(self.config.models.clone()),
+            Arc::new(cfg_snapshot.models.clone()),
         );
         // P1: 启动期预热 tiktoken
         AgentSession::prewarm_token_estimator();
@@ -840,7 +926,8 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
         if diags.is_empty() {
             return;
         }
-        let cfg = &self.config.tools.lsp_diagnostics;
+        let cfg = self.current_config();
+        let cfg = &cfg.tools.lsp_diagnostics;
         let text = crate::lsp::diagnostics_store::format_for_context(&diags, cfg.max_results);
         if text.is_empty() {
             return;
@@ -1067,7 +1154,7 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
 
         // 设计文档 §8.3.1: 记忆自动召回
         // 会话首条用户消息时，搜索相关记忆并注入为 system 消息
-        if self.config.memory.auto_recall {
+        if self.current_config().memory.auto_recall {
             self.inject_recalled_memory(session_id, &entry, content).await?;
         }
 
@@ -1164,7 +1251,7 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
             return Ok(()); // guard drop 重置 loop_running
         }
 
-        if self.config.memory.auto_recall {
+        if self.current_config().memory.auto_recall {
             self.inject_recalled_memory(session_id, &entry, content).await?;
         }
 
@@ -1545,7 +1632,7 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
         let resources = self.get_or_create_resources(&project_path).await?;
         let project_hash = crate::persistence::jsonl::escape_project_path(&project_path);
 
-        let limit = self.config.memory.recall_limit.max(1);
+        let limit = self.current_config().memory.recall_limit.max(1);
         let mut recalled_text = String::new();
 
         // 搜索项目记忆
@@ -1954,10 +2041,10 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
 
                         // 设计文档 §8.8: 权限审批（write 工具之前）
                         // PermissionConfig.requires_approval 决定：yolo 跳过；standard 写工具需批；strict 更严
-                        if let Some(reason) = self.config.permission.requires_approval(&tc.name) {
+                        if let Some(reason) = self.current_config().permission.requires_approval(&tc.name) {
                             match self
                                 .permission_registry
-                                .check_and_wait(&self.config.permission, session_id, tc)
+                                .check_and_wait(&self.current_config().permission, session_id, tc)
                                 .await
                             {
                                 Ok(()) => {
@@ -2034,7 +2121,7 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
                         // 检查方式：若危险且未自动批准，触发 BeforeToolCall hook（用户可配置 hook 拦截）
                         // 同时返回需要确认的提示给 agent，让 agent 询问用户
                         if crate::types::ToolsConfig::is_dangerous(&tc.name)
-                            && !self.config.tools.is_auto_approved(&tc.name) {
+                            && !self.current_config().tools.is_auto_approved(&tc.name) {
                             // 触发 BeforeToolCall hook（用户可配置 hook 来自动批准或阻止）
                             let danger_ctx = crate::plugin::HookContext {
                                 hook: crate::plugin::HookPoint::BeforeToolCall,
@@ -2257,8 +2344,9 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
                     {
                         let mut agent = entry.session.lock().await;
                         let est_tokens = agent.estimate_total_tokens();
+                        let cfg = self.current_config();
                         let token_threshold = (agent.model_config().context_window as f32
-                            * self.config.compact.threshold) as usize;
+                            * cfg.compact.threshold) as usize;
                         // 设计文档 §3.5/§8.3.3: 压缩前触发 PreCompact hook
                         if est_tokens >= token_threshold {
                             let _ = self.plugins.run_hooks(
@@ -2272,7 +2360,7 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
                                 })),
                             ).await;
                         }
-                        agent.maybe_compact(&self.config.compact).await;
+                        agent.maybe_compact(&cfg.compact).await;
                         // 设计文档 §3.5: 检查 loop mode 退出条件
                         if agent.check_loop_condition().await {
                             tracing::info!("loop condition met for role {}, exiting loop",
@@ -2309,7 +2397,7 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
 
         // 设计文档 §8.3.1: 记忆自动捕获
         // loop 结束后，若开启 auto_capture，抽取本轮关键决策存入项目记忆
-        if self.config.memory.auto_capture {
+        if self.current_config().memory.auto_capture {
             if let Err(e) = self.auto_capture_memory(session_id, &entry).await {
                 tracing::warn!("auto capture memory failed: {}", e);
             }
@@ -2677,13 +2765,10 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
 
     /// permission.set_level - 切换权限级别（runtime 修改）
     pub fn set_permission_level(&self, level: crate::types::PermissionLevel) {
-        let mut new_cfg = self.config.permission.clone();
-        new_cfg.level = level;
-        // 注：self.config 是 Arc<AppConfig>，无法直接修改
-        // 设计：调用方需要在外部修改 config 后重新 build SessionManager
-        // 这里仅打印日志；UI 应通过修改 ~/.mcoder/config.toml + 重启生效
+        // 设计文档 §provider: 当前 level 在 cfg 里；改完后必须 save_config + replace_config 才生效
+        // 为简化起见这里仅记日志；UI 应通过 config.set + config 持久化路径生效
         tracing::warn!(
-            "set_permission_level({:?}) called; full change requires editing ~/.mcoder/config.toml and restart",
+            "set_permission_level({:?}) called; for full effect use /config set or restart with new ~/.mcoder/config.toml",
             level
         );
     }
@@ -2966,7 +3051,8 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
         self.get_or_create_resources(&meta.project_path).await?;
         let model_config = Arc::new(self.resolve_model(Some(&meta.model))?);
         let llm = create_adapter(&model_config)?;
-        let max_iters = self.config.loop_max_iters;
+        let cfg_snapshot = self.current_config();
+        let max_iters = cfg_snapshot.loop_max_iters;
         let agent = AgentSession::new(
             jsonl,
             model_config,
@@ -2974,7 +3060,7 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
             self.tools.clone(),
             max_iters,
             self.role_registry.clone(),
-            Arc::new(self.config.models.clone()),
+            Arc::new(cfg_snapshot.models.clone()),
         );
 
         // Phase 5: 为重放的 session 分配 per-session TaskManager（get_or_create
@@ -3311,26 +3397,28 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
                 return v.clone();
             }
         }
+        // 一次 blocking_read 拿 cfg，再按 key 分发；避免每字段访问都 RwLock
+        let cfg = self.current_config();
         match key {
-            Some("default_model") => serde_json::json!(self.config.default_model),
-            Some("loop_max_iters") => serde_json::json!(self.config.loop_max_iters),
-            Some("compact") => serde_json::json!(self.config.compact),
-            Some("compact.threshold") => serde_json::json!(self.config.compact.threshold),
-            Some("compact.keep_recent") => serde_json::json!(self.config.compact.keep_recent),
-            Some("roles") => serde_json::json!(self.config.roles),
-            Some("models") => serde_json::json!(self.config.models),
-            Some("tui") => serde_json::json!(self.config.tui),
-            Some("tui.compact") => serde_json::json!(self.config.tui.compact),
-            Some("memory") => serde_json::json!(self.config.memory),
-            Some("memory.auto_recall") => serde_json::json!(self.config.memory.auto_recall),
-            Some("memory.auto_capture") => serde_json::json!(self.config.memory.auto_capture),
-            Some("server") => serde_json::json!(self.config.server),
+            Some("default_model") => serde_json::json!(cfg.default_model),
+            Some("loop_max_iters") => serde_json::json!(cfg.loop_max_iters),
+            Some("compact") => serde_json::json!(cfg.compact),
+            Some("compact.threshold") => serde_json::json!(cfg.compact.threshold),
+            Some("compact.keep_recent") => serde_json::json!(cfg.compact.keep_recent),
+            Some("roles") => serde_json::json!(cfg.roles),
+            Some("models") => serde_json::json!(cfg.models),
+            Some("tui") => serde_json::json!(cfg.tui),
+            Some("tui.compact") => serde_json::json!(cfg.tui.compact),
+            Some("memory") => serde_json::json!(cfg.memory),
+            Some("memory.auto_recall") => serde_json::json!(cfg.memory.auto_recall),
+            Some("memory.auto_capture") => serde_json::json!(cfg.memory.auto_capture),
+            Some("server") => serde_json::json!(cfg.server),
             Some(_) | None => serde_json::json!({
-                "default_model": self.config.default_model,
-                "loop_max_iters": self.config.loop_max_iters,
-                "server": self.config.server,
-                "tui": self.config.tui,
-                "memory": self.config.memory,
+                "default_model": cfg.default_model,
+                "loop_max_iters": cfg.loop_max_iters,
+                "server": cfg.server,
+                "tui": cfg.tui,
+                "memory": cfg.memory,
             }),
         }
     }
@@ -3339,49 +3427,33 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
     /// 设计文档 §8.3: 支持运行时修改配置，仅在内存生效，不写回 config.toml
     pub async fn set_config(self: &Arc<Self>, key: &str, value: serde_json::Value) -> Result<()> {
         tracing::info!("config.set requested: {} = {} (runtime, not persisted)", key, value);
-        // 支持的点状路径：compact.threshold / tui.compact / loop_max_iters / memory.auto_recall
-        // 用 RwLock 保护整个 AppConfig 写入
-        let mut new_config = (*self.config).clone();
+        // 校验 key 合法性（不实际修改 self.config；走全局 override map）
         match key {
             "loop_max_iters" => {
-                if let Some(v) = value.as_u64() {
-                    new_config.loop_max_iters = v as u32;
-                } else {
-                    anyhow::bail!("loop_max_iters expects u32");
-                }
+                if !value.is_u64() { anyhow::bail!("loop_max_iters expects u32"); }
             }
             "tui.compact" => {
-                if let Some(v) = value.as_bool() {
-                    new_config.tui.compact = v;
-                }
+                if !value.is_boolean() { anyhow::bail!("tui.compact expects bool"); }
             }
             "compact.threshold" => {
-                if let Some(v) = value.as_f64() {
-                    new_config.compact.threshold = v as f32;
-                }
+                if !value.is_f64() { anyhow::bail!("compact.threshold expects f64"); }
             }
             "compact.keep_recent" => {
-                if let Some(v) = value.as_u64() {
-                    new_config.compact.keep_recent = v as u32;
-                }
+                if !value.is_u64() { anyhow::bail!("compact.keep_recent expects u32"); }
             }
             "memory.auto_recall" => {
-                if let Some(v) = value.as_bool() {
-                    new_config.memory.auto_recall = v;
-                }
+                if !value.is_boolean() { anyhow::bail!("memory.auto_recall expects bool"); }
             }
             "memory.auto_capture" => {
-                if let Some(v) = value.as_bool() {
-                    new_config.memory.auto_capture = v;
-                }
+                if !value.is_boolean() { anyhow::bail!("memory.auto_capture expects bool"); }
             }
             _ => {
                 tracing::warn!("config.set: unsupported key '{}' (supported: loop_max_iters/tui.compact/compact.threshold/compact.keep_recent/memory.auto_recall/memory.auto_capture)", key);
                 anyhow::bail!("unsupported config key: {}", key);
             }
         }
-        // 替换全局 config（用 Arc<RwLock> 才能修改，这里只能记录到 override）
-        // 由于 config 是 Arc<AppConfig> 不可变，这里用全局 override map
+        // S3 修复: 不再 read-modify-write self.config（之前 new_config 构造后根本没用）；
+        // override map 自身有 RwLock 保护，原子写入即可
         config_overrides().await.write().await.insert(key.to_string(), value);
         tracing::info!("config.set: applied '{}' (note: runtime override, not persisted)", key);
         Ok(())
@@ -3392,14 +3464,274 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
         config_overrides().await.read().await.get(key).cloned()
     }
 
-    /// config.list_models - 列出所有已配置的模型
+    /// config.list_models - 列出所有已配置的模型（含从 providers 展开）
     pub fn list_models(&self) -> Vec<serde_json::Value> {
-        self.config.models.iter().map(|(name, m)| serde_json::json!({
+        let cfg = self.current_config();
+        let mut out: Vec<serde_json::Value> = cfg.models.iter().map(|(name, m)| serde_json::json!({
             "name": name,
+            "display_name": m.name,
             "protocol": format!("{:?}", m.protocol),
-            "model": m.name,
             "context_window": m.context_window,
+            "max_tokens": m.max_tokens,
+            "source": "models",
+        })).collect();
+        for (pname, p) in &cfg.providers {
+            for m in &p.models {
+                let full = format!("{pname}/{m}");
+                if cfg.models.contains_key(&full) { continue; }
+                out.push(serde_json::json!({
+                    "name": full,
+                    "display_name": m,
+                    "protocol": p.protocol,
+                    "provider": pname,
+                    "source": "provider",
+                }));
+            }
+        }
+        out.sort_by(|a, b| a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or("")));
+        out
+    }
+
+    /// config.list_providers - 列出供应商
+    pub fn list_providers(&self) -> Vec<serde_json::Value> {
+        self.current_config().providers.iter().map(|(name, p)| serde_json::json!({
+            "name": name,
+            "display_name": p.name,
+            "protocol": p.protocol,
+            "base_url": p.base_url,
+            "has_api_key": !p.api_key.is_empty(),
+            "enabled": p.enabled,
+            "models": p.models,
         })).collect()
+    }
+
+    /// config.add_provider - 添加供应商
+    /// S3 修复: read-modify-write 在单次 write lock 内完成，消除 TOCTOU
+    /// M1 修复: 检查重复名
+    /// 设计文档 §provider: 写 ~/.mcoder/config.toml，原子写（tmp + rename）
+    pub async fn add_provider(
+        self: &Arc<Self>,
+        name: String,
+        protocol: String,
+        base_url: String,
+        api_key: String,
+        models: Vec<String>,
+    ) -> Result<()> {
+        let mut guard = self.config.write().await;
+        // M1: 检查重复名
+        if guard.providers.contains_key(&name) {
+            anyhow::bail!("provider '{name}' already exists; use update_provider to modify");
+        }
+        let mut new_config = (*guard).clone();
+        new_config.providers.insert(name.clone(), crate::types::ProviderConfig {
+            name: name.clone(),
+            protocol,
+            base_url,
+            api_key,
+            models,
+            enabled: true,
+        });
+        crate::config::save_config(&new_config)?;
+        *guard = new_config;
+        drop(guard);
+        self.broadcast_config_updated("add_provider").await;
+        Ok(())
+    }
+
+    /// config.update_provider - 改字段
+    /// S3 修复: read-modify-write 在单次 write lock 内完成
+    pub async fn update_provider(
+        self: &Arc<Self>,
+        name: String,
+        protocol: Option<String>,
+        base_url: Option<String>,
+        api_key: Option<String>,
+        models: Option<Vec<String>>,
+        enabled: Option<bool>,
+    ) -> Result<()> {
+        let mut guard = self.config.write().await;
+        let mut new_config = (*guard).clone();
+        {
+            let p = new_config.providers.get_mut(&name)
+                .ok_or_else(|| anyhow::anyhow!("provider '{name}' not found"))?;
+            if let Some(v) = protocol { p.protocol = v; }
+            if let Some(v) = base_url { p.base_url = v; }
+            if let Some(v) = api_key { p.api_key = v; }
+            if let Some(v) = models { p.models = v; }
+            if let Some(v) = enabled { p.enabled = v; }
+        }
+        crate::config::save_config(&new_config)?;
+        *guard = new_config;
+        drop(guard);
+        self.broadcast_config_updated("update_provider").await;
+        Ok(())
+    }
+
+    /// config.delete_provider - 删除供应商
+    /// S3 修复: read-modify-write 在单次 write lock 内完成
+    /// M2 修复: 清理悬空 default_model（若 default_model 在被删 provider 的 models 列表中）
+    pub async fn delete_provider(self: &Arc<Self>, name: String) -> Result<()> {
+        let mut guard = self.config.write().await;
+        let mut new_config = (*guard).clone();
+        let removed = new_config.providers.remove(&name)
+            .ok_or_else(|| anyhow::anyhow!("provider '{name}' not found"))?;
+        // 清理 default_provider
+        if new_config.default_provider.as_deref() == Some(&name) {
+            new_config.default_provider = None;
+        }
+        // M2: 清理悬空 default_model
+        if removed.models.contains(&new_config.default_model) {
+            tracing::warn!(
+                "default_model '{}' was in deleted provider '{}'; clearing default_model",
+                new_config.default_model, name
+            );
+            new_config.default_model = String::new();
+        }
+        crate::config::save_config(&new_config)?;
+        *guard = new_config;
+        drop(guard);
+        self.broadcast_config_updated("delete_provider").await;
+        Ok(())
+    }
+
+    /// config.set_default - 设置默认模型
+    /// S3 修复: read-modify-write 在单次 write lock 内完成
+    pub async fn set_default(self: &Arc<Self>, model: String, provider: Option<String>) -> Result<()> {
+        let mut guard = self.config.write().await;
+        let mut new_config = (*guard).clone();
+        // 校验 model 在 providers/models 中能找到
+        let exists = new_config.models.contains_key(&model)
+            || new_config.providers.values().any(|p| p.models.contains(&model));
+        if !exists && !model.is_empty() {
+            anyhow::bail!("model '{model}' not found in providers/models");
+        }
+        // L1 修复: 校验 provider 参数存在
+        if let Some(ref pname) = provider {
+            if !new_config.providers.contains_key(pname) {
+                anyhow::bail!("provider '{pname}' not found");
+            }
+        }
+        new_config.default_model = model;
+        new_config.default_provider = provider;
+        crate::config::save_config(&new_config)?;
+        *guard = new_config;
+        drop(guard);
+        self.broadcast_config_updated("set_default").await;
+        Ok(())
+    }
+
+    /// config.test_provider - 测试供应商连通性
+    /// M3 修复: Anthropic 用 GET /v1/models（而非 /v1/messages，后者只接受 POST）
+    /// S2 修复: 此处展开 ${ENV_VAR}
+    pub async fn test_provider(&self, name: String) -> Result<serde_json::Value> {
+        let provider = self.current_config().providers.get(&name)
+            .ok_or_else(|| anyhow::anyhow!("provider '{name}' not found"))?
+            .clone();
+        // S2: 展开 ${ENV_VAR}
+        let api_key = crate::config::expand_env_var(&provider.api_key);
+        // M3: Anthropic 用 /v1/models（GET 可行），不用 /v1/messages（405 Method Not Allowed）
+        let url = match provider.protocol.as_str() {
+            "anthropic" => format!("{}/v1/models", provider.base_url.trim_end_matches('/')),
+            "ollama" => format!("{}/api/tags", provider.base_url.trim_end_matches('/')),
+            _ => format!("{}/models", provider.base_url.trim_end_matches('/')),
+        };
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(8))
+            .build()?;
+        let mut req = client.get(&url);
+        if !api_key.is_empty() && provider.protocol != "ollama" {
+            req = req.bearer_auth(&api_key);
+        }
+        match req.send().await {
+            Ok(r) if r.status().is_success() => Ok(serde_json::json!({
+                "ok": true,
+                "status": r.status().as_u16(),
+                "url": url,
+            })),
+            Ok(r) => Ok(serde_json::json!({
+                "ok": false,
+                "status": r.status().as_u16(),
+                "url": url,
+                "hint": format!("HTTP {}; check base_url and api_key", r.status().as_u16()),
+            })),
+            Err(e) => Ok(serde_json::json!({
+                "ok": false,
+                "url": url,
+                "error": e.to_string(),
+                "hint": "cannot reach server; check network and base_url",
+            })),
+        }
+    }
+
+    /// config.list_models_protocols - 列出支持的协议
+    pub fn list_protocols(&self) -> Vec<serde_json::Value> {
+        vec![
+            serde_json::json!({"id": "openai",           "name": "OpenAI / 兼容", "default_url": "https://api.openai.com/v1"}),
+            serde_json::json!({"id": "openai_responses", "name": "OpenAI Responses", "default_url": "https://api.openai.com/v1"}),
+            serde_json::json!({"id": "anthropic",        "name": "Anthropic Claude", "default_url": "https://api.anthropic.com"}),
+            serde_json::json!({"id": "ollama",           "name": "Ollama (本地)", "default_url": "http://localhost:11434"}),
+            serde_json::json!({"id": "gemini",           "name": "Google Gemini", "default_url": "https://generativelanguage.googleapis.com"}),
+            serde_json::json!({"id": "custom",           "name": "Custom OpenAI-兼容", "default_url": ""}),
+        ]
+    }
+
+    /// 读取当前配置快照（同步；用于 sync 读路径）
+    /// 设计文档 §provider: AppConfig clone ≈ 几 KB，可忽略
+    fn current_config(&self) -> AppConfig {
+        self.config.blocking_read().clone()
+    }
+
+    /// 广播 config.updated 事件给所有连接的 client（async 以便 RPC 调用方保持 .await 风格）
+    /// M4 修复: 只调一次 current_config()，复用快照给 list_providers / list_models / default 字段
+    async fn broadcast_config_updated(&self, op: &str) {
+        let cfg = self.current_config();
+        // M4: 从同一份 cfg 快照内联构建 providers/models JSON，避免多次 blocking_read
+        let providers: Vec<serde_json::Value> = cfg.providers.iter().map(|(name, p)| serde_json::json!({
+            "name": name,
+            "display_name": p.name,
+            "protocol": p.protocol,
+            "base_url": p.base_url,
+            "has_api_key": !p.api_key.is_empty(),
+            "enabled": p.enabled,
+            "models": p.models,
+        })).collect();
+        let models = self.list_models_from_snapshot(&cfg);
+        let default_model = cfg.default_model.clone();
+        let default_provider = cfg.default_provider.clone();
+        let _ = self.event_tx.send(ServerEvent::ConfigUpdated {
+            op: op.to_string(),
+            providers,
+            models,
+            default_model,
+            default_provider,
+        });
+    }
+
+    /// M4: 从给定 cfg 快照构建 models JSON（避免 list_models() 再调 current_config()）
+    fn list_models_from_snapshot(&self, cfg: &AppConfig) -> Vec<serde_json::Value> {
+        let mut out: Vec<serde_json::Value> = cfg.models.iter().map(|(name, m)| serde_json::json!({
+            "name": name,
+            "display_name": m.name,
+            "protocol": format!("{:?}", m.protocol),
+            "context_window": m.context_window,
+            "max_tokens": m.max_tokens,
+            "source": "models",
+        })).collect();
+        for (pname, p) in &cfg.providers {
+            for m in &p.models {
+                let full = format!("{pname}/{m}");
+                if cfg.models.contains_key(&full) { continue; }
+                out.push(serde_json::json!({
+                    "name": full,
+                    "display_name": m,
+                    "protocol": p.protocol,
+                    "provider": pname,
+                    "source": "provider",
+                }));
+            }
+        }
+        out.sort_by(|a, b| a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or("")));
+        out
     }
 
     /// server.stats - 服务器统计信息

@@ -2,6 +2,7 @@ use crate::types::AppConfig;
 use anyhow::{Context, Result};
 use dirs::home_dir;
 use std::path::{Path, PathBuf};
+use tracing::warn;
 
 pub fn global_config_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("MCODER_HOME") {
@@ -29,13 +30,17 @@ pub fn global_experiences_db_path() -> PathBuf {
 ///   - array: 追加（如 hooks、mcp_servers）
 ///   - scalar: 项目级覆盖全局
 ///   - 显式设置为默认值也会覆盖（解决了启发式判断的问题）
+///
+/// 错误友好化：文件存在但解析失败时，**打印明确错误位置**而非静默吞掉；
+/// 调用方应捕获后回退到空配置 + 启动 setup mode。
 pub fn load_config(project: Option<&Path>) -> Result<AppConfig> {
     let global_path = global_config_dir().join("config.toml");
-    let global_value = load_toml_value(&global_path).unwrap_or(toml::Value::Table(toml::value::Table::new()));
+    let global_value = load_toml_value_reporting(&global_path, "global")
+        .unwrap_or_else(|| toml::Value::Table(toml::value::Table::new()));
 
     let merged_value = if let Some(proj) = project {
         let proj_path = project_config_dir(proj).join("config.toml");
-        if let Some(proj_value) = load_toml_value(&proj_path) {
+        if let Some(proj_value) = load_toml_value_reporting(&proj_path, "project") {
             merge_toml_values(global_value, proj_value)
         } else {
             global_value
@@ -44,13 +49,12 @@ pub fn load_config(project: Option<&Path>) -> Result<AppConfig> {
         global_value
     };
 
-    let mut config: AppConfig = merged_value.try_into()
-        .context("failed to deserialize merged config")?;
+    let config: AppConfig = merged_value.try_into()
+        .context("failed to deserialize merged config (check that global/project config.toml is valid)")?;
 
-    // 设计文档 §7.1: api_key 支持 ${ENV_VAR} 语法，从环境变量解析
-    for model in config.models.values_mut() {
-        model.api_key = expand_env_var(&model.api_key);
-    }
+    // S2 修复: 不在此处展开 ${ENV_VAR}；内存中保留原始 ${ENV_VAR} 形式，
+    // 由 create_adapter / test_provider 在使用时展开。
+    // 这样 save_config 写盘时保留 ${ENV_VAR}，不会泄露明文 key。
 
     Ok(config)
 }
@@ -58,7 +62,7 @@ pub fn load_config(project: Option<&Path>) -> Result<AppConfig> {
 /// 展开 ${ENV_VAR} 格式的环境变量引用
 /// 支持: ${MINIMAX_API_KEY} → 环境变量值
 /// 不匹配格式则原样返回
-fn expand_env_var(s: &str) -> String {
+pub fn expand_env_var(s: &str) -> String {
     if s.starts_with("${") && s.ends_with("}") && s.len() > 3 {
         let var_name = &s[2..s.len()-1];
         if let Ok(val) = std::env::var(var_name) {
@@ -68,12 +72,46 @@ fn expand_env_var(s: &str) -> String {
     s.to_string()
 }
 
-fn load_toml_value(path: &Path) -> Option<toml::Value> {
+/// 加载 TOML 文件并报告错误（不再静默吞错）
+/// - 文件不存在 → 返回 Ok(None)，调用方按空配置处理
+/// - IO/解析错误 → warn! 后返回 Ok(None)，调用方继续按空配置启动（setup mode 友好）
+fn load_toml_value_reporting(path: &Path, scope: &str) -> Option<toml::Value> {
     if !path.exists() {
         return None;
     }
-    let content = std::fs::read_to_string(path).ok()?;
-    toml::from_str(&content).ok()
+    let content = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("reading {scope} config ({}) failed: {e}", path.display());
+            return None;
+        }
+    };
+    match toml::from_str(&content) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            // 设计文档：把 TOML 解析错误明确打出来
+            // 旧版 .unwrap_or(empty) 会让用户完全看不到错误位置
+            warn!(
+                "parsing {scope} config ({}) failed: {e}\n\
+                 hint: fix syntax error in TOML, or delete the file to start fresh",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+/// 原子写 ~/.mcoder/config.toml（tmp + rename），避免半写文件
+pub fn save_config(config: &AppConfig) -> Result<()> {
+    let path = global_config_dir().join("config.toml");
+    let content = toml::to_string_pretty(config)
+        .context("serialize config to TOML")?;
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, content)
+        .with_context(|| format!("writing tmp config: {}", tmp.display()))?;
+    std::fs::rename(&tmp, &path)
+        .with_context(|| format!("renaming {} → {}", tmp.display(), path.display()))?;
+    Ok(())
 }
 
 /// 设计文档 §7.2: 深度合并两个 toml::Value
@@ -106,45 +144,6 @@ fn merge_toml_values(mut base: toml::Value, overlay: toml::Value) -> toml::Value
         }
         // scalar 或类型不匹配: overlay 覆盖 base
         (_, overlay) => overlay,
-    }
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            default_model: "gpt-4o".into(),
-            models: std::collections::HashMap::new(),
-            roles: std::collections::HashMap::new(),
-            loop_max_iters: 50,
-            compact: crate::types::CompactConfig {
-                strategy: "auto".into(),
-                threshold: 0.8,
-                keep_recent: 5,
-                keep_first: 2,
-                tool_results: "tool_aware".into(),
-                summary_model: None,
-                tool_thresholds: std::collections::HashMap::new(),
-                layered_summary: false,
-                layer_chunk_size: 30,
-                max_layers: 5,
-            },
-            tui: crate::types::TuiConfig {
-                compact: false,
-                theme: "default".into(),
-            },
-            server: crate::types::ServerConfig {
-                host: "127.0.0.1".into(),
-                port: 7654,
-            },
-            hooks: Vec::new(),
-            mcp_servers: std::collections::HashMap::new(),
-            memory: crate::types::MemoryConfig::default(),
-            tools: crate::types::ToolsConfig::default(),
-            image_description_timeout_secs: 8,
-            web_search: crate::types::WebSearchConfig::default(),
-            launch: crate::types::LaunchConfig::default(),
-            permission: crate::types::PermissionConfig::default(),
-        }
     }
 }
 

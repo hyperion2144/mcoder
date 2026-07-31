@@ -459,6 +459,22 @@ where
                             })),
                             Some(session_id),
                         ),
+                        ServerEvent::ConfigUpdated {
+                            op,
+                            providers,
+                            models,
+                            default_model,
+                            default_provider,
+                        } => (
+                            make_notification("config_updated", serde_json::json!({
+                                "op": op,
+                                "providers": providers,
+                                "models": models,
+                                "default_model": default_model,
+                                "default_provider": default_provider,
+                            })),
+                            None,
+                        ),
                     };
                     // 过滤：session 事件只推给 attached 的 client；全局事件推给所有
                     let should_send = match (&attached_session, target_session) {
@@ -872,6 +888,69 @@ async fn handle_request(
         "config.list_models" => {
             let models = mgr.list_models();
             JsonRpcResponse::ok(req.id, serde_json::json!(models))
+        }
+
+        // === Provider CRUD ===
+        "config.list_providers" => {
+            JsonRpcResponse::ok(req.id, serde_json::json!(mgr.list_providers()))
+        }
+        "config.list_protocols" => {
+            JsonRpcResponse::ok(req.id, serde_json::json!(mgr.list_protocols()))
+        }
+        "config.add_provider" => {
+            let p = req.params.unwrap_or_default();
+            match mgr.add_provider(
+                p["name"].as_str().unwrap_or("").to_string(),
+                p["protocol"].as_str().unwrap_or("openai").to_string(),
+                p["base_url"].as_str().unwrap_or("").to_string(),
+                p["api_key"].as_str().unwrap_or("").to_string(),
+                p["models"].as_array()
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                    .unwrap_or_default(),
+            ).await {
+                Ok(_) => JsonRpcResponse::ok(req.id, serde_json::json!({"added": true})),
+                Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+            }
+        }
+        "config.update_provider" => {
+            let p = req.params.unwrap_or_default();
+            let name = p["name"].as_str().unwrap_or("").to_string();
+            let protocol = p["protocol"].as_str().map(String::from);
+            let base_url = p["base_url"].as_str().map(String::from);
+            let api_key = p["api_key"].as_str().map(String::from);
+            let models = p["models"].as_array().map(|arr|
+                arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+            );
+            let enabled = p["enabled"].as_bool();
+            match mgr.update_provider(name, protocol, base_url, api_key, models, enabled).await {
+                Ok(_) => JsonRpcResponse::ok(req.id, serde_json::json!({"updated": true})),
+                Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+            }
+        }
+        "config.delete_provider" => {
+            let p = req.params.unwrap_or_default();
+            let name = p["name"].as_str().unwrap_or("").to_string();
+            match mgr.delete_provider(name).await {
+                Ok(_) => JsonRpcResponse::ok(req.id, serde_json::json!({"deleted": true})),
+                Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+            }
+        }
+        "config.set_default" => {
+            let p = req.params.unwrap_or_default();
+            let model = p["model"].as_str().unwrap_or("").to_string();
+            let provider = p["provider"].as_str().map(String::from);
+            match mgr.set_default(model, provider).await {
+                Ok(_) => JsonRpcResponse::ok(req.id, serde_json::json!({"set": true})),
+                Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+            }
+        }
+        "config.test_provider" => {
+            let p = req.params.unwrap_or_default();
+            let name = p["name"].as_str().unwrap_or("").to_string();
+            match mgr.test_provider(name).await {
+                Ok(v) => JsonRpcResponse::ok(req.id, v),
+                Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+            }
         }
 
         // ===== Slash Commands =====

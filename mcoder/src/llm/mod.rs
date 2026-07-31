@@ -84,18 +84,21 @@ pub type SharedLLM = Arc<dyn LLMAdapter>;
 
 pub fn create_adapter(config: &ModelConfig) -> Result<SharedLLM> {
     use crate::types::ModelProtocol::*;
-    match config.protocol {
+    // S2 修复: 在 adapter 创建时展开 ${ENV_VAR}，内存配置保留原始形式
+    let mut expanded = config.clone();
+    expanded.api_key = crate::config::expand_env_var(&expanded.api_key);
+    match expanded.protocol {
         OpenaiChat | OpenaiCompatible => {
-            Ok(Arc::new(openai::OpenAIAdapter::new(config.clone())))
+            Ok(Arc::new(openai::OpenAIAdapter::new(expanded)))
         }
         OpenaiResponses => {
-            Ok(Arc::new(openai_responses::OpenAIResponsesAdapter::new(config.clone())))
+            Ok(Arc::new(openai_responses::OpenAIResponsesAdapter::new(expanded)))
         }
         Anthropic => {
-            Ok(Arc::new(anthropic::AnthropicAdapter::new(config.clone())))
+            Ok(Arc::new(anthropic::AnthropicAdapter::new(expanded)))
         }
         Gemini => {
-            Ok(Arc::new(gemini::GeminiAdapter::new(config.clone())))
+            Ok(Arc::new(gemini::GeminiAdapter::new(expanded)))
         }
     }
 }

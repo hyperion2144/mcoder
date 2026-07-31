@@ -572,4 +572,81 @@ PR review 时按此清单逐条勾选：
 
 | 日期 | 改动 | 作者 |
 |------|------|------|
-| 2026-07-31 | 初版 | — |
+| 2026-07-31 | 初版 | - |
+| 2026-07-31 | §provider: 运行时 Provider CRUD（RwLock 内存替换 + TOML 原子写 + 三端 UI） | - |
+
+---
+
+## §provider: 运行时 Provider 管理
+
+### 目标
+让用户在 TUI / Desktop / Mobile 三端运行时增删改 LLM provider（OpenAI / Anthropic / Ollama / Gemini / custom），**无需重启 mcoder** 即可让新 provider/model 立即生效。
+
+### 数据模型
+`~/.mcoder/config.toml` 增 `[providers.<name>]` 段：
+
+```toml
+[providers.openai-official]
+name = "openai-official"
+protocol = "openai"          # openai | openai_responses | anthropic | ollama | gemini | custom
+base_url = "https://api.openai.com/v1"
+api_key = "${OPENAI_API_KEY}" # 支持 ${ENV_VAR} 展开
+models = ["gpt-4o", "gpt-4o-mini"]
+enabled = true
+
+default_model = "gpt-4o"
+default_provider = "openai-official"
+```
+
+兼容旧 `[models.<name>]` 扁平格式（保留读取，不优先）。
+
+### Rust 端
+- `AppConfig.providers: BTreeMap<String, ProviderConfig>`
+- `SessionManager.config: Arc<RwLock<AppConfig>>`（**真正运行时可变**，不是 Arc<AppConfig> 不可变快照）
+  - 读路径（list_models / list_providers / resolve_model / get_config 等）走 `current_config()` 快照克隆（`blocking_read().clone()`，AppConfig ≈ 几 KB，开销可忽略）
+  - 写路径（add/update/delete_provider / set_default）走 `replace_config(new_config).await`：先 `save_config`（tmp + rename 原子写盘），再 `config.write().await` 替换整个 AppConfig，最后 `broadcast_config_updated` 通知所有 client
+- 启动兜底（main.rs）：`default_model` 不存在或 adapter 创建失败时**仍启动 server**，仅 subagent 工具不可用；UI 通过 Setup Mode 引导用户添加 provider
+- `expand_env_var` pub：`save_config` 后 `${ENV_VAR}` 在 `replace_config` 内被展开写回内存（与 `load_config` 一致）
+
+### RPC 方法
+| 方法 | 入参 | 出参 | 说明 |
+|------|------|------|------|
+| `config.list_providers` | - | `ProviderInfo[]` | 列出所有供应商 |
+| `config.list_protocols` | - | `ProtocolInfo[]` | UI 下拉：openai/anthropic/ollama/gemini/custom |
+| `config.list_models` | - | `ModelInfo[]` | 含从 providers 展开的 `provider/model` 名 |
+| `config.add_provider` | `{name, protocol, base_url, api_key, models}` | `{added:true}` | 添加 |
+| `config.update_provider` | `{name, protocol?, base_url?, api_key?, models?, enabled?}` | `{updated:true}` | 部分字段更新 |
+| `config.delete_provider` | `{name}` | `{deleted:true}` | 删除（若删的是 default_provider 自动清空） |
+| `config.set_default` | `{model, provider?}` | `{set:true}` | 设置默认模型 |
+| `config.test_provider` | `{name}` | `{ok, status?, url?, error?, hint?}` | HTTP ping `/models` 或 `/v1/messages` |
+
+### ServerEvent
+```rust
+ServerEvent::ConfigUpdated {
+    op: String,                          // add_provider / update_provider / delete_provider / set_default
+    providers: Vec<Value>,               // 最新 providers 快照
+    models: Vec<Value>,                  // 最新 models 快照
+    default_model: String,
+    default_provider: Option<String>,
+}
+```
+通过 ws_server 推 `config_updated` notification 给所有 client（`target_session = None`，全局事件）。
+
+### 三端 UI
+- **TUI**：`/provider` slash command → `ProviderView` 组件（ink + useInput）
+  - 列表：上下移动光标、a 添加、t 测试、d 删除（y/n 确认）、Enter 设为默认、Esc 关闭
+  - 添加表单：5 字段（name/protocol/base_url/api_key/models）tab/↓ 切换协议、Enter 下一字段、提交后自动刷新
+- **Desktop**：Settings 面板加 tabs（General / Providers）；Providers tab 渲染 `ProviderPanel`
+  - 卡片列表：Test / Enable-Disable / Delete 按钮、Models 列表每项 ★ 设为默认
+  - 添加表单：标准 HTML form，协议 select 切换自动填默认 URL
+- **Mobile**：Settings 页加 tabs；Providers tab 渲染 `ProviderScreen`
+  - 折叠式卡片（点击展开）；Add 进入独立全屏表单页
+  - 触摸友好：大字号、大点击区、`-webkit-appearance: none` 原生 select 样式
+
+三端均订阅 `config_updated` 通知自动刷新（无需手动 reload）。
+
+### 关键不变量
+1. `replace_config` 是**唯一**改 `self.config` 的入口；所有写路径必须先 `save_config` 再 `replace_config` 再 `broadcast_config_updated`，顺序不能颠倒（保证盘上和内存一致后才广播）
+2. `AgentSession` 持有自己的 `Arc<ModelConfig>` clone，配置替换**不影响**已运行的 agent loop / tool 调用；用户通过 `/model set <name>` 重新选择时才会读新 cfg
+3. `ToolContext.app_config: Arc<AppConfig>` 是构造时的快照；已运行的 tool 调用（数 ms 级）继续用旧 cfg 无所谓；新 tool 调用通过 `current_config()` 重新拿当前 cfg
+4. `expand_env_var` 在 `load_config` 和 `replace_config` 两处都调用，保证内存中的 api_key 永远是展开后的明文（不把 `${ENV_VAR}` 字面量泄露给 LLM adapter）
