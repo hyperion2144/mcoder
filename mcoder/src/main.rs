@@ -640,25 +640,9 @@ async fn stop_server(host: &str, port: u16) -> anyhow::Result<()> {
     }
 }
 
-/// S1 修复: 从 ProviderConfig + model name 合成 ModelConfig（与 SessionManager::synthesize_model_from_provider 逻辑一致）
+/// M11 修复: 委托给 ProviderConfig::synthesize_model_config 共享方法
 fn synthesize_model_from_provider(p: &types::ProviderConfig, model_name: &str) -> types::ModelConfig {
-    use types::ModelProtocol;
-    let protocol = match p.normalized_protocol() {
-        "openai_responses" => ModelProtocol::OpenaiResponses,
-        "anthropic" => ModelProtocol::Anthropic,
-        "gemini" => ModelProtocol::Gemini,
-        _ => ModelProtocol::OpenaiChat,
-    };
-    types::ModelConfig {
-        name: model_name.to_string(),
-        protocol,
-        api_key: p.api_key.clone(),
-        base_url: p.base_url.clone(),
-        context_window: 128_000,
-        temperature: None,
-        max_tokens: None,
-        input: vec!["text".to_string()],
-    }
+    p.synthesize_model_config(model_name)
 }
 
 #[tokio::main]

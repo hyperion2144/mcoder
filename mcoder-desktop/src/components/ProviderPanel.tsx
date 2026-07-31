@@ -104,16 +104,19 @@ export function ProviderPanel({ req, onConfigUpdated, onClose }: Props) {
   };
 
   const handleToggle = async (p: ProviderInfo) => {
+    setBusy(true); setError(null);
     try {
       await updateProvider(req, { name: p.name, enabled: !p.enabled });
       await refresh();
     } catch (e: any) { setError(e.message); }
+    finally { setBusy(false); }
   };
 
-  const handleSetDefault = async (modelName: string) => {
+  const handleSetDefault = async (modelName: string, providerName: string) => {
+    // M3 修复: 传 provider name，避免清空 default_provider
     setBusy(true); setError(null);
     try {
-      await setDefault(req, modelName);
+      await setDefault(req, modelName, providerName);
       await refresh();
     } catch (e: any) { setError(e.message); }
     finally { setBusy(false); }
@@ -165,7 +168,7 @@ export function ProviderPanel({ req, onConfigUpdated, onClose }: Props) {
                       {p.models.map((m) => (
                         <li key={m}>
                           <code>{m}</code>
-                          <button className="link-btn" disabled={busy} onClick={() => handleSetDefault(m)} title="Set as default">★</button>
+                          <button className="link-btn" disabled={busy} onClick={() => handleSetDefault(m, p.name)} title="Set as default">★</button>
                         </li>
                       ))}
                     </ul>

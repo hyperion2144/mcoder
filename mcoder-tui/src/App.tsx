@@ -676,7 +676,7 @@ export function App({ client: initialClient }: Props) {
       {currentView === 'tree' && <TreeView client={client} />}
       {currentView === 'model' && <ModelView client={client} />}
       {currentView === 'setting' && <SettingView client={client} />}
-      {currentView === 'provider' && <ProviderView client={client} onClose={() => uiStore.setView('chat')} />}
+      {currentView === 'provider' && <ProviderView client={client} onClose={() => uiStore.setView('chat')} pendingPermission={!!(sid && permissionStore.pending[sid])} />}
 
       {/* Todo 摘要条（消息区下方、输入框上方）；全部完成时隐藏 */}
       <TodoSummaryBar />

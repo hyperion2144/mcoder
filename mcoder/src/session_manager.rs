@@ -222,7 +222,7 @@ pub struct SessionManager {
     tools: Arc<ToolRegistry>,
     /// 设计文档 §provider: 配置用 RwLock 包裹，支持运行时 add/update/delete_provider
     /// - 读路径（list_models / list_providers）：blocking_read（这些 RPC 是同步）
-    /// - 写路径（replace_config）：async write（clone-on-write 替换整个 AppConfig）
+    /// - 写路径（add/update/delete_provider）：async write（在 write lock 内 read-modify-write）
     /// - AgentSession 持有自己的 model_config Arc clone，不受配置替换影响
     config: Arc<RwLock<AppConfig>>,
     plugins: Arc<PluginManager>,
@@ -512,7 +512,7 @@ impl SessionManager {
         let _ = perm_event_tx;
         // 设计文档 §provider: new() 接 Arc<AppConfig>（来自 load_config），
         // 内部解包成 AppConfig 用 RwLock 包裹（运行时支持 add/update/delete_provider）。
-        // 这是边界：旧 API 兼容 + 新内存可变性。后续 replace_config 内部展开 env var 后写回。
+        // 这是边界：旧 API 兼容 + 新内存可溶性。
         let cfg_arc: Arc<AppConfig> = config;
         let cfg = Arc::try_unwrap(cfg_arc)
             .unwrap_or_else(|arc| (*arc).clone());
@@ -622,56 +622,41 @@ fn resolve_model(&self, model_name: Option<&str>) -> Result<ModelConfig> {
         // 3. S1 修复: 查 providers -- 遍历所有 provider 的 models 列表
         //    匹配规则：纯 model name（如 "gpt-4o"）或 "provider/model" 形式
         for (pname, p) in &cfg.providers {
-            // 检查 "provider/model" 形式
-            let prefixed = format!("{pname}/{name}");
             for mname in &p.models {
                 let full = format!("{pname}/{mname}");
-                if mname.as_str() == name || full == name || prefixed == *mname {
+                if mname.as_str() == name || full == name {
                     return Ok(self.synthesize_model_from_provider(p, mname));
                 }
             }
-        }
-
-        // 4. fallback: default_model 也不在 providers 里
-        if name != cfg.default_model {
-            // 尝试用 default_model 再查一次 providers
-            for (pname, p) in &cfg.providers {
+            // 也检查 name 是否为 "provider/model" 形式
+            if let Some(bare) = name.strip_prefix(&format!("{pname}/")) {
                 for mname in &p.models {
-                    if mname == &cfg.default_model {
+                    if mname.as_str() == bare {
                         return Ok(self.synthesize_model_from_provider(p, mname));
                     }
                 }
             }
         }
 
+        // 4. M7 修复: 用户明确请求的模型不存在时直接报错，不静默 fallback 到 default_model
+        //    （仅当 model_name 为 None 时才用 default_model，那已经在步骤 1-3 处理了）
+        if model_name.is_some() {
+            anyhow::bail!(
+                "model '{}' not found in config.models or providers",
+                name
+            );
+        }
+
         anyhow::bail!(
-            "model '{}' not found in config.models or providers, and default_model '{}' also missing",
-            name,
+            "default_model '{}' not found in config.models or providers",
             cfg.default_model
         );
     }
 
     /// 从 ProviderConfig + model name 合成 ModelConfig
-    /// S1 修复: ProviderConfig 的 protocol 是 String，需映射到 ModelProtocol enum
+    /// M11 修复: 委托给 ProviderConfig::synthesize_model_config 共享方法
     fn synthesize_model_from_provider(&self, p: &crate::types::ProviderConfig, model_name: &str) -> ModelConfig {
-        use crate::types::ModelProtocol;
-        let protocol = match p.normalized_protocol() {
-            "openai_responses" => ModelProtocol::OpenaiResponses,
-            "anthropic" => ModelProtocol::Anthropic,
-            "gemini" => ModelProtocol::Gemini,
-            // openai / ollama / custom / 其他都走 OpenAI Chat
-            _ => ModelProtocol::OpenaiChat,
-        };
-        ModelConfig {
-            name: model_name.to_string(),
-            protocol,
-            api_key: p.api_key.clone(), // 保留 ${ENV_VAR} 形式，由 create_adapter 展开
-            base_url: p.base_url.clone(),
-            context_window: 128_000, // 默认值；provider 级别不配置 context_window
-            temperature: None,
-            max_tokens: None,
-            input: vec!["text".to_string()],
-        }
+        p.synthesize_model_config(model_name)
     }
 
     /// 获取或创建指定项目的 per-project 资源（双检锁避免重复创建）
@@ -733,13 +718,8 @@ fn resolve_model(&self, model_name: Option<&str>) -> Result<ModelConfig> {
             session_state: Arc::new(session_state),
             event_tx: self.event_tx.clone(),
             cancellation: entry.cancellation.clone(),
-            // 设计文档 §provider: ToolContext 的 app_config 必须能反映运行时变更
-            // 用 Arc::clone 让 ToolContext 持有 cfg 的共享 Arc；cfg 被替换时
-            // ToolContext 通过 Arc 看到新值（前提：ToolContext 内部用 Arc::deref
-            // 或 blocking_read）。当前 ToolContext 是 Arc<AppConfig>（不可变快照）
-            // —— 这意味着已经分发的 ToolContext 仍指旧 cfg。这是设计权衡：
-            //   - 已运行的 tool 调用（数 ms 级）继续用旧 cfg，无所谓
-            //   - 新 tool 调用通过 create_adapter / list_providers 重新拿当前 cfg
+            // M3 修复: ToolContext.app_config 是构造时的不可变快照。
+            // 已运行的 tool 调用继续用旧 cfg；新 tool 调用通过 current_config() 拿当前 cfg。
             app_config: Arc::new(cfg),
             mcp_manager: Some(self.mcp_manager.clone()),
             current_model,  // already Arc<ModelConfig> from agent.model_config.clone()
@@ -2765,7 +2745,7 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
 
     /// permission.set_level - 切换权限级别（runtime 修改）
     pub fn set_permission_level(&self, level: crate::types::PermissionLevel) {
-        // 设计文档 §provider: 当前 level 在 cfg 里；改完后必须 save_config + replace_config 才生效
+        // 设计文档 §provider: 当前 level 在 cfg 里；改完后必须 save_config + write lock 才生效
         // 为简化起见这里仅记日志；UI 应通过 config.set + config 持久化路径生效
         tracing::warn!(
             "set_permission_level({:?}) called; for full effect use /config set or restart with new ~/.mcoder/config.toml",
@@ -3470,7 +3450,7 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
         let mut out: Vec<serde_json::Value> = cfg.models.iter().map(|(name, m)| serde_json::json!({
             "name": name,
             "display_name": m.name,
-            "protocol": format!("{:?}", m.protocol),
+            "protocol": serde_json::to_string(&m.protocol).unwrap_or_default().trim_matches('"').to_string(),
             "context_window": m.context_window,
             "max_tokens": m.max_tokens,
             "source": "models",
@@ -3494,15 +3474,19 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
 
     /// config.list_providers - 列出供应商
     pub fn list_providers(&self) -> Vec<serde_json::Value> {
-        self.current_config().providers.iter().map(|(name, p)| serde_json::json!({
-            "name": name,
-            "display_name": p.name,
-            "protocol": p.protocol,
-            "base_url": p.base_url,
-            "has_api_key": !p.api_key.is_empty(),
-            "enabled": p.enabled,
-            "models": p.models,
-        })).collect()
+        self.current_config().providers.iter().map(|(name, p)| {
+            // S1 修复: has_api_key 展开env var后判断，避免 ${ENV_VAR} 永远非空误报
+            let expanded_key = crate::config::expand_env_var(&p.api_key);
+            serde_json::json!({
+                "name": name,
+                "display_name": p.name,
+                "protocol": p.protocol,
+                "base_url": p.base_url,
+                "has_api_key": !expanded_key.is_empty(),
+                "enabled": p.enabled,
+                "models": p.models,
+            })
+        }).collect()
     }
 
     /// config.add_provider - 添加供应商
@@ -3517,6 +3501,15 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
         api_key: String,
         models: Vec<String>,
     ) -> Result<()> {
+        // M8: 校验 name 非空
+        if name.trim().is_empty() {
+            anyhow::bail!("provider name cannot be empty");
+        }
+        // M8: 校验 protocol 合法
+        let valid_protocols = ["openai", "openai_responses", "anthropic", "ollama", "gemini", "custom"];
+        if !valid_protocols.contains(&protocol.as_str()) {
+            anyhow::bail!("invalid protocol '{protocol}'; must be one of: {}", valid_protocols.join(", "));
+        }
         let mut guard = self.config.write().await;
         // M1: 检查重复名
         if guard.providers.contains_key(&name) {
@@ -3579,8 +3572,8 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
         if new_config.default_provider.as_deref() == Some(&name) {
             new_config.default_provider = None;
         }
-        // M2: 清理悬空 default_model
-        if removed.models.contains(&new_config.default_model) {
+        // M2: 清理悬空 default_model（S2: 支持 "provider/model" 形式）
+        if !new_config.default_model.is_empty() && removed.has_model(&name, &new_config.default_model) {
             tracing::warn!(
                 "default_model '{}' was in deleted provider '{}'; clearing default_model",
                 new_config.default_model, name
@@ -3596,16 +3589,17 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
 
     /// config.set_default - 设置默认模型
     /// S3 修复: read-modify-write 在单次 write lock 内完成
+    /// S2 修复: 支持 "provider/model" 形式
     pub async fn set_default(self: &Arc<Self>, model: String, provider: Option<String>) -> Result<()> {
         let mut guard = self.config.write().await;
         let mut new_config = (*guard).clone();
-        // 校验 model 在 providers/models 中能找到
-        let exists = new_config.models.contains_key(&model)
-            || new_config.providers.values().any(|p| p.models.contains(&model));
-        if !exists && !model.is_empty() {
+        // S2: 校验 model 在 providers/models 中能找到（支持纯名和 "provider/model" 形式）
+        let model_exists = new_config.models.contains_key(&model)
+            || new_config.providers.iter().any(|(pname, p)| p.has_model(pname, &model));
+        if !model_exists && !model.is_empty() {
             anyhow::bail!("model '{model}' not found in providers/models");
         }
-        // L1 修复: 校验 provider 参数存在
+        // 校验 provider 参数存在
         if let Some(ref pname) = provider {
             if !new_config.providers.contains_key(pname) {
                 anyhow::bail!("provider '{pname}' not found");
@@ -3621,7 +3615,8 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
     }
 
     /// config.test_provider - 测试供应商连通性
-    /// M3 修复: Anthropic 用 GET /v1/models（而非 /v1/messages，后者只接受 POST）
+    /// S3 修复: ollama 测试 /v1/models（与实际推理路径一致）
+    /// M14 修复: 用 normalized_protocol 做大小写不敏感匹配
     /// S2 修复: 此处展开 ${ENV_VAR}
     pub async fn test_provider(&self, name: String) -> Result<serde_json::Value> {
         let provider = self.current_config().providers.get(&name)
@@ -3629,17 +3624,17 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
             .clone();
         // S2: 展开 ${ENV_VAR}
         let api_key = crate::config::expand_env_var(&provider.api_key);
-        // M3: Anthropic 用 /v1/models（GET 可行），不用 /v1/messages（405 Method Not Allowed）
-        let url = match provider.protocol.as_str() {
+        // M14: 用 normalized_protocol 做大小写不敏感匹配
+        let url = match provider.normalized_protocol() {
             "anthropic" => format!("{}/v1/models", provider.base_url.trim_end_matches('/')),
-            "ollama" => format!("{}/api/tags", provider.base_url.trim_end_matches('/')),
+            "ollama" => format!("{}/v1/models", provider.base_url.trim_end_matches('/')),
             _ => format!("{}/models", provider.base_url.trim_end_matches('/')),
         };
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(8))
             .build()?;
         let mut req = client.get(&url);
-        if !api_key.is_empty() && provider.protocol != "ollama" {
+        if !api_key.is_empty() && provider.normalized_protocol() != "ollama" {
             req = req.bearer_auth(&api_key);
         }
         match req.send().await {
@@ -3686,15 +3681,18 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
     async fn broadcast_config_updated(&self, op: &str) {
         let cfg = self.current_config();
         // M4: 从同一份 cfg 快照内联构建 providers/models JSON，避免多次 blocking_read
-        let providers: Vec<serde_json::Value> = cfg.providers.iter().map(|(name, p)| serde_json::json!({
-            "name": name,
-            "display_name": p.name,
-            "protocol": p.protocol,
-            "base_url": p.base_url,
-            "has_api_key": !p.api_key.is_empty(),
-            "enabled": p.enabled,
-            "models": p.models,
-        })).collect();
+        let providers: Vec<serde_json::Value> = cfg.providers.iter().map(|(name, p)| {
+            let expanded_key = crate::config::expand_env_var(&p.api_key);
+            serde_json::json!({
+                "name": name,
+                "display_name": p.name,
+                "protocol": p.protocol,
+                "base_url": p.base_url,
+                "has_api_key": !expanded_key.is_empty(),
+                "enabled": p.enabled,
+                "models": p.models,
+            })
+        }).collect();
         let models = self.list_models_from_snapshot(&cfg);
         let default_model = cfg.default_model.clone();
         let default_provider = cfg.default_provider.clone();
@@ -3712,7 +3710,7 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
         let mut out: Vec<serde_json::Value> = cfg.models.iter().map(|(name, m)| serde_json::json!({
             "name": name,
             "display_name": m.name,
-            "protocol": format!("{:?}", m.protocol),
+            "protocol": serde_json::to_string(&m.protocol).unwrap_or_default().trim_matches('"').to_string(),
             "context_window": m.context_window,
             "max_tokens": m.max_tokens,
             "source": "models",

@@ -45,6 +45,8 @@ export function ProviderScreen({ req, onConfigUpdated }: Props) {
       setModels(ms);
       setProtocols(pt);
       setError(null);
+      // L7 修复: 清理悬空的 expandedProvider（外部 refresh 可能删除了 provider）
+      setExpandedProvider((cur) => cur && ps.some((p) => p.name === cur) ? cur : null);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -105,16 +107,20 @@ export function ProviderScreen({ req, onConfigUpdated }: Props) {
   };
 
   const handleToggle = async (p: ProviderInfo) => {
+    // M6 修复: 设 busy 避免并发
+    setBusy(true); setError(null);
     try {
       await updateProvider(req, { name: p.name, enabled: !p.enabled });
       await refresh();
     } catch (e: any) { setError(e.message); }
+    finally { setBusy(false); }
   };
 
-  const handleSetDefault = async (modelName: string) => {
+  const handleSetDefault = async (modelName: string, providerName: string) => {
+    // M3 修复: 传 provider name，避免清空 default_provider
     setBusy(true); setError(null);
     try {
-      await setDefault(req, modelName);
+      await setDefault(req, modelName, providerName);
       await refresh();
     } catch (e: any) { setError(e.message); }
     finally { setBusy(false); }
@@ -221,7 +227,7 @@ export function ProviderScreen({ req, onConfigUpdated }: Props) {
                     {p.models.map((m) => (
                       <li key={m}>
                         <code>{m}</code>
-                        <button className="link-btn" disabled={busy} onClick={() => handleSetDefault(m)} title="Set as default">★</button>
+                        <button className="link-btn" disabled={busy} onClick={() => handleSetDefault(m, p.name)} title="Set as default">★</button>
                       </li>
                     ))}
                   </ul>

@@ -410,9 +410,10 @@ impl Default for ProviderConfig {
 }
 
 impl ProviderConfig {
-    /// 协议归一化（与 ModelConfig.protocol 保持一致）
+    /// 协议归一化（大小写不敏感）
+    /// M14 修复: 统一转小写后匹配
     pub fn normalized_protocol(&self) -> &str {
-        match self.protocol.as_str() {
+        match self.protocol.to_ascii_lowercase().as_str() {
             "openai_responses" => "openai_responses",
             p if p.starts_with("openai") => "openai",
             "anthropic" => "anthropic",
@@ -420,6 +421,60 @@ impl ProviderConfig {
             "gemini" => "gemini",
             "custom" => "custom",
             _ => "openai",
+        }
+    }
+
+    /// S2 修复: 检查 model name 是否属于此 provider
+    /// 支持纯名（"gpt-4o"）和 "provider/model" 形式
+    pub fn has_model(&self, provider_name: &str, model_name: &str) -> bool {
+        if self.models.iter().any(|m| m == model_name) {
+            return true;
+        }
+        // "provider/model" 形式
+        let prefixed = format!("{provider_name}/{model_name}");
+        if let Some(rest) = prefixed.strip_prefix(&format!("{provider_name}/")) {
+            // model_name 本身就是 "provider/model" 形式
+            if model_name.starts_with(&format!("{provider_name}/")) {
+                let bare = &model_name[provider_name.len() + 1..];
+                return self.models.iter().any(|m| m == bare);
+            }
+        }
+        // 也检查 models 列表中是否有 "provider/model" 形式的条目
+        self.models.iter().any(|m| m == &prefixed || m == model_name)
+    }
+
+    /// M11 修复: 从 ProviderConfig + model name 合成 ModelConfig（共享方法）
+    /// M13 修复: "custom" 映射到 OpenaiCompatible 而非 OpenaiChat
+    pub fn synthesize_model_config(&self, model_name: &str) -> ModelConfig {
+        let protocol = match self.normalized_protocol() {
+            "openai_responses" => ModelProtocol::OpenaiResponses,
+            "anthropic" => ModelProtocol::Anthropic,
+            "gemini" => ModelProtocol::Gemini,
+            "custom" => ModelProtocol::OpenaiCompatible, // M13: custom -> OpenaiCompatible
+            // openai / ollama / 其他都走 OpenAI Chat（ollama 兼容 OpenAI API）
+            _ => ModelProtocol::OpenaiChat,
+        };
+        let base_url = if self.normalized_protocol() == "ollama" {
+            // S3 修复: ollama 的 OpenAI 兼容端点是 /v1/chat/completions，
+            // 若 base_url 不含 /v1 后缀则自动补上
+            let trimmed = self.base_url.trim_end_matches('/');
+            if trimmed.ends_with("/v1") {
+                trimmed.to_string()
+            } else {
+                format!("{trimmed}/v1")
+            }
+        } else {
+            self.base_url.clone()
+        };
+        ModelConfig {
+            name: model_name.to_string(),
+            protocol,
+            api_key: self.api_key.clone(), // 保留 ${ENV_VAR} 形式，由 create_adapter 展开
+            base_url,
+            context_window: 128_000, // 默认值；provider 级别不配置 context_window
+            temperature: None,
+            max_tokens: None,
+            input: vec!["text".to_string()],
         }
     }
 }
