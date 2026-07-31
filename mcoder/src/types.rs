@@ -316,6 +316,9 @@ pub struct AppConfig {
     /// Web 搜索配置
     #[serde(default)]
     pub web_search: WebSearchConfig,
+    /// launch 工具配置
+    #[serde(default)]
+    pub launch: LaunchConfig,
 }
 
 fn default_image_description_timeout_secs() -> u64 {
@@ -398,6 +401,34 @@ fn default_lsp_post_write() -> bool { true }
 fn default_lsp_wait_ms() -> u64 { 1500 }
 fn default_lsp_min_severity() -> String { "warning".to_string() }
 fn default_lsp_max_results() -> usize { 50 }
+
+/// launch 工具配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LaunchConfig {
+    /// 每个 session 最多启动 N 个进程
+    #[serde(default = "default_launch_max_processes")]
+    pub max_processes_per_session: usize,
+    /// 每个进程日志缓冲最大行数
+    #[serde(default = "default_launch_max_log_lines")]
+    pub max_log_lines_per_process: usize,
+    /// stop 时优雅关闭超时（ms），超时后 SIGKILL
+    #[serde(default = "default_launch_stop_timeout")]
+    pub default_stop_timeout_ms: u64,
+}
+
+impl Default for LaunchConfig {
+    fn default() -> Self {
+        Self {
+            max_processes_per_session: default_launch_max_processes(),
+            max_log_lines_per_process: default_launch_max_log_lines(),
+            default_stop_timeout_ms: default_launch_stop_timeout(),
+        }
+    }
+}
+
+fn default_launch_max_processes() -> usize { 20 }
+fn default_launch_max_log_lines() -> usize { 5000 }
+fn default_launch_stop_timeout() -> u64 { 3000 }
 
 /// Web 搜索配置
 /// 在 ~/.mcoder/config.toml 中配置：

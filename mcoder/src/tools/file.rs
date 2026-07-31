@@ -102,6 +102,11 @@ impl ReadTool {
             return Self::read_url(&path_str, start, end, with_hashes, ctx).await;
         }
 
+        // 1.5 内置文档：mcoder:// URI（无运行时文件读取，文档硬编码在 builtin_docs.rs）
+        if path_str.starts_with("mcoder://") || path_str.starts_with("mcoder:") {
+            return Self::read_builtin_doc(&path_str, start, end, ctx);
+        }
+
         let path = PathBuf::from(&path_str);
 
         // 2. Directory
@@ -282,6 +287,50 @@ impl ReadTool {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("reading {}", path.display()))?;
         Self::paginate_content(&content, path_str, start, end, with_hashes, &ctx.project_dir)
+    }
+
+    /// 读取 mcoder:// 内置文档（无运行时文件读取，文档硬编码在 builtin_docs.rs）
+    fn read_builtin_doc(
+        path_str: &str,
+        start: usize,
+        end: Option<usize>,
+        _ctx: &ToolContext,
+    ) -> Result<ToolOutput> {
+        let content = crate::tools::builtin_docs::resolve_mcoder_uri(path_str).ok_or_else(|| {
+            let known = crate::tools::builtin_docs::known_doc_ids()
+                .iter()
+                .map(|id| format!("mcoder://{}", id))
+                .collect::<Vec<_>>()
+                .join(", ");
+            anyhow::anyhow!(
+                "unknown built-in doc '{}'. Available: {}",
+                path_str,
+                known
+            )
+        })?;
+        // 内置文档不需要 line hashes（没有 edit 工具锚点场景）
+        // 默认 limit=500 行（HELP/CONFIG 各约 200-400 行），避免一次塞太多到 context
+        let builtin_start = if start == 0 { 0 } else { start - 1 };
+        let builtin_end = end.map(|e| e - 1);
+        let total_lines = content.lines().count();
+        let lines: Vec<&str> = content
+            .lines()
+            .skip(builtin_start)
+            .take(builtin_end.map(|e| e.saturating_sub(builtin_start) + 1).unwrap_or(500))
+            .collect();
+        let text = lines.join("\n") + "\n";
+        // 构造 paginate_content 等价结果
+        let result = serde_json::json!({
+            "ok": true,
+            "path": path_str,
+            "type": "text",
+            "content": text,
+            "lines_read": lines.len(),
+            "total_lines": total_lines,
+            "truncated": lines.len() < total_lines - builtin_start,
+            "hashes": serde_json::Value::Null,
+        });
+        Ok(ToolOutput::Sync { result })
     }
 
     /// 读取 URL：抓取 HTML 并转为文本

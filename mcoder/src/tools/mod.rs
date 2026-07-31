@@ -9,6 +9,8 @@ pub mod image;
 pub mod journal;
 pub mod mcp_meta;
 pub mod plan;
+pub mod builtin_docs;
+pub mod launch;
 pub mod sandbox;
 pub mod subagent;
 pub mod task;
@@ -76,6 +78,8 @@ pub struct ToolContext {
     /// LSP 异步诊断队列：write/edit 后台任务把诊断 push 到这里，
     /// SessionManager 在下次 tool call 前 drain 出来注入到 LLM messages
     pub lsp_diag_store: Arc<crate::lsp::PendingDiagnosticsStore>,
+    /// launch 工具：启动/管理后台进程（dev server、watcher 等）
+    pub launch_manager: crate::tools::launch::LaunchManager,
 }
 
 #[async_trait]
@@ -153,6 +157,9 @@ pub fn build_full_registry() -> (
     // ===== Web 工具（无状态）=====
     reg.register(Arc::new(web::WebSearchTool));
     reg.register(Arc::new(web::WebFetchTool));
+
+    // ===== launch 工具（无状态，依赖 ctx.launch_manager）=====
+    reg.register(Arc::new(launch::LaunchTool));
 
     // ===== 代码图谱工具（无状态，从 ctx 取 graph）=====
     reg.register(Arc::new(crate::code_graph::tools::GraphSearchTool));

@@ -410,6 +410,40 @@ where
                             })),
                             Some(session_id),
                         ),
+                        ServerEvent::LaunchOutput {
+                            session_id,
+                            id,
+                            name,
+                            stream,
+                            text,
+                            ts,
+                        } => (
+                            make_notification("launch_output", serde_json::json!({
+                                "id": id,
+                                "name": name,
+                                "stream": stream,
+                                "text": text,
+                                "ts": ts,
+                            })),
+                            Some(session_id),
+                        ),
+                        ServerEvent::LaunchExited {
+                            session_id,
+                            id,
+                            name,
+                            exit_code,
+                            signal,
+                            ts,
+                        } => (
+                            make_notification("launch_exited", serde_json::json!({
+                                "id": id,
+                                "name": name,
+                                "exit_code": exit_code,
+                                "signal": signal,
+                                "ts": ts,
+                            })),
+                            Some(session_id),
+                        ),
                     };
                     // 过滤：session 事件只推给 attached 的 client；全局事件推给所有
                     let should_send = match (&attached_session, target_session) {

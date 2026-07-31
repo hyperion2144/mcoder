@@ -240,6 +240,8 @@ pub struct SessionManager {
     /// write/edit 后后台 LSP 任务把诊断 push 进来，
     /// 下次 tool call 执行前 drain 出来拼成 ToolResult 注入
     lsp_diag_store: Arc<crate::lsp::PendingDiagnosticsStore>,
+    /// launch 工具：全局后台进程管理器（跨 session 共享）
+    launch_manager: crate::tools::launch::LaunchManager,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -339,6 +341,24 @@ pub enum ServerEvent {
         diagnostics: Vec<crate::lsp::LspDiagnostic>,
         ts: i64,
     },
+    /// launch 工具：后台进程 stdout/stderr 单行输出（前端 inline 显示）
+    LaunchOutput {
+        session_id: String,
+        id: String,
+        name: Option<String>,
+        stream: String,
+        text: String,
+        ts: i64,
+    },
+    /// launch 工具：后台进程退出
+    LaunchExited {
+        session_id: String,
+        id: String,
+        name: Option<String>,
+        exit_code: Option<i32>,
+        signal: Option<i32>,
+        ts: i64,
+    },
     Error {
         message: String,
     },
@@ -428,6 +448,9 @@ impl SessionManager {
         ask_registry: Arc<AskRegistry>,
     ) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(1024);
+        // launch_manager 需要 event_tx clone + launch config，先取出
+        let launch_event_tx = event_tx.clone();
+        let launch_config = config.launch.clone();
         Arc::new(Self {
             sessions: RwLock::new(HashMap::new()),
             tools,
@@ -442,6 +465,10 @@ impl SessionManager {
             event_tx,
             ask_registry,
             lsp_diag_store: crate::lsp::PendingDiagnosticsStore::new(),
+            launch_manager: crate::tools::launch::LaunchManager::new(
+                launch_event_tx,
+                launch_config,
+            ),
         })
     }
 
@@ -473,7 +500,28 @@ impl SessionManager {
             res.lsp_manager.shutdown_all().await;
             res.debug_manager.shutdown_all().await;
         }
+        // launch 工具：关闭所有后台进程（避免进程泄漏为孤儿进程）
+        // 遍历所有 session 的所有进程，逐个 stop
+        self.shutdown_all_launches().await;
         tracing::info!("session manager shutdown complete");
+    }
+
+    /// 优雅关闭所有 launch 启动的后台进程
+    /// 每个进程用 default_stop_timeout_ms 等待，超时后强杀
+    async fn shutdown_all_launches(&self) {
+        // 收集所有 (session_id, id_or_name) 元组
+        let procs = self.launch_manager.all_processes_snapshot().await;
+        if procs.is_empty() {
+            return;
+        }
+        tracing::info!("shutting down {} background processes...", procs.len());
+        for (session_id, id, name, timeout_ms) in procs {
+            let target = name.unwrap_or(id);
+            let timeout = timeout_ms.unwrap_or(3000);
+            if let Err(e) = self.launch_manager.stop(&target, &session_id, timeout).await {
+                tracing::warn!("failed to stop launch process '{}': {}", target, e);
+            }
+        }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<ServerEvent> {
@@ -563,6 +611,7 @@ impl SessionManager {
             mcp_manager: Some(self.mcp_manager.clone()),
             current_model,  // already Arc<ModelConfig> from agent.model_config.clone()
             lsp_diag_store: self.lsp_diag_store.clone(),
+            launch_manager: self.launch_manager.clone(),
         })
     }
 
