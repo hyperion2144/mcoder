@@ -73,6 +73,9 @@ pub struct ToolContext {
     pub mcp_manager: Option<Arc<crate::plugin::mcp::McpManager>>,
     /// 当前会话的主模型配置（供 read 等工具判断是否需要视觉模型降级）
     pub current_model: Arc<crate::types::ModelConfig>,
+    /// LSP 异步诊断队列：write/edit 后台任务把诊断 push 到这里，
+    /// SessionManager 在下次 tool call 前 drain 出来注入到 LLM messages
+    pub lsp_diag_store: Arc<crate::lsp::PendingDiagnosticsStore>,
 }
 
 #[async_trait]

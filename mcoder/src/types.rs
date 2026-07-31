@@ -327,11 +327,23 @@ fn default_image_description_timeout_secs() -> u64 {
 /// 在 config.toml 中配置 auto_approve 列表可跳过确认
 /// [tools]
 /// auto_approve = ["browser_open", "browser_navigate", "browser_snapshot"]
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolsConfig {
     /// 自动批准的危险工具列表（无需用户确认）
     #[serde(default)]
     pub auto_approve: Vec<String>,
+    /// LSP 写后异步诊断
+    #[serde(default)]
+    pub lsp_diagnostics: LspDiagnosticsConfig,
+}
+
+impl Default for ToolsConfig {
+    fn default() -> Self {
+        Self {
+            auto_approve: Vec::new(),
+            lsp_diagnostics: LspDiagnosticsConfig::default(),
+        }
+    }
 }
 
 impl ToolsConfig {
@@ -347,7 +359,45 @@ impl ToolsConfig {
             || tool_name.starts_with("screen_")
             || tool_name.starts_with("app_")
     }
+
+    /// LSP 写后异步诊断配置
+    pub fn lsp_diagnostics(&self) -> &LspDiagnosticsConfig {
+        &self.lsp_diagnostics
+    }
 }
+
+/// LSP 写后诊断：write/edit 后等 LSP 处理 N ms，异步推送诊断到 LLM context
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LspDiagnosticsConfig {
+    /// 是否启用（默认 true）
+    #[serde(default = "default_lsp_post_write")]
+    pub post_write: bool,
+    /// 等 LSP 处理时间（毫秒），rust-analyzer 推荐 1500，tsserver 800
+    #[serde(default = "default_lsp_wait_ms")]
+    pub wait_ms: u64,
+    /// 最小严重度（warning | error | information | hint），低于此不返回
+    #[serde(default = "default_lsp_min_severity")]
+    pub min_severity: String,
+    /// 单文件最多返回 N 条诊断
+    #[serde(default = "default_lsp_max_results")]
+    pub max_results: usize,
+}
+
+impl Default for LspDiagnosticsConfig {
+    fn default() -> Self {
+        Self {
+            post_write: default_lsp_post_write(),
+            wait_ms: default_lsp_wait_ms(),
+            min_severity: default_lsp_min_severity(),
+            max_results: default_lsp_max_results(),
+        }
+    }
+}
+
+fn default_lsp_post_write() -> bool { true }
+fn default_lsp_wait_ms() -> u64 { 1500 }
+fn default_lsp_min_severity() -> String { "warning".to_string() }
+fn default_lsp_max_results() -> usize { 50 }
 
 /// Web 搜索配置
 /// 在 ~/.mcoder/config.toml 中配置：

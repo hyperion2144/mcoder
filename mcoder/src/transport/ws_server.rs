@@ -391,6 +391,25 @@ where
                             })),
                             None,
                         ),
+                        ServerEvent::LspDiagnostics {
+                            session_id,
+                            tool_call_id,
+                            file,
+                            language,
+                            wait_ms,
+                            diagnostics,
+                            ts,
+                        } => (
+                            make_notification("lsp_diagnostics", serde_json::json!({
+                                "file": file,
+                                "language": language,
+                                "wait_ms": wait_ms,
+                                "tool_call_id": tool_call_id,
+                                "diagnostics": diagnostics,
+                                "ts": ts,
+                            })),
+                            Some(session_id),
+                        ),
                     };
                     // 过滤：session 事件只推给 attached 的 client；全局事件推给所有
                     let should_send = match (&attached_session, target_session) {

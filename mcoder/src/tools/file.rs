@@ -9,6 +9,7 @@ use crate::types::{ToolOutput, ToolSchema};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use calamine::{DataType as _, Reader as _};
+use futures_util::FutureExt;
 use regex::Regex;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -1141,6 +1142,12 @@ impl Tool for WriteTool {
         let journal_id = ctx.journal.record(&path, &before, &content, "write");
         std::fs::write(&path, &content)?;
 
+        // LSP 异步诊断：写完后 spawn 后台任务，等 LSP 处理 + push 诊断到 session
+        let cfg = ctx.app_config.tools.lsp_diagnostics.clone();
+        if cfg.post_write {
+            Self::spawn_lsp_diagnostic(ctx, path.clone(), content.clone(), cfg);
+        }
+
         Ok(ToolOutput::Sync { result: serde_json::json!({
             "ok": true,
             "file": path.display().to_string(),
@@ -1148,6 +1155,156 @@ impl Tool for WriteTool {
             "journal_id": journal_id,
             "after_hash": hash_line(&content)[..8].to_string()
         }) })
+    }
+}
+
+impl WriteTool {
+    /// 后台 LSP 诊断任务（panic-safe：所有错误吞掉，不影响主流程）
+    fn spawn_lsp_diagnostic(
+        ctx: &ToolContext,
+        path: PathBuf,
+        content: String,
+        cfg: crate::types::LspDiagnosticsConfig,
+    ) {
+        spawn_post_write_lsp_diagnostic(
+            ctx,
+            path,
+            content,
+            cfg,
+        );
+    }
+}
+
+/// 写文件后触发 LSP 异步诊断的公共入口
+/// WriteTool / EditTool::finalize 都调用此函数
+fn spawn_post_write_lsp_diagnostic(
+    ctx: &ToolContext,
+    path: PathBuf,
+    content: String,
+    cfg: crate::types::LspDiagnosticsConfig,
+) {
+    if !cfg.post_write {
+        return;
+    }
+    let lang = crate::lsp::Language::from_path(&path);
+    if lang == crate::lsp::Language::Unknown {
+        return;
+    }
+    let lsp_manager = ctx.lsp_manager.clone();
+    let event_tx = ctx.event_tx.clone();
+    let session_id = ctx.session_id.clone();
+    let tool_call_id = ctx.tool_call_id.clone();
+    let lsp_diag_store = ctx.lsp_diag_store.clone();
+    let language_id = lang.language_id().to_string();
+
+    tokio::spawn(async move {
+        // panic-safe：任何 panic 不影响主流程
+        let result = std::panic::AssertUnwindSafe(async {
+            run_post_write_diagnostic(
+                &lsp_manager,
+                &event_tx,
+                &session_id,
+                tool_call_id,
+                &lsp_diag_store,
+                path,
+                content,
+                &language_id,
+                &cfg,
+            )
+            .await
+        })
+        .catch_unwind()
+        .await;
+
+        if let Err(e) = result {
+            tracing::warn!("LSP diagnostic task panicked: {:?}", e);
+        }
+    });
+}
+
+/// 实际执行 LSP 诊断的逻辑（被 panic-safe 包装层调用）
+async fn run_post_write_diagnostic(
+    lsp_manager: &Arc<crate::lsp::LspManager>,
+    event_tx: &tokio::sync::broadcast::Sender<crate::session_manager::ServerEvent>,
+    session_id: &str,
+    tool_call_id: Option<String>,
+    lsp_diag_store: &Arc<crate::lsp::PendingDiagnosticsStore>,
+    path: PathBuf,
+    content: String,
+    language_id: &str,
+    cfg: &crate::types::LspDiagnosticsConfig,
+) -> anyhow::Result<()> {
+    // 1. 确保 LSP client 已启动 + 文件已 didOpen
+    let client = match lsp_manager.ensure_open(&path).await {
+        Ok(Some(c)) => c,
+        _ => {
+            tracing::debug!("LSP not available for {}", path.display());
+            return Ok(());
+        }
+    };
+    let uri = crate::lsp::path_to_uri(&path);
+
+    // 2. didChange 通知 LSP server
+    client.did_change(&uri, &content).await?;
+
+    // 3. 等待 LSP server 完成分析
+    tokio::time::sleep(std::time::Duration::from_millis(cfg.wait_ms)).await;
+
+    // 4. 获取诊断
+    let raw_diags = client.diagnostics(&uri).await?;
+
+    // 5. 过滤 + 格式化
+    let min_sev = severity_rank(&cfg.min_severity);
+    let mut diags = Vec::new();
+    for raw in raw_diags {
+        if let Some(d) = crate::lsp::LspDiagnostic::from_lsp(&raw) {
+            if severity_rank(&d.severity) >= min_sev {
+                diags.push(d);
+            }
+        }
+    }
+    diags.truncate(cfg.max_results);
+    if diags.is_empty() {
+        return Ok(()); // 无错误/警告就不发了
+    }
+
+    // 6. 推送 ServerEvent 给前端（inline 显示）
+    let _ = event_tx.send(crate::session_manager::ServerEvent::LspDiagnostics {
+        session_id: session_id.to_string(),
+        tool_call_id: tool_call_id.clone(),
+        file: path.display().to_string(),
+        language: language_id.to_string(),
+        wait_ms: cfg.wait_ms,
+        diagnostics: diags.clone(),
+        ts: crate::lsp::diagnostics_store::now_ts(),
+    });
+
+    // 7. 推入 pending 队列（下次 tool call 前 SessionManager 会自动注入 LLM）
+    let file = path.display().to_string();
+    let language = language_id.to_string();
+    let pending = crate::lsp::PendingDiagnostic {
+        file: file.clone(),
+        language,
+        tool_call_id,
+        wait_ms: cfg.wait_ms,
+        diagnostics: diags,
+        ts: crate::lsp::diagnostics_store::now_ts(),
+    };
+    // 同文件旧诊断替换（不要多次 write 的旧诊断污染）
+    lsp_diag_store
+        .replace_for_file(session_id, &file, pending)
+        .await;
+    Ok(())
+}
+
+/// 把 severity 字符串映射成数字（用于最小阈值过滤）
+fn severity_rank(s: &str) -> u8 {
+    match s {
+        "error" => 1,
+        "warning" => 2,
+        "information" => 3,
+        "hint" => 4,
+        _ => 2, // 未知视作 warning
     }
 }
 
@@ -1368,7 +1525,7 @@ impl Tool for EditTool {
                 if before.ends_with('\n') && !content.ends_with('\n') {
                     content.push('\n');
                 }
-                let (new_hashes, journal_id, diff) = Self::finalize(&ctx.journal, file, &before, &content, "edit")?;
+                let (new_hashes, journal_id, diff) = Self::finalize(&ctx.journal, ctx, file, &before, &content, "edit")?;
                 results.push(serde_json::json!({
                     "file": file.display().to_string(),
                     "ok": true,
@@ -1399,9 +1556,19 @@ impl Tool for EditTool {
 
 impl EditTool {
     /// 写入文件 + journal + 生成 new_hashes/diff_preview
-    fn finalize(journal: &Arc<crate::tools::journal::FileJournal>, path: &Path, before: &str, new_content: &str, op: &str) -> Result<(Vec<String>, String, String)> {
+    fn finalize(
+        journal: &Arc<crate::tools::journal::FileJournal>,
+        ctx: &ToolContext,
+        path: &Path,
+        before: &str,
+        new_content: &str,
+        op: &str,
+    ) -> Result<(Vec<String>, String, String)> {
         let journal_id = journal.record(path, before, new_content, op);
         std::fs::write(path, new_content)?;
+        // LSP 异步诊断：edit 写文件成功后触发，与 write 一致
+        let cfg = ctx.app_config.tools.lsp_diagnostics.clone();
+        spawn_post_write_lsp_diagnostic(ctx, path.to_path_buf(), new_content.to_string(), cfg);
         // new_hashes: 修改后文件前 5 行的 hash
         let new_hashes: Vec<String> = new_content.lines().take(5).map(|l| hash_line(l)[..8].to_string()).collect();
         // diff_preview: unified diff 格式

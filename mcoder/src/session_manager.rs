@@ -236,6 +236,10 @@ pub struct SessionManager {
     event_tx: broadcast::Sender<ServerEvent>,
     /// ask_user 工具的 pending 池（per-session）
     ask_registry: Arc<AskRegistry>,
+    /// LSP 异步诊断 pending 队列（per-session）
+    /// write/edit 后后台 LSP 任务把诊断 push 进来，
+    /// 下次 tool call 执行前 drain 出来拼成 ToolResult 注入
+    lsp_diag_store: Arc<crate::lsp::PendingDiagnosticsStore>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -322,6 +326,18 @@ pub enum ServerEvent {
         delta: crate::llm::Usage,
         cumulative: crate::llm::Usage,
         context_window: usize,
+    },
+    /// write/edit 后 LSP 异步诊断结果（用于前端 inline 显示）
+    /// 不强制注入 LLM context，由 session_manager 在下次 tool call 前批量注入
+    LspDiagnostics {
+        session_id: String,
+        /// 关联到触发诊断的 write/edit tool_call_id（前端可 inline 显示）
+        tool_call_id: Option<String>,
+        file: String,
+        language: String,
+        wait_ms: u64,
+        diagnostics: Vec<crate::lsp::LspDiagnostic>,
+        ts: i64,
     },
     Error {
         message: String,
@@ -425,6 +441,7 @@ impl SessionManager {
             command_dispatcher,
             event_tx,
             ask_registry,
+            lsp_diag_store: crate::lsp::PendingDiagnosticsStore::new(),
         })
     }
 
@@ -545,6 +562,7 @@ impl SessionManager {
             app_config: self.config.clone(),
             mcp_manager: Some(self.mcp_manager.clone()),
             current_model,  // already Arc<ModelConfig> from agent.model_config.clone()
+            lsp_diag_store: self.lsp_diag_store.clone(),
         })
     }
 
@@ -696,6 +714,9 @@ impl SessionManager {
             let sessions = self.sessions.read().await;
             sessions.get(session_id).cloned().context("session not found")?
         };
+        // LSP 异步诊断：tool 执行前 drain pending 队列，拼成 ToolResult 注入到 messages
+        // 这样 LLM 在看到本次工具结果时也能看到之前 write/edit 的 LSP 反馈
+        self.inject_pending_lsp_diagnostics(session_id).await;
         let ctx = self.build_tool_context(session_id, &entry).await?;
         let call = crate::types::ToolCall {
             id: uuid::Uuid::new_v4().to_string(),
@@ -703,6 +724,36 @@ impl SessionManager {
             args,
         };
         self.tools.execute(&call, &ctx).await
+    }
+
+    /// 取出 session 的 pending LSP 诊断，拼接成 user message 注入到 messages
+/// 作为下一次 tool call 的 sibling，让 LLM 看到之前的 LSP 反馈
+pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
+        let diags = self.lsp_diag_store.drain(session_id).await;
+        if diags.is_empty() {
+            return;
+        }
+        let cfg = &self.config.tools.lsp_diagnostics;
+        let text = crate::lsp::diagnostics_store::format_for_context(&diags, cfg.max_results);
+        if text.is_empty() {
+            return;
+        }
+        // 用 User role 包装，前缀标明是历史 LSP 反馈（不污染 assistant 上下文）
+        let msg = crate::types::Message::new(
+            crate::types::Role::User,
+            vec![crate::types::ContentBlock::Text { text }],
+        );
+        // 写 jsonl + 注入内存
+        let sessions = self.sessions.read().await;
+        if let Some(entry) = sessions.get(session_id) {
+            let mut agent = entry.session.lock().await;
+            let _ = agent.add_message(msg);
+        }
+        tracing::debug!(
+            "injected {} LSP diagnostic batch(es) for session {}",
+            diags.len(),
+            session_id
+        );
     }
 
     pub async fn get_messages(&self, session_id: &str) -> Result<Vec<Message>> {
@@ -3237,6 +3288,9 @@ async fn execute_readonly_concurrent(
     cancel_token: &CancellationToken,
     ctx: &crate::tools::ToolContext,
 ) -> Vec<(crate::types::ToolCall, Message)> {
+    // LSP 异步诊断：tool 执行前注入之前 write/edit 的诊断结果到 messages
+    mgr.inject_pending_lsp_diagnostics(session_id).await;
+
     // 先发 ToolCallStart 事件 + 检查 role 白名单
     let mut handles: Vec<(crate::types::ToolCall, tokio::task::JoinHandle<Message>)> = Vec::new();
     for tc in calls {

@@ -4,6 +4,7 @@
 // 与图谱协同：图谱做粗粒度查询（符号索引），LSP 做精粒度操作（hover/定义/引用/重命名/格式化）
 #![allow(dead_code)]
 
+pub mod diagnostics_store;
 pub mod tools;
 
 use anyhow::{Context, Result};
@@ -14,6 +15,8 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{oneshot, Mutex, RwLock};
+
+pub use diagnostics_store::{PendingDiagnostic, PendingDiagnosticsStore};
 
 // ==================== 类型定义 ====================
 
@@ -56,7 +59,7 @@ impl Language {
     }
 
     /// 返回该语言在 LSP 中的 languageId
-    fn language_id(&self) -> &'static str {
+    pub fn language_id(&self) -> &'static str {
         match self {
             Language::Rust => "rust",
             Language::TypeScript => "typescript",
@@ -88,6 +91,62 @@ pub struct Range {
 pub struct Location {
     pub uri: String,
     pub range: Range,
+}
+
+/// 过滤后的诊断条目（公开 API，供 session_manager 注入 context）
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LspDiagnostic {
+    /// "error" | "warning" | "information" | "hint"
+    pub severity: String,
+    /// 0-based line
+    pub line: u32,
+    /// 0-based column (UTF-16 code units)
+    pub column: u32,
+    pub end_line: u32,
+    pub end_column: u32,
+    pub message: String,
+    pub code: Option<String>,
+    pub source: Option<String>,
+}
+
+impl LspDiagnostic {
+    /// 从原始 LSP Diagnostic JSON 转换
+    /// severity 数字: 1=Error, 2=Warning, 3=Information, 4=Hint
+    pub fn from_lsp(raw: &serde_json::Value) -> Option<Self> {
+        let range = raw.get("range")?;
+        let start = range.get("start")?;
+        let end = range.get("end")?;
+        let severity = match raw.get("severity").and_then(|v| v.as_u64()) {
+            Some(1) => "error",
+            Some(2) => "warning",
+            Some(3) => "information",
+            Some(4) => "hint",
+            _ => "warning", // 没声明 severity 视作 warning
+        };
+        Some(Self {
+            severity: severity.to_string(),
+            line: start.get("line").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            column: start.get("character").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            end_line: end.get("line").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            end_column: end.get("character").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            message: raw
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            code: raw
+                .get("code")
+                .and_then(|c| c.as_str().map(|s| s.to_string()))
+                .or_else(|| {
+                    raw.get("code")
+                        .and_then(|c| c.as_i64().map(|n| n.to_string()))
+                }),
+            source: raw
+                .get("source")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+        })
+    }
 }
 
 // ==================== URI 工具函数 ====================
