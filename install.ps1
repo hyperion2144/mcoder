@@ -21,7 +21,15 @@ Pop-Location
 # 2. 构建 mcoder-tui (Bun compile 单文件)
 Write-Host "`n[2/3] Building mcoder-tui (Bun standalone)..." -ForegroundColor Yellow
 Push-Location "$ROOT\mcoder-tui"
-npm install --silent
+# 删除 lockfile 重新生成，避免 package.json/lockfile 不一致导致 peer dep 冲突
+# （历史上 react-devtools-core 在 package.json 写 ^7 但 lockfile 锁 4，npm install 时升级会与 React 18 冲突）
+if (Test-Path package-lock.json) {
+    Remove-Item package-lock.json -Force
+}
+if (Test-Path node_modules) {
+    Remove-Item node_modules -Recurse -Force
+}
+npm install --legacy-peer-deps --silent
 npm run build
 # Patch ink-picture
 $inkPicture = "node_modules\ink-picture\build\components\image\index.js"

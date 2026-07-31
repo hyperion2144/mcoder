@@ -1,4 +1,5 @@
 pub mod async_tasks;
+pub mod compaction;
 pub mod role;
 
 use crate::llm::{LLMResponse, SharedLLM};
@@ -7,65 +8,6 @@ use crate::tools::ToolRegistry;
 use crate::types::{CompactConfig, ContentBlock, Message, ModelConfig, Role, ToolCall, ToolOutput};
 use anyhow::{Context, Result};
 use std::sync::Arc;
-
-/// 压缩单条消息中的大 ToolResult
-/// 设计文档 §3.5: tool_results 策略
-///   - "summarize": 截断为前 200 + 后 100 字符
-///   - "drop": 替换为占位文本
-///   - "keep" / 其他: 原样保留
-fn compact_one(msg: &Message, cfg: &CompactConfig) -> Message {
-    let strategy = cfg.tool_results.as_str();
-    let mut new_content: Vec<ContentBlock> = Vec::with_capacity(msg.content.len());
-    for b in &msg.content {
-        match b {
-            ContentBlock::ToolResult { id, output } => {
-                let output_str = serde_json::to_string(output).unwrap_or_default();
-                if output_str.chars().count() <= 800 {
-                    new_content.push(b.clone());
-                    continue;
-                }
-                match strategy {
-                    "summarize" => {
-                        // 统一按字符计算，避免 UTF-8 多字节截断错位
-                        let chars: Vec<char> = output_str.chars().collect();
-                        let total_chars = chars.len();
-                        let head: String = chars.iter().take(200).collect();
-                        let tail_start = total_chars.saturating_sub(100);
-                        let tail: String = chars[tail_start..].iter().collect();
-                        let truncated_chars = total_chars.saturating_sub(300);
-                        let summarized = format!(
-                            "{}...[truncated {} chars during compaction]...{}",
-                            head, truncated_chars, tail
-                        );
-                        new_content.push(ContentBlock::ToolResult {
-                            id: id.clone(),
-                            output: ToolOutput::Sync {
-                                result: serde_json::Value::String(summarized),
-                            },
-                        });
-                    }
-                    "drop" => {
-                        new_content.push(ContentBlock::ToolResult {
-                            id: id.clone(),
-                            output: ToolOutput::Sync {
-                                result: serde_json::Value::String(
-                                    "[tool result dropped during context compaction]".into()
-                                ),
-                            },
-                        });
-                    }
-                    _ => {
-                        new_content.push(b.clone());
-                    }
-                }
-            }
-            _ => {
-                new_content.push(b.clone());
-            }
-        }
-    }
-    Message { id: msg.id.clone(), parent_id: msg.parent_id.clone(), role: msg.role, content: new_content, usage: msg.usage.clone(), display_only: msg.display_only }
-}
 
 pub struct AgentSession {
     pub session: JsonlSession,
@@ -82,6 +24,11 @@ pub struct AgentSession {
     pub cumulative_usage: crate::llm::Usage,
     /// 当前消息树分支末端消息 id（None=空会话；发新消息时作为 parent_id）
     pub current_head_id: Option<String>,
+    /// 设计文档 §3.5: 分层历史摘要（超长 session 保留 N 层 LLM 摘要）
+    /// 每次 layered compact 时向头部 push 一层（最旧），超过 max_layers 时移除最旧
+    pub compaction_layers: Vec<compaction::SummaryLayer>,
+    /// 所有可用模型（用于 summary_model 查找）
+    pub models: Arc<std::collections::HashMap<String, ModelConfig>>,
 }
 
 impl AgentSession {
@@ -92,6 +39,7 @@ impl AgentSession {
         tools: Arc<ToolRegistry>,
         max_iters: u32,
         role_registry: Arc<role::RoleRegistry>,
+        models: Arc<std::collections::HashMap<String, ModelConfig>>,
     ) -> Self {
         let messages = session.read_all().unwrap_or_default();
         let current_head_id = session.current_head_id().map(|s| s.to_string());
@@ -106,6 +54,21 @@ impl AgentSession {
             role_registry,
             cumulative_usage: crate::llm::Usage::default(),
             current_head_id,
+            compaction_layers: Vec::new(),
+            models,
+        }
+    }
+
+    /// 在 AgentSession 创建后调用，预热 tiktoken 并 warn 失败 fallback
+    pub fn prewarm_token_estimator() {
+        use crate::agent::compaction::TokenCounter;
+        match TokenCounter::new() {
+            Ok(_) => tracing::debug!("tiktoken cl100k_base loaded successfully"),
+            Err(e) => tracing::warn!(
+                "failed to load tiktoken cl100k_base ({}); falling back to character-based estimator (4 chars/token). \
+                 This may cause inaccurate token counts and premature compaction.",
+                e
+            ),
         }
     }
 
@@ -329,16 +292,20 @@ impl AgentSession {
         }
     }
 
-    /// 设计文档 §3.5: 上下文压缩
+    /// 设计文档 §3.5: 上下文压缩（高级策略）
     /// 策略：
     ///   1. 估算当前消息总 token 数（每 4 字符 ≈ 1 token）
     ///   2. 超过 context_window * threshold 时触发压缩
     ///   3. 保留 system prompt（开头 keep_first 条）+ 最近 keep_recent 条
     ///   4. 中间消息：按 cfg.tool_results 策略处理大的 ToolResult
-    ///      - "summarize": 截断为前 200 + 后 100 字符的摘要
-    ///      - "drop": 丢弃大的 ToolResult（保留 ToolUse 以维持对话连贯）
-    ///      - "keep": 不压缩（默认）
-    pub fn maybe_compact(&mut self, cfg: &CompactConfig) {
+    ///      - "tool_aware"（默认）: 按工具名分级压缩（read/bash/grep 等不同策略）
+    ///      - "summarize": 保留前 200 + 后 100 字符的摘要
+    ///      - "drop": 丢弃大的 ToolResult
+    ///      - "keep": 不压缩
+    ///   5. 渐进式压缩后仍超阈值 → LLM 摘要整段（strategy == "llm_summarize" 时）
+    ///   6. 超长 session → layered summary（保留多层历史摘要）
+    ///   7. Image 块自动替换为 description（避免图像占 token）
+    pub async fn maybe_compact(&mut self, cfg: &CompactConfig) {
         if cfg.strategy == "off" || cfg.strategy == "none" {
             return;
         }
@@ -349,8 +316,10 @@ impl AgentSession {
         }
 
         // 估算当前 token 数
-        let est_tokens: usize = self.messages.iter()
-            .map(|m| Self::estimate_tokens(m))
+        let est_tokens: usize = self
+            .messages
+            .iter()
+            .map(compaction::estimate_tokens)
             .sum();
         let token_threshold = (self.model_config.context_window as f32 * cfg.threshold) as usize;
         if est_tokens < token_threshold {
@@ -363,38 +332,73 @@ impl AgentSession {
             return;
         }
 
-        // 策略1: 渐进式压缩 - 先压缩中间部分的大 ToolResult
+        // 步骤 1: 渐进式压缩 - 处理中间部分的大 ToolResult + Image
+        // 保留 system prompt + 最近消息
         let mut new_messages: Vec<Message> = Vec::with_capacity(total);
         new_messages.extend(self.messages[..keep_first].iter().cloned());
 
         let middle_end = total - keep_recent;
         let mut compacted_count = 0usize;
         for msg in &self.messages[keep_first..middle_end] {
-            let compacted = Self::compact_message(msg, cfg);
-            if compacted {
+            // Image 块用视觉模型生成 description（异步，无视觉模型时用 placeholder）
+            let compacted = compaction::strip_images_with_describe(
+                msg,
+                None, // 不持久化 cache（每次 compact 都重新描述）
+                None, // TODO: 传 app_config 让 vision 描述生效
+            )
+            .await;
+            let compacted = compaction::_internal::process_tool_results(&compacted, cfg);
+            if compacted.content.iter().map(|b| b.text_len_or_size()).sum::<usize>()
+                != msg.content.iter().map(|b| b.text_len_or_size()).sum::<usize>()
+            {
                 compacted_count += 1;
             }
-            new_messages.push(compact_one(msg, cfg));
+            new_messages.push(compacted);
         }
 
         new_messages.extend(self.messages[middle_end..].iter().cloned());
 
-        let new_tokens: usize = new_messages.iter()
-            .map(|m| Self::estimate_tokens(m))
+        let new_tokens: usize = new_messages
+            .iter()
+            .map(compaction::estimate_tokens)
             .sum();
         tracing::info!(
-            "context compacted: {} messages ({}→{} tokens, {} tool results compacted)",
+            "context compacted (progressive): {} messages ({}→{} tokens, {} messages compacted)",
             total, est_tokens, new_tokens, compacted_count
         );
         self.messages = new_messages;
 
-        // 策略2: 如果压缩后仍超阈值，用摘要替代整个中间段
-        let new_tokens_after = self.estimate_total_tokens();
-        if new_tokens_after > token_threshold {
-            self.aggressive_compact(cfg);
+        // 步骤 2: 超长 session → layered summary（在 llm_summarize 之前，基于已 ToolResult 压缩的消息）
+        // layer 摘要存到 self.compaction_layers，不修改 self.messages
+        // 后续 llm_summarize_middle 会替换 messages 中间段；layer 摘要仍是历史快照
+        if cfg.layered_summary {
+            self.update_layered_summaries(cfg).await;
         }
 
-        // After compaction, re-inject workflow context
+        // 步骤 3: 渐进式 + layered 后仍超阈值 → LLM 摘要中间段
+        let new_tokens_after = self.estimate_total_tokens();
+        if new_tokens_after > token_threshold {
+            // 选 summary 模型：cfg.summary_model 优先（必须在 self.models 中存在），否则主模型
+            let summary_model_config = match cfg.summary_model.as_deref() {
+                Some(name) if !name.is_empty() => {
+                    match self.models.get(name) {
+                        Some(mc) => Arc::new(mc.clone()),
+                        None => {
+                            tracing::warn!(
+                                "summary_model '{}' not found in config.models, falling back to main model '{}'",
+                                name, self.model_config.name
+                            );
+                            Arc::clone(&self.model_config)
+                        }
+                    }
+                }
+                _ => Arc::clone(&self.model_config),
+            };
+            self.llm_summarize_middle(keep_first, total - keep_recent, &summary_model_config)
+                .await;
+        }
+
+        // 步骤 4: workflow context 重注入
         let project_path = self.session.project_path();
         let workflow_config = project_path.join(".mcoder").join("workflow").join("config.yaml");
         if workflow_config.exists() {
@@ -406,66 +410,89 @@ impl AgentSession {
         }
     }
 
-    /// 估算单条消息的 token 数（每 4 字符 ≈ 1 token）
-    fn estimate_tokens(msg: &Message) -> usize {
-        let chars: usize = msg.content.iter()
-            .map(|b| match b {
-                ContentBlock::Text { text } => text.len(),
-                ContentBlock::ToolUse { name, args, .. } => {
-                    name.len() + args.to_string().len()
-                }
-                ContentBlock::ToolResult { output, .. } => {
-                    serde_json::to_string(output).map(|s| s.len()).unwrap_or(0)
-                }
-                ContentBlock::Image { .. } => 1000, // 图片估算 1000 token
-            })
-            .sum();
-        chars / 4 + 1 // 至少 1 token
+    /// 用 LLM 摘要整段 middle 消息（替换为一条 system summary）
+    async fn llm_summarize_middle(
+        &mut self,
+        keep_first: usize,
+        middle_end: usize,
+        model_config: &Arc<ModelConfig>,
+    ) {
+        if middle_end <= keep_first + 1 {
+            return;
+        }
+        // 借用中间段（不 clone）：summarize_middle_as_system 只读 content
+        let summary_msg = compaction::summarize_middle_as_system(
+            &self.messages[keep_first..middle_end],
+            &self.llm,
+            model_config,
+        )
+        .await;
+        let middle_count = middle_end - keep_first;
+
+        let mut new_messages: Vec<Message> =
+            Vec::with_capacity(keep_first + 1 + self.messages.len() - middle_end);
+        new_messages.extend(self.messages[..keep_first].iter().cloned());
+        new_messages.push(summary_msg);
+        new_messages.extend(self.messages[middle_end..].iter().cloned());
+
+        let before = self.estimate_total_tokens();
+        self.messages = new_messages;
+        let after = self.estimate_total_tokens();
+        tracing::info!(
+            "context compacted (llm_summarize): {} middle messages replaced ({}→{} tokens)",
+            middle_count, before, after
+        );
     }
 
-    /// 判断消息是否需要压缩（包含大的 ToolResult）
-    fn compact_message(msg: &Message, _cfg: &CompactConfig) -> bool {
-        msg.content.iter().any(|b| match b {
-            ContentBlock::ToolResult { output, .. } => {
-                serde_json::to_string(output).map(|s| s.len() > 800).unwrap_or(false)
-            }
-            _ => false,
-        })
-    }
-
-    pub fn estimate_total_tokens(&self) -> usize {
-        self.messages.iter().map(Self::estimate_tokens).sum()
-    }
-
-    /// 激进压缩：用一条摘要替代整个中间段
-    fn aggressive_compact(&mut self, cfg: &CompactConfig) {
-        let total = self.messages.len();
+    /// 分层摘要：超长 session 维护 N 层历史摘要
+    /// 触发条件：keep_first + keep_recent 之间长度 > layer_chunk_size
+    /// 每次触发：最早的 chunk_size 条消息 → LLM 摘要 → push 到 layers 头部
+    /// 超过 max_layers 时移除最旧层（layer 0）
+    async fn update_layered_summaries(&mut self, cfg: &CompactConfig) {
         let keep_first = cfg.keep_first.max(1) as usize;
         let keep_recent = cfg.keep_recent as usize;
-        if total <= keep_first + keep_recent + 1 {
+        let middle_len = self.messages.len().saturating_sub(keep_first + keep_recent);
+        if middle_len < cfg.layer_chunk_size {
             return;
         }
 
-        let middle_count = total - keep_first - keep_recent;
-        let mut new_messages: Vec<Message> = Vec::with_capacity(keep_first + keep_recent + 1);
-        new_messages.extend(self.messages[..keep_first].iter().cloned());
+        // 取最早的 chunk_size 条消息（保留 keep_first 之后的内容）
+        let span_end = keep_first + cfg.layer_chunk_size;
+        let chunk = self.messages[keep_first..span_end].to_vec();
+        let span = (keep_first, span_end);
 
-        let summary = Message::system(format!(
-            "[context compacted: {} earlier messages summarized. \
-             Tool results were replaced to save tokens.]",
-            middle_count
-        ));
-        new_messages.push(summary);
+        let layer = compaction::create_layer(
+            &chunk,
+            span,
+            &self.llm,
+            &self.model_config,
+        )
+        .await;
 
-        new_messages.extend(self.messages[total - keep_recent..].iter().cloned());
-
-        let before_tokens = self.estimate_total_tokens();
-        self.messages = new_messages;
-        let after_tokens = self.estimate_total_tokens();
+        // push 到头部，保留最多 max_layers 层
+        self.compaction_layers.insert(0, layer);
+        if self.compaction_layers.len() > cfg.max_layers {
+            self.compaction_layers.truncate(cfg.max_layers);
+        }
         tracing::info!(
-            "aggressive compact: {} messages ({}→{} tokens)",
-            total, before_tokens, after_tokens
+            "compaction_layers updated: {} layers total",
+            self.compaction_layers.len()
         );
+    }
+
+    /// 在 send_to_llm 时把 layers 注入到 messages 头部（最旧在前）
+    pub fn messages_with_layers(&self) -> Vec<Message> {
+        compaction::inject_layers(&self.compaction_layers, &self.messages)
+    }
+
+    /// 估算单条消息的 token 数（每 4 字符 ≈ 1 token；图片按 1000 token 估算）
+    /// 已迁移到 crate::agent::compaction::estimate_tokens，这里保留为 wrapper
+    fn estimate_tokens(msg: &Message) -> usize {
+        crate::agent::compaction::estimate_tokens(msg)
+    }
+
+    pub fn estimate_total_tokens(&self) -> usize {
+        self.messages.iter().map(crate::agent::compaction::estimate_tokens).sum()
     }
 
     pub async fn run_once(&mut self) -> Result<(Option<Message>, Option<crate::llm::Usage>)> {
@@ -486,7 +513,8 @@ impl AgentSession {
         // 非视觉模型图片过滤：若当前模型不支持图片输入，将 ContentBlock::Image 替换为
         // 包含文件路径的文本块，让模型知道图片存在并可调用 view_image 工具理解图片。
         // 仅取 root->current_head_id 路径上的消息（消息树分支隔离）
-        let path_messages = self.messages_along_head_path();
+        // m13: 注入分层历史摘要（layered_summary 启用时）
+        let path_messages = self.messages_with_layers();
         let mut messages_for_llm: Vec<Message> = if !self.model_config.supports_image() {
             path_messages.iter().map(|m| {
                 let needs_filter = m.content.iter().any(|b| matches!(b, ContentBlock::Image { .. }));

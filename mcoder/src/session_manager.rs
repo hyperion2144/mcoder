@@ -630,7 +630,17 @@ impl SessionManager {
 
         let llm = create_adapter(&model_config)?;
         let max_iters = self.config.loop_max_iters;
-        let agent = AgentSession::new(jsonl, model_config, llm, self.tools.clone(), max_iters, self.role_registry.clone());
+        let agent = AgentSession::new(
+            jsonl,
+            model_config,
+            llm,
+            self.tools.clone(),
+            max_iters,
+            self.role_registry.clone(),
+            Arc::new(self.config.models.clone()),
+        );
+        // P1: 启动期预热 tiktoken
+        AgentSession::prewarm_token_estimator();
 
         // Phase 5: 创建 per-session TaskManager（绑 AsyncTaskStore；同 session 共享 DB）
         let task_manager = self.get_or_create_task_manager(&session_id).await?;
@@ -2171,7 +2181,7 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
                                 })),
                             ).await;
                         }
-                        agent.maybe_compact(&self.config.compact);
+                        agent.maybe_compact(&self.config.compact).await;
                         // 设计文档 §3.5: 检查 loop mode 退出条件
                         if agent.check_loop_condition().await {
                             tracing::info!("loop condition met for role {}, exiting loop",
@@ -2835,7 +2845,15 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
         let model_config = Arc::new(self.resolve_model(Some(&meta.model))?);
         let llm = create_adapter(&model_config)?;
         let max_iters = self.config.loop_max_iters;
-        let agent = AgentSession::new(jsonl, model_config, llm, self.tools.clone(), max_iters, self.role_registry.clone());
+        let agent = AgentSession::new(
+            jsonl,
+            model_config,
+            llm,
+            self.tools.clone(),
+            max_iters,
+            self.role_registry.clone(),
+            Arc::new(self.config.models.clone()),
+        );
 
         // Phase 5: 为重放的 session 分配 per-session TaskManager（get_or_create
         // 会原子标记任何 queued/running 任务为 interrupted，绝不自动重跑）

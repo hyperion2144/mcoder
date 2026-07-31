@@ -23,7 +23,11 @@ cargo install --path . --force
 echo ""
 echo "[2/3] Building mcoder-tui (Bun standalone)..."
 cd "$ROOT/mcoder-tui"
-npm install --silent
+# 删除 lockfile 重新生成，避免 package.json/lockfile 不一致导致 peer dep 冲突
+# （历史上 react-devtools-core 在 package.json 写 ^7 但 lockfile 锁 4，npm install 时升级会与 React 18 冲突）
+[ -f package-lock.json ] && rm -f package-lock.json
+[ -d node_modules ] && rm -rf node_modules
+npm install --legacy-peer-deps --silent
 npm run build
 ./build-standalone.sh
 

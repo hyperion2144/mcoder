@@ -121,7 +121,12 @@ impl Default for AppConfig {
                 threshold: 0.8,
                 keep_recent: 5,
                 keep_first: 2,
-                tool_results: "summarize".into(),
+                tool_results: "tool_aware".into(),
+                summary_model: None,
+                tool_thresholds: std::collections::HashMap::new(),
+                layered_summary: false,
+                layer_chunk_size: 30,
+                max_layers: 5,
             },
             tui: crate::types::TuiConfig {
                 compact: false,

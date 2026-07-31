@@ -77,6 +77,8 @@ html2text = "0.13"
 zip = "2.2"
 tar = "0.4"
 quick-xml = "0.36"
+# P2: 精确 token 估算（tiktoken-rs，cl100k_base 编码与 GPT-4/Claude 一致）
+tiktoken-rs = "0.5"
 
 # Windows 专有 API（进程管理）
 [target.'cfg(windows)'.dependencies]

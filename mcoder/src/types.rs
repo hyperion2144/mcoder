@@ -97,7 +97,7 @@ impl std::fmt::Debug for CancellationToken {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
     Text { text: String },
@@ -117,6 +117,20 @@ pub enum ContentBlock {
         path: String,
         media_type: String,
     },
+}
+
+impl ContentBlock {
+    /// 返回该块的近似大小（字符数），用于 compaction 前后对比
+    pub fn text_len_or_size(&self) -> usize {
+        match self {
+            ContentBlock::Text { text } => text.len(),
+            ContentBlock::ToolUse { name, args, .. } => name.len() + args.to_string().len(),
+            ContentBlock::ToolResult { output, .. } => {
+                serde_json::to_string(output).map(|s| s.len()).unwrap_or(0)
+            }
+            ContentBlock::Image { .. } => 1000,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -179,7 +193,7 @@ pub struct ToolCall {
     pub args: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolOutput {
     Sync {
@@ -267,6 +281,18 @@ pub struct CompactConfig {
     pub keep_recent: u32,
     pub keep_first: u32,
     pub tool_results: String,
+    /// LLM 摘要使用的模型名（None/空 = 用主模型；推荐 fast/cheap 模型如 haiku）
+    /// 仅在 strategy="llm_summarize" 时生效
+    pub summary_model: Option<String>,
+    /// 分级 ToolResult 阈值覆盖（key = tool name, value = 字符阈值）
+    /// 留空用默认 800
+    pub tool_thresholds: HashMap<String, usize>,
+    /// 分层摘要开关（超长 session 启用）
+    pub layered_summary: bool,
+    /// 每多少条消息生成一层摘要（layered_summary 开启时生效）
+    pub layer_chunk_size: usize,
+    /// 最多保留多少层历史摘要
+    pub max_layers: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -529,7 +555,12 @@ impl Default for CompactConfig {
             threshold: 0.8,
             keep_recent: 5,
             keep_first: 2,
-            tool_results: "summarize".into(),
+            tool_results: "tool_aware".into(),
+            summary_model: None,
+            tool_thresholds: HashMap::new(),
+            layered_summary: false,
+            layer_chunk_size: 30,
+            max_layers: 5,
         }
     }
 }
