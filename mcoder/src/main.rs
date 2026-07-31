@@ -461,13 +461,13 @@ fn process_is_alive(pid: u32) -> bool {
     };
     unsafe {
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if handle == 0 {
+        if handle.is_null() {
             return false;
         }
         let mut exit_code: u32 = 0;
         let ok = GetExitCodeProcess(handle, &mut exit_code);
         CloseHandle(handle);
-        ok != 0 && exit_code == STILL_ACTIVE
+        ok != 0 && exit_code == STILL_ACTIVE as u32
     }
 }
 
@@ -513,7 +513,7 @@ fn kill_process(pid: u32) {
     };
     unsafe {
         let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
-        if handle != 0 {
+        if !handle.is_null() {
             TerminateProcess(handle, 1);
             CloseHandle(handle);
         }
