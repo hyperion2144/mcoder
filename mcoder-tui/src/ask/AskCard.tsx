@@ -122,7 +122,10 @@ export function AskCard({ ask_id, tool_call_id, session_id, client, onError }: A
 
   return (
     <div className="ask-card">
-      <div className="ask-card-header">▸ ask_user（等待你的回答）</div>
+      <div className="ask-card-header">
+        <span className="ask-card-title">▸ ask_user</span>
+        <span className="ask-card-status">等待输入</span>
+      </div>
       {request.questions.map((q, qi) => {
         const sel = draftSelections[qi] || [];
         const isMulti = !!q.multi_select;
@@ -144,16 +147,19 @@ export function AskCard({ ask_id, tool_call_id, session_id, client, onError }: A
                       onChange={() => handleSelect(qi, opt.label)}
                     />
                     <span>{opt.label}</span>
-                    {opt.description ? <span className="ask-option-desc"> — {opt.description}</span> : null}
+                    {opt.description ? <span className="ask-option-desc"> · {opt.description}</span> : null}
                   </label>
                 );
               })}
             </div>
+            {isMulti && (
+              <div className="ask-card-multi-select">multi-select</div>
+            )}
             <div className="ask-note-row">
               <input
                 className="ask-note-input"
                 type="text"
-                placeholder={isFocused ? '当前问题 · 自由文本补充' : '点击上方问题以在此输入 note'}
+                placeholder={isFocused ? 'note (optional)' : 'click question above to add note'}
                 value={draftNotes[qi] || ''}
                 onChange={(e: any) => handleNoteChange(qi, e.target.value)}
                 onFocus={() => handleFocus(qi)}
@@ -185,7 +191,7 @@ export function AskCardSummary({
   const text = formatAskFullSummary(request, submission);
   return (
     <div className="ask-card ask-card-summary">
-      <div className="ask-card-header">▸ ask_user（已回答）</div>
+      <div className="ask-card-header">ask_user · 已回答</div>
       <pre className="ask-card-summary-text">{text}</pre>
     </div>
   );

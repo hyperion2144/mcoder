@@ -198,8 +198,26 @@ html, body, #root {
   color: var(--warning);
   font-variant-numeric: tabular-nums;
 }
+/* 设计文档 §7: status-running 流光 */
+.status-running {
+  background: linear-gradient(
+    90deg,
+    var(--bg-overlay) 0%,
+    var(--bg-overlay) 30%,
+    var(--accent) 50%,
+    var(--bg-overlay) 70%,
+    var(--bg-overlay) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: mcoder-shimmer 1.6s ease-in-out infinite;
+}
+
 .bottom-status .status-running {
-  color: var(--accent);
+  /* 颜色由 .status-running 流光控制 */
 }
 
 /* ===== 模型选择 sheet ===== */
@@ -505,14 +523,12 @@ html, body, #root {
 .tool-card-truncated {
   color: var(--text-muted);
   font-size: 11px;
-  font-style: italic;
   margin-top: 2px;
 }
 
 .tool-card-running {
   color: var(--text-muted);
   font-size: 11px;
-  font-style: italic;
 }
 
 .message-empty {
@@ -1541,9 +1557,78 @@ html, body, #root {
 
 .todo-summary-more {
   color: var(--text-muted);
-  font-style: italic;
   font-size: 11px;
   margin-top: 2px;
+}
+
+/* 设计文档 §7.4: 流动光效 */
+@keyframes mcoder-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.tool-card[data-loading="true"] .tool-card-title,
+.thinking-card[data-loading="true"] .thinking-card-title,
+.permission-card[data-loading="true"] .permission-card-title {
+  background: linear-gradient(
+    90deg,
+    var(--bg-overlay) 0%,
+    var(--bg-overlay) 30%,
+    var(--text-primary) 50%,
+    var(--bg-overlay) 70%,
+    var(--bg-overlay) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: mcoder-shimmer 1.6s ease-in-out infinite;
+}
+
+/* Thinking 卡片 */
+.thinking-card {
+  border: 1px solid var(--mauve);
+  background: var(--mauve-dim);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  margin: 8px 0;
+}
+
+.thinking-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--mauve);
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.thinking-card-body {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+/* AskUser 卡片标题 */
+.ask-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--warning);
+  font-size: 14px;
+}
+
+.ask-card-title {
+  font-weight: 600;
+}
+
+/* 设计文档 §10: 移除 italic */
+.ask-summary-text {
+  font-style: normal;
 }
 
 /* ==================== AskUser 卡片（触摸友好）==================== */
@@ -1575,11 +1660,154 @@ html, body, #root {
 }
 
 .ask-card-summary-text {
-  margin: 0;
-  white-space: pre-wrap;
-  font-family: var(--font-mono);
-  font-size: 13px;
+    margin: 0;
+    white-space: pre-wrap;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+/* 设计文档 §8.8: 权限审批卡片（与 .ask-card 对称；移动端按钮加大） */
+.permission-card {
+  border: 1px solid var(--warning);
+  background: var(--warning-dim);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  margin: 10px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.permission-card.permission-summary {
+  border-color: var(--border-subtle);
+  background: var(--bg-surface);
+  opacity: 0.85;
+}
+
+.permission-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  color: var(--warning);
+  font-size: 14px;
+  flex-wrap: wrap;
+}
+
+.permission-card-summary .permission-card-header {
   color: var(--text-secondary);
+}
+
+.permission-level-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--bg-base);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.permission-card-status {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+  flex-basis: 100%;
+}
+
+.permission-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.permission-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.permission-label {
+  color: var(--text-muted);
+  font-size: 12px;
+  min-width: 40px;
+}
+
+.permission-tool-name {
+  font-family: var(--font-mono);
+  color: var(--accent);
+  background: var(--bg-elevated);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.permission-args {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.permission-reason {
+  color: var(--warning);
+  font-size: 13px;
+}
+
+.permission-card-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.permission-btn {
+  padding: 12px 16px;       /* 移动端更大触摸区 */
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.permission-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.permission-btn-allow {
+  background: var(--success-dim);
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.permission-btn-allow:active:not(:disabled) {
+  background: var(--success);
+  color: var(--bg-base);
+}
+
+.permission-btn-deny {
+  background: var(--error-dim);
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.permission-btn-deny:active:not(:disabled) {
+  background: var(--error);
+  color: var(--bg-base);
+}
+
+.permission-btn-always {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.permission-btn-always:active:not(:disabled) {
+  background: var(--accent);
+  color: var(--bg-base);
 }
 
 .ask-question {

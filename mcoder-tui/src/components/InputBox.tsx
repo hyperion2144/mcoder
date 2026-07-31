@@ -1,12 +1,13 @@
-// 设计文档 §6.3: components/InputBox.tsx - 输入框
-// 支持：多行输入、@文件补全、历史记录导航
-// ask 模式下不写普通历史（issue 9）
+// DESIGN.md §4 / §10: InputBox（输入栏）
+// - 移除：italic File completions、>' prefix
+// - 状态栏：单一 prompt 前缀 `▸`
 
 import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import { useState, useEffect } from 'react';
 import { useMessagesStore, useUiStore } from '../store/index.js';
 import { useAskStore } from '../ask/store.js';
+import { TUI_COLORS, PREFIX } from '../theme.js';
 
 interface Props {
   value: string;
@@ -16,18 +17,14 @@ interface Props {
 }
 
 export function InputBox({ value, onChange, onSubmit, placeholder }: Props) {
-  const { navigateHistory, addInputHistory, resetHistory } = useMessagesStore();
-  const { setFileCompletions, navigateFileCompletion, fileCompletions, fileCompletionIndex } = useUiStore();
+  const { navigateHistory, addInputHistory } = useMessagesStore();
+  const { setFileCompletions, fileCompletions, fileCompletionIndex } = useUiStore();
   const askStore = useAskStore();
   const [showFileCompletions, setShowFileCompletions] = useState(false);
 
-  // 设计文档 §6.8: @ 触发文件路径补全
   useEffect(() => {
     const lastAt = value.lastIndexOf('@');
     if (lastAt >= 0 && lastAt === value.length - 1) {
-      // 用户刚输入 @，触发补全
-      // 简化实现：通过 bash 工具获取文件列表
-      // 实际由 App 层处理 RPC 调用
       setShowFileCompletions(true);
     } else {
       setShowFileCompletions(false);
@@ -35,7 +32,6 @@ export function InputBox({ value, onChange, onSubmit, placeholder }: Props) {
   }, [value]);
 
   useInput((input: string, key: any) => {
-    // 设计文档 §6.8: 上下箭头切换历史输入
     if (key.upArrow) {
       const histVal = navigateHistory('up');
       if (histVal !== null) onChange(histVal);
@@ -43,7 +39,6 @@ export function InputBox({ value, onChange, onSubmit, placeholder }: Props) {
       const histVal = navigateHistory('down');
       if (histVal !== null) onChange(histVal);
     } else if (key.return) {
-      // issue 9: ask 模式下不写普通历史（数字键 / note 不应污染上下箭头历史）
       const sid = (askStore as any);
       const askMode = Object.values(sid.askInputMode || {}).some(Boolean);
       if (askMode) return;
@@ -55,24 +50,23 @@ export function InputBox({ value, onChange, onSubmit, placeholder }: Props) {
 
   return (
     <Box flexDirection="column">
-      {/* 文件补全列表 */}
       {showFileCompletions && fileCompletions && fileCompletions.length > 0 && (
         <Box flexDirection="column" paddingX={1}>
-          <Text color="gray" italic>File completions:</Text>
+          <Text color={TUI_COLORS.textMuted}>File completions</Text>
           {fileCompletions.slice(0, 5).map((f, i) => (
-            <Text key={i} color={i === fileCompletionIndex ? 'cyan' : 'gray'}>
-              {i === fileCompletionIndex ? '▸ ' : '  '}{f}
+            <Text key={i} color={i === fileCompletionIndex ? TUI_COLORS.accent : TUI_COLORS.textMuted}>
+              {i === fileCompletionIndex ? PREFIX.running + ' ' : '  '}{f}
             </Text>
           ))}
         </Box>
       )}
       <Box paddingX={1}>
-        <Text color="cyan">{'>'} </Text>
+        <Text color={TUI_COLORS.accent}>{PREFIX.pending} </Text>
         <TextInput
           value={value}
           onChange={onChange}
           onSubmit={onSubmit}
-          placeholder={placeholder || "type a message or /help for commands"}
+          placeholder={placeholder || 'type a message · /help for commands'}
         />
       </Box>
     </Box>

@@ -13,6 +13,7 @@ A self-hosted, multi-client coding agent platform. Run your own AI coding assist
 - **Three client runtimes** — TUI (terminal), Desktop (Tauri), Mobile (Capacitor). All share a unified Catppuccin Mocha design system.
 - **Secure transport** — WebSocket with TLS via self-signed certs or automatic Let's Encrypt (ACME) certificates for domain deployments.
 - **Local-first** — all state (sessions, memory, code graph, journal) lives in SQLite under `~/.mcoder/`. No data leaves your machine except LLM API calls.
+- **Three-tier permission system** (§8.8) — YOLO (auto-execute all) / Standard (default; approve writes) / Strict (approve everything). Approve flows render as inline cards across TUI, Desktop, and Mobile.
 
 ## Architecture
 

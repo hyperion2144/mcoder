@@ -1,7 +1,7 @@
-// components/TreeView.tsx - 消息树视图（分叉/切换）
-//
-// /tree 打开：展示会话消息树，上下选择消息，Enter 切换到该消息所在分支
-// （从根到该消息的路径替换当前消息列表），Esc 关闭。
+// DESIGN.md §4 / §10: TreeView（面板）
+// - single border + textMuted
+// - 角色色：user/assistant/tool 用统一色（不混搭 blue/green/gray）
+// - 移除：italic、press ESC to close、← head emoji
 
 import { Box, Text, useInput } from 'ink';
 import { useState, useEffect } from 'react';
@@ -10,12 +10,13 @@ import type { MessageTree, MessageTreeNode } from '../rpc/types.js';
 import { hydrateSnapshot, type SessionSnapshot } from '../rpc/sessionSnapshot.js';
 import { useSessionStore, useMessagesStore, useUiStore } from '../store/index.js';
 import { useAskStore } from '../ask/store.js';
+import { TUI_COLORS, PREFIX } from '../theme.js';
 
 interface Props {
   client: WsClient;
 }
 
-/// 计算每个节点的缩进深度（根=0），按深度排序输出
+/// 计算每个节点的缩进深度
 function buildIndented(nodes: MessageTreeNode[]): Array<{ node: MessageTreeNode; depth: number }> {
   const byId = new Map<string, MessageTreeNode>();
   for (const n of nodes) byId.set(n.id, n);
@@ -48,7 +49,6 @@ export function TreeView({ client }: Props) {
     try {
       const result = await client.request('session.tree', { session_id: sid });
       setTree(result as MessageTree);
-      // 默认选中当前 head
       const headIdx = (result as MessageTree).nodes.findIndex((n) => n.is_head);
       setSelected(headIdx >= 0 ? headIdx : 0);
     } catch (e: any) {
@@ -85,7 +85,6 @@ export function TreeView({ client }: Props) {
         session_id: sid,
         message_id: messageId,
       }) as SessionSnapshot;
-      // hydrate 到 store
       hydrateSnapshot({
         sessionId: sid,
         snapshot,
@@ -121,39 +120,36 @@ export function TreeView({ client }: Props) {
 
   if (!sid) {
     return (
-      <Box flexDirection="column" paddingX={1} borderStyle="single">
-        <Text bold color="cyan">Message Tree</Text>
-        <Text color="gray">No active session.</Text>
-        <Text color="gray" italic>press ESC to close</Text>
+      <Box flexDirection="column" paddingX={1} borderStyle="single" borderColor={TUI_COLORS.textMuted}>
+        <Text bold color={TUI_COLORS.accent}>Message Tree</Text>
+        <Text color={TUI_COLORS.textMuted}>no active session</Text>
       </Box>
     );
   }
 
   if (loading && !tree) {
     return (
-      <Box flexDirection="column" paddingX={1} borderStyle="single">
-        <Text bold color="cyan">Message Tree</Text>
-        <Text color="gray">Loading...</Text>
+      <Box flexDirection="column" paddingX={1} borderStyle="single" borderColor={TUI_COLORS.textMuted}>
+        <Text bold color={TUI_COLORS.accent}>Message Tree</Text>
+        <Text color={TUI_COLORS.textMuted}>loading</Text>
       </Box>
     );
   }
 
   if (error) {
     return (
-      <Box flexDirection="column" paddingX={1} borderStyle="single">
-        <Text bold color="cyan">Message Tree</Text>
-        <Text color="red">{error}</Text>
-        <Text color="gray" italic>press ESC to close</Text>
+      <Box flexDirection="column" paddingX={1} borderStyle="single" borderColor={TUI_COLORS.textMuted}>
+        <Text bold color={TUI_COLORS.accent}>Message Tree</Text>
+        <Text color={TUI_COLORS.error}>{error}</Text>
       </Box>
     );
   }
 
   if (!tree || tree.nodes.length === 0) {
     return (
-      <Box flexDirection="column" paddingX={1} borderStyle="single">
-        <Text bold color="cyan">Message Tree</Text>
-        <Text color="gray">No messages in this session.</Text>
-        <Text color="gray" italic>press ESC to close</Text>
+      <Box flexDirection="column" paddingX={1} borderStyle="single" borderColor={TUI_COLORS.textMuted}>
+        <Text bold color={TUI_COLORS.accent}>Message Tree</Text>
+        <Text color={TUI_COLORS.textMuted}>no messages</Text>
       </Box>
     );
   }
@@ -161,28 +157,26 @@ export function TreeView({ client }: Props) {
   const indented = buildIndented(tree.nodes);
 
   return (
-    <Box flexDirection="column" paddingX={1} borderStyle="single">
-      <Text bold color="cyan">Message Tree</Text>
+    <Box flexDirection="column" paddingX={1} borderStyle="single" borderColor={TUI_COLORS.textMuted}>
+      <Text bold color={TUI_COLORS.accent}>Message Tree</Text>
       {indented.map(({ node, depth }, i) => {
         const isSel = i === selected;
-        const prefix = isSel ? '► ' : '  ';
+        const prefix = isSel ? PREFIX.running : '  ';
         const indent = '  '.repeat(depth);
-        const roleColor = node.role === 'user' ? 'blue' : node.role === 'assistant' ? 'green' : 'gray';
+        const roleColor = node.role === 'user' ? TUI_COLORS.success : node.role === 'assistant' ? TUI_COLORS.accent : TUI_COLORS.textMuted;
         const preview = node.preview.length > 50 ? node.preview.slice(0, 50) + '...' : node.preview;
         return (
           <Box key={node.id}>
-            <Text color={isSel ? 'cyan' : 'white'}>{prefix}{indent}</Text>
+            <Text color={isSel ? TUI_COLORS.accent : TUI_COLORS.textMuted}>{prefix}{indent}</Text>
             <Text color={roleColor}>[{node.role}]</Text>
-            <Text color={node.is_head ? 'yellow' : isSel ? 'cyan' : 'white'}>
+            <Text color={node.is_head ? TUI_COLORS.warning : isSel ? TUI_COLORS.accent : TUI_COLORS.textPrimary}>
               {' '}{preview}
             </Text>
-            {node.is_head && <Text color="yellow"> ← head</Text>}
+            {node.is_head && <Text color={TUI_COLORS.warning}> · head</Text>}
           </Box>
         );
       })}
-      <Text color="gray" italic>
-        ↑↓ navigate · Enter checkout branch · ESC close
-      </Text>
+      <Text color={TUI_COLORS.textMuted}>↑↓ navigate · Enter checkout · ESC close</Text>
     </Box>
   );
 }

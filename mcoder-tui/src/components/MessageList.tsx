@@ -6,9 +6,15 @@
 import { Box, Text } from 'ink';
 import { useMessagesStore, useUiStore, useSessionStore } from '../store/index.js';
 import { ToolCard } from './ToolCard.js';
+import { ShimmerText } from './ShimmerText.js';
 import { AskUserCard, AskUserSummary } from './AskUserCard.js';
+import { PermissionCard, PermissionSummary } from '../permission/PermissionCard.js';
+import { usePermissionStore } from '../permission/store.js';
 import type { Message, ContentBlock } from '../rpc/types.js';
 import { ASK_USER_TOOL } from '../ask/types.js';
+import { TUI_COLORS, PREFIX } from '../theme.js';
+/// 设计文档 §8.8: 权限审批占位 tool name（与 App.tsx 同步）
+const PERMISSION_TOOL_NAME = '__permission_pending__';
 import { useAskStore } from '../ask/store.js';
 import { formatUsageDelta, shortenPath } from '../utils/format.js';
 
@@ -24,13 +30,14 @@ function MessageView({
   sessionId?: string | null;
   resultsById?: Map<string, ContentBlock>;
 }) {
+  // DESIGN.md: 角色色统一：user=success / assistant=accent / system=muted / tool=warning
   const colors: Record<string, string> = {
-    user: 'green',
-    assistant: 'blue',
-    system: 'gray',
-    tool: 'yellow',
+    user: TUI_COLORS.success,
+    assistant: TUI_COLORS.accent,
+    system: TUI_COLORS.textMuted,
+    tool: TUI_COLORS.warning,
   };
-  const color = colors[msg.role] || 'white';
+  const color = colors[msg.role] || TUI_COLORS.textPrimary;
   const labels: Record<string, string> = {
     user: 'You',
     assistant: 'Assistant',
@@ -71,7 +78,7 @@ function MessageView({
               const p = askRenderState as Extract<AskRenderState, { kind: 'pending' }>;
               return (
                 <Box key={i} flexDirection="column">
-                  <Text color="yellow">  ▸ ask_user (等待你的回答)</Text>
+                  <Text color={TUI_COLORS.textMuted}>  ▸ ask_user · 等待输入</Text>
                   <AskUserCard
                     ask_id={p.ask_id}
                     tool_call_id={block.id || ''}
@@ -88,13 +95,17 @@ function MessageView({
               const submittedSub = historicalSub?.submission || s.submission;
               return (
                 <Box key={i} flexDirection="column">
-                  <Text color="gray">  ▸ ask_user (已回答)</Text>
+                  <Text color={TUI_COLORS.textMuted}>  ▸ ask_user · 已回答</Text>
                   <AskUserSummary request={(block as any).args || (s as any).request || { questions: [] }} submission={submittedSub as any} />
                 </Box>
               );
             }
             // 没有匹配状态：保守渲染为普通 tool_call（避免显示空白）
             return <ToolCard key={i} block={block} resultBlock={null} />;
+          }
+          // 设计文档 §8.8: 权限审批卡片（与 ask_user 同模式；渲染分支）
+          if (block.name === PERMISSION_TOOL_NAME) {
+            return <PermissionToolBlock key={i} tool_call_id={block.id || ''} args={block.args} sessionId={sessionId || ''} />;
           }
           // 普通工具调用：统一用 ToolCard（tool_result 不再单独渲染）
           const result = block.id && resultsById ? resultsById.get(block.id) || null : null;
@@ -114,20 +125,40 @@ function MessageView({
           const filename = block.path.split('/').pop() || block.path;
           return (
             <Box key={i} flexDirection="column" paddingLeft={1}>
-              <Text color="gray">[image: {filename}]</Text>
+              <Text color={TUI_COLORS.textMuted}>[image · {filename}]</Text>
             </Box>
           );
         }
         return null;
       })}
       {msg.role === 'assistant' && msg.usage && formatUsageDelta(msg.usage) && (
-        <Text color="gray" dimColor>  ↳ {formatUsageDelta(msg.usage)}</Text>
+        <Text color={TUI_COLORS.textMuted}>  ↳ {formatUsageDelta(msg.usage)}</Text>
       )}
     </Box>
   );
 }
 
-// ask 渲染状态：pending = 显示 AskUserCard；submitted = 显示 AskUserSummary
+// 设计文档 §8.8: 权限审批的 tool_use 块渲染（独立子组件以正确订阅 zustand）
+function PermissionToolBlock({
+  tool_call_id,
+  sessionId,
+}: {
+  tool_call_id: string;
+  args: unknown;
+  sessionId: string;
+}) {
+  const pending = usePermissionStore((s) => s.pending[sessionId]);
+  const history = usePermissionStore((s) => s.history[sessionId] || []);
+  if (pending && pending.tool_call_id === tool_call_id) {
+    return <PermissionCard request={pending} />;
+  }
+  const last = history.find((h) => h.request.tool_call_id === tool_call_id);
+  if (last) {
+    return <PermissionSummary request={last.request} decision={last.decision.type} />;
+  }
+  return null;
+}
+
 export type AskRenderState =
   | {
       kind: 'pending';
@@ -182,11 +213,8 @@ export function MessageList({
       {/* Top info - visible at bottom (scrollOffset=0), scrolls away when user scrolls up */}
       {scrollOffset === 0 && (
         <Box flexDirection="column" flexShrink={0} marginBottom={1}>
-          <Text bold color="cyan">mcoder v{version}</Text>
-          <Text color="gray">model: {currentModel || '-'}  project: {shortenPath(projectPath) || '-'}</Text>
-          {lspServers.length > 0 && (
-            <Text color="gray">lsp: {lspServers.join(', ')}</Text>
-          )}
+          <Text bold color={TUI_COLORS.accent}>mcoder v{version}</Text>
+          <Text color={TUI_COLORS.textMuted}>{currentModel || '-'} · {shortenPath(projectPath) || '-'}</Text>
         </Box>
       )}
       {visibleMessages.map((msg, i) => (
@@ -194,15 +222,14 @@ export function MessageList({
       ))}
       {streaming && (
         <Box>
-          <Text color="yellow">⠋</Text>
-          <Text color="gray"> thinking...</Text>
+          <ShimmerText text={PREFIX.running + ' Thinking'} />
         </Box>
       )}
       {error && (
-        <Text color="red">⚠ {error}</Text>
+        <Text color={TUI_COLORS.error}>{error}</Text>
       )}
       {scrollOffset > 0 && (
-        <Text color="gray" italic>↑ {scrollOffset} lines scrolled (PgDn to bottom)</Text>
+        <Text color={TUI_COLORS.textMuted}>↑ {scrollOffset} lines scrolled · PgDn to bottom</Text>
       )}
     </Box>
   );

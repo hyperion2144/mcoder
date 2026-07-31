@@ -7,7 +7,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import type { Message } from '@mcoder/shared/rpc/types.js';
 import { AskCard } from '@mcoder/shared/ask/index.js';
+import { PermissionCardReact } from '@mcoder/shared/permission/index.js';
 import { ASK_USER_TOOL } from '@mcoder/shared/ask/types.js';
+/// 设计文档 §8.8: 权限审批占位 tool name（与 App.tsx 中常量保持一致）
+const PERMISSION_TOOL_NAME = '__permission_pending__';
 import { ToolCard } from '@mcoder/shared/toolCard/ToolCardHtml.js';
 import { formatUsageDelta } from '@mcoder/shared/utils/format.js';
 
@@ -79,6 +82,19 @@ export function MessageList({ messages, streaming, error, pendingCount, client, 
           <AskCard
             key={i}
             ask_id={block.id || ''}
+            tool_call_id={block.id || ''}
+            session_id={currentSessionId}
+            client={client}
+            onError={onError}
+          />
+        );
+      }
+      // 设计文档 §8.8: 权限审批卡片（移动端触摸友好）
+      if (block.name === PERMISSION_TOOL_NAME && client && currentSessionId) {
+        return (
+          <PermissionCardReact
+            key={i}
+            request_id={block.id || ''}
             tool_call_id={block.id || ''}
             session_id={currentSessionId}
             client={client}

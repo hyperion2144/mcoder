@@ -5,6 +5,7 @@ import { Box, Text, useInput } from 'ink';
 import { useSessionStore } from '../store/session.js';
 import { useUiStore } from '../store/ui.js';
 import type { WsClient } from '../rpc/client.js';
+import { TUI_COLORS, PREFIX } from '../theme.js';
 
 interface ModelInfo {
   name: string;
@@ -98,39 +99,38 @@ export function ModelView({ client }: { client: WsClient | null }) {
   });
 
   return (
-    <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
+    <Box flexDirection="column" borderStyle="single" borderColor={TUI_COLORS.textMuted} paddingX={1}>
       <Box marginBottom={1}>
-        <Text bold color="cyan">Switch Model</Text>
-        <Text color="gray">  (type to filter, ↑↓ to select, Enter to switch, Esc to cancel)</Text>
+        <Text bold color={TUI_COLORS.accent}>Switch Model</Text>
+        <Text color={TUI_COLORS.textMuted}> · type to filter · ↑↓ select · Enter switch · Esc cancel</Text>
       </Box>
 
-      {loading && <Text color="gray">Loading models...</Text>}
-      {error && <Text color="red">Error: {error}</Text>}
+      {loading && <Text color={TUI_COLORS.textMuted}>loading</Text>}
+      {error && <Text color={TUI_COLORS.error}>{error}</Text>}
 
       {!loading && !error && (
         <>
           {filter && (
             <Box marginBottom={1}>
-              <Text color="yellow">filter: </Text>
-              <Text>{filter}_</Text>
+              <Text color={TUI_COLORS.warning}>filter · {filter}</Text>
             </Box>
           )}
           <Box flexDirection="column">
             {filtered.length === 0 ? (
-              <Text color="gray">No models match filter</Text>
+              <Text color={TUI_COLORS.textMuted}>no match</Text>
             ) : (
               filtered.map((m, i) => (
                 <Box key={m.name}>
-                  <Text color={i === selectedIndex ? 'cyan' : undefined} bold={i === selectedIndex}>
-                    {i === selectedIndex ? '▸ ' : '  '}
-                    {m.name === currentModel ? '✓ ' : '  '}
+                  <Text color={i === selectedIndex ? TUI_COLORS.accent : TUI_COLORS.textMuted} bold={i === selectedIndex}>
+                    {i === selectedIndex ? `${PREFIX.running} ` : '  '}
+                    {m.name === currentModel ? `${PREFIX.done} ` : '  '}
                     {m.name}
                   </Text>
                   {m.context_window ? (
-                    <Text color="gray">  (ctx={m.context_window > 1000 ? `${m.context_window / 1000}k` : m.context_window})</Text>
+                    <Text color={TUI_COLORS.textMuted}> · ctx={m.context_window > 1000 ? `${m.context_window / 1000}k` : m.context_window}</Text>
                   ) : null}
                   {m.protocol ? (
-                    <Text color="gray">  [{m.protocol}]</Text>
+                    <Text color={TUI_COLORS.textMuted}> · [{m.protocol}]</Text>
                   ) : null}
                 </Box>
               ))

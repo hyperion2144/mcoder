@@ -548,14 +548,12 @@ body {
 .tool-card-truncated {
   color: var(--text-muted);
   font-size: 11px;
-  font-style: italic;
   margin-top: 2px;
 }
 
 .tool-card-running {
   color: var(--text-muted);
   font-size: 11px;
-  font-style: italic;
 }
 
 .streaming-dots {
@@ -582,7 +580,6 @@ body {
 .streaming {
   color: var(--warning);
   padding: 8px 12px;
-  font-style: italic;
   font-size: 12px;
 }
 
@@ -724,7 +721,27 @@ body {
 .bottom-status .status-model { color: var(--mauve); }
 .bottom-status .status-ctx { color: var(--text-primary); }
 .bottom-status .status-cost { color: var(--warning); }
-.bottom-status .status-running { color: var(--accent); }
+/* 设计文档 §7: status-running 流光（替代静态 "running" 文字） */
+.status-running {
+  background: linear-gradient(
+    90deg,
+    var(--bg-overlay) 0%,
+    var(--bg-overlay) 30%,
+    var(--accent) 50%,
+    var(--bg-overlay) 70%,
+    var(--bg-overlay) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: mcoder-shimmer 1.6s ease-in-out infinite;
+}
+
+.bottom-status .status-running {
+  /* 颜色由 .status-running 流光控制 */
+}
 
 /* ===== 模型选择下拉 ===== */
 .bottom-status .status-model:hover { text-decoration: underline; }
@@ -1469,9 +1486,86 @@ body {
 
 .todo-summary-more {
   color: var(--text-muted);
-  font-style: italic;
   font-size: 11px;
   margin-top: 2px;
+}
+
+/* 设计文档 §7.4: 流动光效（卡片标题 loading 时） */
+@keyframes mcoder-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.tool-card[data-loading="true"] .tool-card-title,
+.thinking-card[data-loading="true"] .thinking-card-title,
+.permission-card[data-loading="true"] .permission-card-title {
+  background: linear-gradient(
+    90deg,
+    var(--bg-overlay) 0%,
+    var(--bg-overlay) 30%,
+    var(--text-primary) 50%,
+    var(--bg-overlay) 70%,
+    var(--bg-overlay) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: mcoder-shimmer 1.6s ease-in-out infinite;
+}
+
+/* Thinking 卡片（设计文档 §3：mauve 角色色） */
+.thinking-card {
+  border: 1px solid var(--mauve);
+  background: var(--mauve-dim);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.thinking-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--mauve);
+  font-size: 13px;
+}
+
+.thinking-card-body {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+/* AskUser 卡片标题 */
+.ask-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--warning);
+  font-size: 13px;
+}
+
+.ask-card-title {
+  font-weight: 600;
+}
+
+/* 设计文档 §10: 移除 italic、press ESC to close 等 AI 味文本 */
+.ask-summary-text {
+  font-style: normal;
+}
+
+.ask-card-multi-select {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-left: 4px;
 }
 
 /* ==================== AskUser 卡片 ==================== */
@@ -1509,6 +1603,147 @@ body {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+/* 设计文档 §8.8: 权限审批卡片（与 .ask-card 完全对称） */
+.permission-card {
+  border: 1px solid var(--warning);
+  background: var(--warning-dim);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.permission-card.permission-summary {
+  border-color: var(--border-subtle);
+  background: var(--bg-surface);
+  opacity: 0.85;
+}
+
+.permission-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--warning);
+  font-size: 13px;
+}
+
+.permission-card-summary .permission-card-header {
+  color: var(--text-secondary);
+}
+
+.permission-level-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--bg-base);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.permission-card-status {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.permission-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.permission-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.permission-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  min-width: 36px;
+}
+
+.permission-tool-name {
+  font-family: var(--font-mono);
+  color: var(--accent);
+  background: var(--bg-elevated);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.permission-args {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.permission-reason {
+  color: var(--warning);
+  font-size: 12px;
+}
+
+.permission-card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.permission-btn {
+  flex: 1;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.permission-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.permission-btn-allow {
+  background: var(--success-dim);
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.permission-btn-allow:hover:not(:disabled) {
+  background: var(--success);
+  color: var(--bg-base);
+}
+
+.permission-btn-deny {
+  background: var(--error-dim);
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.permission-btn-deny:hover:not(:disabled) {
+  background: var(--error);
+  color: var(--bg-base);
+}
+
+.permission-btn-always {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.permission-btn-always:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--bg-base);
 }
 
 .ask-question {

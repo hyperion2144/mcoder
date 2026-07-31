@@ -345,10 +345,137 @@ pub struct AppConfig {
     /// launch 工具配置
     #[serde(default)]
     pub launch: LaunchConfig,
+    /// 设计文档 §8.8: 权限级别（yolo / standard / strict）
+    #[serde(default)]
+    pub permission: PermissionConfig,
 }
 
 fn default_image_description_timeout_secs() -> u64 {
     8
+}
+
+/// 设计文档 §8.8: 权限级别
+/// - Yolo: 全部自动执行（最高权限，agent 全权）
+/// - Standard: 默认级别；只读工具自动，写/执行类需用户审批
+/// - Strict: 所有非只读工具都需审批（最保守）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PermissionLevel {
+    Yolo,
+    #[default]
+    Standard,
+    Strict,
+}
+
+/// 设计文档 §8.8: 权限配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PermissionConfig {
+    /// 当前权限级别（默认 standard）
+    pub level: PermissionLevel,
+    /// yolo mode 时仍拒绝的工具（兜底白名单；如 mcp_* 未审计工具）
+    /// 注意：仅 yolo 生效；standard/strict 不需要
+    #[serde(default)]
+    pub yolo_deny: Vec<String>,
+    /// strict mode 时额外审批的工具列表（默认所有非只读都审批）
+    /// 设置后只审批这些，其他写工具自动通过
+    #[serde(default)]
+    pub strict_require_approval: Vec<String>,
+    /// strict mode 时额外自动通过的工具
+    #[serde(default)]
+    pub strict_auto: Vec<String>,
+}
+
+impl Default for PermissionConfig {
+    fn default() -> Self {
+        Self {
+            level: PermissionLevel::Standard,
+            yolo_deny: Vec::new(),
+            strict_require_approval: Vec::new(),
+            strict_auto: Vec::new(),
+        }
+    }
+}
+
+impl PermissionConfig {
+    /// 判断工具调用是否需要用户审批
+    /// 返回 Some(reason) 表示需要审批；None 表示自动通过
+    pub fn requires_approval(&self, tool_name: &str) -> Option<String> {
+        match self.level {
+            PermissionLevel::Yolo => {
+                // yolo mode：除 yolo_deny 兜底外全部自动
+                if self.yolo_deny.iter().any(|t| t == tool_name) {
+                    Some(format!("tool '{}' is in yolo deny list", tool_name))
+                } else {
+                    None
+                }
+            }
+            PermissionLevel::Standard => {
+                // standard：只读工具自动；写工具审批
+                if is_readonly_tool(tool_name) {
+                    None
+                } else {
+                    Some(format!(
+                        "tool '{}' modifies state; confirm to execute",
+                        tool_name
+                    ))
+                }
+            }
+            PermissionLevel::Strict => {
+                // strict：默认所有非只读审批
+                if self.strict_auto.iter().any(|t| t == tool_name) {
+                    return None;
+                }
+                if !self.strict_require_approval.is_empty() {
+                    // 配置了严格列表：只审批列表中的
+                    if self.strict_require_approval.iter().any(|t| t == tool_name) {
+                        Some(format!("tool '{}' is in strict approval list", tool_name))
+                    } else {
+                        None
+                    }
+                } else if is_readonly_tool(tool_name) {
+                    None
+                } else {
+                    Some(format!(
+                        "tool '{}' requires approval in strict mode",
+                        tool_name
+                    ))
+                }
+            }
+        }
+    }
+}
+
+/// 设计文档 §8.8: 工具分类 - 只读工具（不需要审批）
+/// 注意：mcp_* / browser_* / screen_* / app_* 默认需要审批（按 dangerous 规则）
+pub fn is_readonly_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "read"
+            | "grep"
+            | "glob"
+            | "lsp_diagnostics"
+            | "lsp_hover"
+            | "lsp_definition"
+            | "lsp_references"
+            | "lsp_symbols"
+            | "lsp_completion"
+            | "todo_read"
+            | "memory_recall"
+            | "memory_search"
+            | "code_graph_query"
+            | "code_graph_visualize"
+            | "workflow_read"
+            | "workflow_state"
+            | "view_image"
+            | "session_list"
+            | "session_snapshot"
+            | "model_list"
+            | "role_list"
+            | "ask_user"
+            | "plan_read"
+            | "ast_query"
+    )
 }
 
 /// 设计文档 §8.7: 工具安全配置

@@ -1,26 +1,31 @@
 // Desktop/Mobile 共享工具卡片组件（HTML）
-// 三态折叠 + CSS 波浪流光 loading
-// loading 由 resultBlock 缺失自动推导（不接收外部 loading prop）
+// DESIGN.md §3 / §7: 工具卡片
+// - 统一角色色：execution=accent；thinking=mauve；done=textMuted；failed=error
+// - loading 时 ShimmerText 流光（CSS gradient + animation）
+// - 状态前缀：▶ loading / ✓ done / ✗ failed
+// - 移除：-- Input --、running...、... (lines total)
 
 import React, { useRef, useState } from 'react';
 import {
   extractToolMeta, summarizeResult, formatToolResult,
-  type ToolCategory, type FoldState,
+  type FoldState,
 } from './meta.js';
 import type { ContentBlock } from '../rpc/types.js';
 
-/** 类别 → CSS 变量名（边框色） */
-const CATEGORY_BORDER: Record<ToolCategory, string> = {
+/** DESIGN.md §3: 角色色（5 类统一为 4 类） */
+const ROLE_BORDER: Record<'execution' | 'thinking' | 'done' | 'error', string> = {
+  execution: 'var(--accent)',
   thinking: 'var(--mauve)',
-  file: 'var(--blue)',
-  command: 'var(--peach)',
-  code: 'var(--peach)',
-  graph: 'var(--green)',
-  subagent: 'var(--teal)',
-  plan: 'var(--yellow)',
-  workflow: 'var(--mauve)',
-  other: 'var(--overlay0)',
+  done: 'var(--border-subtle)',
+  error: 'var(--error)',
 };
+
+/** 状态前缀 */
+const STATUS_PREFIX = {
+  loading: '▶',
+  done: '✓',
+  failed: '✗',
+} as const;
 
 /** 三态循环 */
 function nextFold(f: FoldState): FoldState {
@@ -29,7 +34,6 @@ function nextFold(f: FoldState): FoldState {
   return 'collapsed';
 }
 
-/** 单击/双击阈值（ms） */
 const DOUBLE_CLICK_THRESHOLD = 220;
 
 interface ToolCardProps {
@@ -40,15 +44,29 @@ interface ToolCardProps {
 export function ToolCard({ block, resultBlock }: ToolCardProps) {
   const meta = extractToolMeta(block);
   const [fold, setFold] = useState<FoldState>(meta.defaultFold);
-  const borderColor = CATEGORY_BORDER[meta.category];
-
-  // loading 由 resultBlock 推导
   const loading = !resultBlock;
   const status: 'loading' | 'done' | 'failed' = loading
     ? 'loading'
     : (isError(resultBlock!.output) ? 'failed' : 'done');
 
-  // 单击/双击区分：单击延迟触发，期间若发生双击则取消单击
+  // DESIGN.md §3: 角色色
+  // - thinking 类别单独一种颜色
+  // - 执行类（默认） execution
+  // - 失败 failed
+  // - 完成 done（默认 border-subtle，淡化）
+  const role: 'execution' | 'thinking' | 'done' | 'error' =
+    meta.category === 'thinking'
+      ? (status === 'failed' ? 'error' : 'thinking')
+      : status === 'failed' ? 'error'
+        : status === 'loading' ? 'execution'
+        : 'done';
+
+  const borderColor = ROLE_BORDER[role];
+  const titleColor = status === 'failed' ? 'var(--error)'
+    : status === 'loading' ? 'var(--accent)'
+    : role === 'thinking' ? 'var(--mauve)'
+    : 'var(--border-subtle)';
+
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const cancelPendingClick = () => {
@@ -59,7 +77,6 @@ export function ToolCard({ block, resultBlock }: ToolCardProps) {
   };
 
   const handleClick = () => {
-    // 已有待执行的单击 → 视为双击的一部分，交给 handleDoubleClick 处理
     if (clickTimerRef.current !== null) return;
     clickTimerRef.current = setTimeout(() => {
       clickTimerRef.current = null;
@@ -73,7 +90,6 @@ export function ToolCard({ block, resultBlock }: ToolCardProps) {
     setFold('expanded');
   };
 
-  // 卸载时清理定时器，避免 setState on unmounted
   React.useEffect(() => () => cancelPendingClick(), []);
 
   const inputJson = JSON.stringify(block.args, null, 2);
@@ -82,30 +98,30 @@ export function ToolCard({ block, resultBlock }: ToolCardProps) {
 
   return (
     <div
-      className={`tool-card tool-card-${meta.category} tool-card-${status} tool-card-${fold}`}
+      className={`tool-card tool-card-${role} tool-card-${status} tool-card-${fold}`}
+      data-loading={status === 'loading'}
       style={{ borderLeftColor: borderColor }}
     >
-      {/* 标题栏 */}
       <div
         className={`tool-card-title ${status === 'loading' ? 'loading' : ''}`}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
-        style={{ color: status === 'loading' ? undefined : borderColor }}
+        style={{ color: status === 'loading' ? undefined : titleColor }}
       >
         <span className="tool-card-fold-icon">
           {fold === 'collapsed' ? '▸' : '▾'}
         </span>
-        <span className="tool-card-title-text">{meta.title}</span>
+        <span className="tool-card-title-text">
+          {STATUS_PREFIX[status]} {meta.title}
+        </span>
         <span className={`tool-card-status tool-card-status-${status}`}>
           {status === 'done' && 'done'}
           {status === 'failed' && 'failed'}
         </span>
       </div>
 
-      {/* 内容区 */}
       {fold !== 'collapsed' && (
         <div className="tool-card-body">
-          {/* 输入 */}
           {fold === 'expanded' ? (
             <div className="tool-card-section">
               <div className="tool-card-section-label">Input</div>
@@ -120,7 +136,6 @@ export function ToolCard({ block, resultBlock }: ToolCardProps) {
             )
           )}
 
-          {/* 结果 */}
           {resultBlock && fold === 'expanded' && (
             <div className="tool-card-section">
               <div className="tool-card-section-label">Result</div>
@@ -132,12 +147,9 @@ export function ToolCard({ block, resultBlock }: ToolCardProps) {
               <div className="tool-card-section-label">Result</div>
               <pre className="tool-card-pre tool-card-pre-dim">{resultSummary.text}</pre>
               {resultSummary.truncated && (
-                <div className="tool-card-truncated">... ({resultSummary.totalLines} lines total)</div>
+                <div className="tool-card-truncated">+{resultSummary.totalLines - 3} more</div>
               )}
             </div>
-          )}
-          {loading && (
-            <div className="tool-card-running">running...</div>
           )}
         </div>
       )}

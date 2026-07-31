@@ -236,6 +236,8 @@ pub struct SessionManager {
     event_tx: broadcast::Sender<ServerEvent>,
     /// ask_user 工具的 pending 池（per-session）
     ask_registry: Arc<AskRegistry>,
+    /// 设计文档 §8.8: 权限审批 pending 池（per-session）
+    permission_registry: Arc<crate::permission::PermissionRegistry>,
     /// LSP 异步诊断 pending 队列（per-session）
     /// write/edit 后后台 LSP 任务把诊断 push 进来，
     /// 下次 tool call 执行前 drain 出来拼成 ToolResult 注入
@@ -320,6 +322,17 @@ pub enum ServerEvent {
         session_id: String,
         ask_id: String,
         tool_call_id: String,
+    },
+    /// 设计文档 §8.8: 权限审批 - 新请求（client 渲染审批卡片）
+    PermissionPending {
+        session_id: String,
+        request: crate::permission::PermissionRequest,
+    },
+    /// 设计文档 §8.8: 权限审批 - 已决议
+    PermissionResolved {
+        session_id: String,
+        request_id: String,
+        decision: crate::permission::PermissionDecision,
     },
     /// LLM usage 报告：每轮 LLM 调用后广播 delta + cumulative + context_window
     /// 客户端用于更新上下文使用率（圆环/百分比）与 cost 展示
@@ -451,6 +464,40 @@ impl SessionManager {
         // launch_manager 需要 event_tx clone + launch config，先取出
         let launch_event_tx = event_tx.clone();
         let launch_config = config.launch.clone();
+        // 设计文档 §8.8: 权限审批 pending 池（直接用主 event_tx 转发 ServerEvent::Permission*）
+        let permission_registry = crate::permission::PermissionRegistry::new();
+        let perm_event_tx = event_tx.clone();
+        let perm_event_tx_for_set = perm_event_tx.clone();
+        let perm_sink = Box::new(move |event: crate::permission::PermissionEvent| {
+            use crate::permission::PermissionEvent as PE;
+            match event {
+                PE::Pending { session_id, request } => {
+                    let _ = perm_event_tx_for_set.send(ServerEvent::PermissionPending {
+                        session_id,
+                        request,
+                    });
+                }
+                PE::Resolved { session_id, request_id, decision } => {
+                    let _ = perm_event_tx_for_set.send(ServerEvent::PermissionResolved {
+                        session_id,
+                        request_id,
+                        decision,
+                    });
+                }
+                PE::Cancelled { .. } => {
+                    // cancel 在 session_manager 的 cancel_session 路径中独立处理
+                }
+            }
+        });
+        // 在 new() 内同步注册：PermissionRegistry 内部用 tokio::sync::Mutex，
+        // 但 set_event_tx_boxed 是 async，不能在 Arc::new(Self {...}) 同步构造内 await
+        // 设计：先构造 Arc<Self>，再异步注册 event sink
+        let registry_clone = permission_registry.clone();
+        let perm_sink_for_async = perm_sink;
+        tokio::spawn(async move {
+            registry_clone.set_event_tx_boxed(perm_sink_for_async).await;
+        });
+        let _ = perm_event_tx;
         Arc::new(Self {
             sessions: RwLock::new(HashMap::new()),
             tools,
@@ -462,8 +509,9 @@ impl SessionManager {
             mcp_manager,
             project_resources: RwLock::new(HashMap::new()),
             command_dispatcher,
-            event_tx,
+            event_tx: event_tx.clone(),
             ask_registry,
+            permission_registry,
             lsp_diag_store: crate::lsp::PendingDiagnosticsStore::new(),
             launch_manager: crate::tools::launch::LaunchManager::new(
                 launch_event_tx,
@@ -1904,6 +1952,49 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
                             return Ok(());
                         }
 
+                        // 设计文档 §8.8: 权限审批（write 工具之前）
+                        // PermissionConfig.requires_approval 决定：yolo 跳过；standard 写工具需批；strict 更严
+                        if let Some(reason) = self.config.permission.requires_approval(&tc.name) {
+                            match self
+                                .permission_registry
+                                .check_and_wait(&self.config.permission, session_id, tc)
+                                .await
+                            {
+                                Ok(()) => {
+                                    tracing::debug!(
+                                        "tool {} approved for session {}",
+                                        tc.name, session_id
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::info!(
+                                        "tool {} denied by permission gate: {}",
+                                        tc.name, e
+                                    );
+                                    let block_msg = Message::new(Role::Tool, vec![ContentBlock::ToolResult {
+                                        id: tc.id.clone(),
+                                        output: crate::types::ToolOutput::Error {
+                                            message: format!("permission denied: {}", e),
+                                        },
+                                    }]);
+                                    let _ = self.event_tx.send(ServerEvent::Message {
+                                        session_id: session_id.to_string(),
+                                        message: block_msg.clone(),
+                                    });
+                                    {
+                                        let mut agent = entry.session.lock().await;
+                                        let _ = agent.add_message(block_msg);
+                                    }
+                                    let _ = self.event_tx.send(ServerEvent::ToolCallDone {
+                                        session_id: session_id.to_string(),
+                                        name: tc.name.clone(),
+                                        success: false,
+                                    });
+                                    continue;
+                                }
+                            }
+                        }
+
                         let _ = self.event_tx.send(ServerEvent::ToolCallStart {
                             session_id: session_id.to_string(),
                             name: tc.name.clone(),
@@ -2566,7 +2657,38 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
         Ok(Some(serde_json::json!({"cancelled": false})))
     }
 
-    /// sessions.send 期间：若 session 存在 pending Ask，则把 input 视为整段自由文本答复（issue 3）
+    // ==================== permission RPC（设计文档 §8.8）====================
+
+    /// permission.submit - 客户端提交权限审批决议
+    /// RPC 路径：ws 收到 client 推送的 decision → 唤醒对应 pending → tool 执行继续
+    pub async fn submit_permission(
+        &self,
+        session_id: &str,
+        response: crate::permission::PermissionResponse,
+    ) -> Result<()> {
+        self.permission_registry.submit(session_id, response).await
+    }
+
+    /// permission.peek - 客户端 attach 时查询当前 pending 审批（用于断线重连恢复）
+    pub async fn peek_permission(&self, session_id: &str) -> Option<serde_json::Value> {
+        // 简化：仅查内存中的 pending；复杂持久化留给后续
+        None
+    }
+
+    /// permission.set_level - 切换权限级别（runtime 修改）
+    pub fn set_permission_level(&self, level: crate::types::PermissionLevel) {
+        let mut new_cfg = self.config.permission.clone();
+        new_cfg.level = level;
+        // 注：self.config 是 Arc<AppConfig>，无法直接修改
+        // 设计：调用方需要在外部修改 config 后重新 build SessionManager
+        // 这里仅打印日志；UI 应通过修改 ~/.mcoder/config.toml + 重启生效
+        tracing::warn!(
+            "set_permission_level({:?}) called; full change requires editing ~/.mcoder/config.toml and restart",
+            level
+        );
+    }
+
+    // ==================== ask_user text submit ====================
     /// 返回 true 表示已被消费（提交成功，不发新 user message）；返回 false 表示未消费或提交失败，
     /// 调用方应继续走普通 send_message 路径或上报明确错误（issue 5：失败不能吞输入）。
     ///

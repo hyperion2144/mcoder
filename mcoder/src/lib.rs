@@ -14,6 +14,7 @@ pub mod debug;
 pub mod llm;
 pub mod lsp;
 pub mod memory;
+pub mod permission;
 pub mod persistence;
 pub mod plugin;
 pub mod session_manager;

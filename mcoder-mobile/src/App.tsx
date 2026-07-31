@@ -9,8 +9,11 @@ import { useSessionStore, useMessagesStore } from '@mcoder/shared/store/index.js
 import { dispatchSlashCommand } from '@mcoder/shared/commands/index.js';
 import { parsePairingString } from '@mcoder/shared/utils/pairing.js';
 import { AskCard, useAskStore } from '@mcoder/shared/ask/index.js';
+import { usePermissionStore } from '@mcoder/shared/permission/store.js';
 import { hasToolUse } from '@mcoder/shared/ask/messages.js';
 import { ASK_USER_TOOL } from '@mcoder/shared/ask/types.js';
+/// 设计文档 §8.8: 权限审批占位 tool name（虚拟）
+const PERMISSION_TOOL_NAME = '__permission_pending__';
 import { hydrateSnapshot, type SessionSnapshot } from '@mcoder/shared/rpc/sessionSnapshot.js';
 import { clearSessionUiState } from '@mcoder/shared/store/clearSessionUiState.js';
 import { NetworkMonitor } from './network.js';
@@ -301,6 +304,39 @@ export function App() {
             msgStore.addMessage({
               role: 'assistant',
               content: [{ type: 'tool_use', id: p.tool_call_id, name: ASK_USER_TOOL, args: p.request }],
+            });
+          }
+          break;
+        }
+        case 'permission.pending': {
+          // 设计文档 §8.8: 权限审批 pending
+          const p = notif.params;
+          if (p && p.request) {
+            usePermissionStore.getState().setPending(p.session_id, p.request);
+            if (!hasToolUse(msgStore.messages, p.request.tool_call_id)) {
+              msgStore.addMessage({
+                role: 'assistant',
+                content: [{
+                  type: 'tool_use',
+                  id: p.request.tool_call_id,
+                  name: PERMISSION_TOOL_NAME,
+                  args: { real_tool_name: p.request.tool_name, ...p.request },
+                }],
+              });
+            }
+          }
+          break;
+        }
+        case 'permission.resolved': {
+          // 设计文档 §8.8: 权限审批决议
+          const p = notif.params;
+          if (p && p.request_id && p.decision) {
+            const decision = p.decision;
+            usePermissionStore.getState().setResolved(p.session_id, p.request_id, {
+              type: decision.type === 'Allow' ? 'allow'
+                : decision.type === 'AlwaysAllow' ? 'always_allow'
+                : 'deny',
+              reason: decision.reason,
             });
           }
           break;

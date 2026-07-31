@@ -1,7 +1,10 @@
-// 设计文档 §6.6: components/ToolCallCard.tsx - 工具调用卡片（折叠/展开）
+// DESIGN.md §3: 工具调用卡片（折叠/展开）
+// - 角色色：execution = accent；done = textMuted
+// - 标题：▸ tool_name(args) 或 ✓ 已完成
 
 import { Box, Text } from 'ink';
 import { useMessagesStore } from '../store/index.js';
+import { TUI_COLORS, PREFIX } from '../theme.js';
 import { formatToolOutput } from '../utils/format.js';
 import type { ContentBlock } from '../rpc/types.js';
 
@@ -15,12 +18,12 @@ export function ToolCallCard({ block }: { block: ContentBlock }) {
 
   return (
     <Box flexDirection="column">
-      <Text color="yellow">
-        {'  '}▸ {block.name}({argsPreview})
+      <Text color={TUI_COLORS.accent}>
+        {'  '}{PREFIX.pending} {block.name}({argsPreview})
       </Text>
       {expanded && (
         <Box flexDirection="column" marginLeft={4}>
-          <Text color="gray">Args: {argsStr}</Text>
+          <Text color={TUI_COLORS.textMuted}>args: {argsStr}</Text>
         </Box>
       )}
     </Box>
@@ -31,8 +34,8 @@ export function ToolCallCard({ block }: { block: ContentBlock }) {
 export function ToolResultView({ block }: { block: ContentBlock }) {
   const output = formatToolOutput(block.output, 200);
   return (
-    <Text color="gray">
-      {'  '}→ {output}
+    <Text color={TUI_COLORS.textMuted}>
+      {'  '}{PREFIX.done} {output}
     </Text>
   );
 }

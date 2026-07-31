@@ -35,7 +35,11 @@
     "@types/qrcode-terminal": "^0.12.2",
     "@types/react": "^18.2.0",
     "@types/ws": "^8.5.0",
+    "react-devtools-core": "^4.19.1",
     "tsx": "^4.0.0",
     "typescript": "^5.4.0"
+  },
+  "overrides": {
+    "react-devtools-core": "^4.19.1"
   }
 }

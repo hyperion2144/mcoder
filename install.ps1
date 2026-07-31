@@ -7,10 +7,21 @@ $ErrorActionPreference = "Stop"
 $ROOT = Split-Path -Parent $MyInvocation.MyCommand.Path
 Write-Host "=== mcoder installer ===" -ForegroundColor Cyan
 
-# 检查依赖
+# ===== 0. PATH 自愈（解决 ~/.cargo/bin 不在 PATH 的问题）=====
+# 常见原因：PowerShell 从 IDE / Explorer 启动时用户 PATH 没继承
+$extraPath = @()
+$cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
+if (Test-Path $cargoBin) { $extraPath += $cargoBin }
+$env:PATH = ($extraPath + $env:PATH -split ';') -join ';'
+
+# ===== 1. 检查依赖 =====
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) { Write-Host "ERROR: cargo not found. Install Rust: https://rustup.rs" -ForegroundColor Red; exit 1 }
 if (-not (Get-Command bun -ErrorAction SilentlyContinue))  { Write-Host "ERROR: bun not found. Install: powershell -c `"irm bun.sh/install.ps1 | iex`"" -ForegroundColor Red; exit 1 }
 if (-not (Get-Command npm -ErrorAction SilentlyContinue))  { Write-Host "ERROR: npm not found. Install Node.js first." -ForegroundColor Red; exit 1 }
+
+Write-Host "  cargo: $(Get-Command cargo | Select-Object -ExpandProperty Source)" -ForegroundColor Gray
+Write-Host "  bun:   $(Get-Command bun | Select-Object -ExpandProperty Source)" -ForegroundColor Gray
+Write-Host "  npm:   $(Get-Command npm | Select-Object -ExpandProperty Source)" -ForegroundColor Gray
 
 # 1. 构建 mcoder (Rust)
 Write-Host "`n[1/3] Building mcoder (Rust)..." -ForegroundColor Yellow

@@ -38,10 +38,10 @@ export function ResumeBar({ client, sessionId }: Props) {
   if (!hasResumeEntry(entry)) return null;
 
   const label = entry.kind === 'auto_resume'
-    ? '▶ Resume (auto)'
+    ? '▸ Resume (auto)'
     : entry.kind === 'requires_input'
-      ? '⏸ Resume (waiting)'
-      : '⏸ Resume (ask)';
+      ? '▸ Resume (waiting)'
+      : '▸ Resume (ask)';
 
   const onClick = async () => {
     if (!client || !sessionId || busy) return;

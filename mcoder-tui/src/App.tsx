@@ -6,8 +6,11 @@ import { useState, useEffect, useMemo } from 'react';
 import { Box, Text, useInput, useApp } from 'ink';
 import { useSessionStore, useMessagesStore, useUiStore } from './store/index.js';
 import { useAskStore, type PendingAsk } from './ask/store.js';
+import { usePermissionStore } from './permission/store.js';
 import { ASK_USER_TOOL } from './ask/types.js';
 import { hasToolUse } from './ask/messages.js';
+/// 设计文档 §8.8: 权限审批占位 tool name（虚拟，仅用于 desktop/mobile 渲染识别）
+const PERMISSION_TOOL_NAME = '__permission_pending__';
 import { serializeSubmission } from './ask/validation.js';
 import { dispatchSlashCommand } from './commands/index.js';
 import { WsClient } from './rpc/client.js';
@@ -23,6 +26,8 @@ import {
 } from './components/index.js';
 import { formatContext, formatCost } from './utils/format.js';
 import { parsePairingString } from './utils/pairing.js';
+import { TUI_COLORS, PREFIX } from './theme.js';
+import { ShimmerText } from './components/ShimmerText.js';
 
 interface Props {
   client: WsClient;
@@ -35,6 +40,7 @@ export function App({ client: initialClient }: Props) {
   const sessionStore = useSessionStore();
   const msgStore = useMessagesStore();
   const askStore = useAskStore();
+  const permissionStore = usePermissionStore();
   const { exit } = useApp();
 
   // 当前 session 的 pending ask
@@ -162,6 +168,40 @@ export function App({ client: initialClient }: Props) {
           msgStore.setError(notif.params.message);
           msgStore.setStreaming(false);
           break;
+        case 'permission.pending': {
+          // 设计文档 §8.8: 权限审批 pending 通知
+          const p = notif.params;
+          if (p && p.request) {
+            permissionStore.setPending(p.session_id, p.request);
+            // 消息流占位：插入一条 assistant 消息含 tool_use block（虚拟工具名 PERMISSION_TOOL_NAME）
+            if (!hasToolUse(msgStore.messages, p.request.tool_call_id)) {
+              msgStore.addMessage({
+                role: 'assistant',
+                content: [{
+                  type: 'tool_use',
+                  id: p.request.tool_call_id,
+                  name: PERMISSION_TOOL_NAME,
+                  args: { real_tool_name: p.request.tool_name, ...p.request },
+                }],
+              });
+            }
+          }
+          break;
+        }
+        case 'permission.resolved': {
+          // 决议广播：清理 pending + 追加决议摘要消息
+          const p = notif.params;
+          if (p && p.request_id) {
+            const decision = p.decision;
+            permissionStore.setResolved(p.session_id, p.request_id, {
+              type: decision.type === 'Allow' ? 'allow'
+                : decision.type === 'AlwaysAllow' ? 'always_allow'
+                : 'deny',
+              reason: decision.reason,
+            });
+          }
+          break;
+        }
       }
     };
     client.onNotification(handler);
@@ -476,6 +516,35 @@ export function App({ client: initialClient }: Props) {
       exit();
       return;
     }
+    // 设计文档 §8.8: 权限审批输入（pending 时 A/D/Y 决议；Esc 默认 Deny）
+    const pendingPermission = sid ? permissionStore.pending[sid] : null;
+    if (pendingPermission) {
+      const submit = (decision: { type: string; reason?: string | null }) => {
+        if (!sid) return;
+        client.request('permission.submit', {
+          session_id: sid,
+          response: {
+            request_id: pendingPermission.request_id,
+            session_id: sid,
+            decision,
+          },
+        }).catch((e: any) => {
+          msgStore.setError(`permission.submit failed: ${e.message ?? e}`);
+        });
+      };
+      if (key.escape || inputChar === 'd' || inputChar === 'D') {
+        submit({ type: 'Deny', reason: 'denied by user' });
+        return;
+      }
+      if (inputChar === 'a' || inputChar === 'A') {
+        submit({ type: 'Allow' });
+        return;
+      }
+      if (inputChar === 'y' || inputChar === 'Y') {
+        submit({ type: 'AlwaysAllow' });
+        return;
+      }
+    }
     // ask 模式下：Esc 取消 ask（issue 9）
     if (key.escape && askInputMode && pendingAsk) {
       cancelAsk();
@@ -616,15 +685,15 @@ export function App({ client: initialClient }: Props) {
 
       {/* Bottom status bar - fixed */}
       <Box justifyContent="space-between" paddingX={1} flexShrink={0}>
-        <Text color={sessionStore.connected ? 'green' : 'red'}>
+        <Text color={sessionStore.connected ? TUI_COLORS.success : TUI_COLORS.error}>
           {sessionStore.connected ? '●' : '○'} {sessionStore.connected ? 'connected' : 'disconnected'}
         </Text>
         <Text>
-          <Text color={ctxPctNum > 90 ? 'red' : ctxPctNum > 70 ? 'yellow' : 'green'}>
+          <Text color={ctxPctNum > 90 ? TUI_COLORS.error : ctxPctNum > 70 ? TUI_COLORS.warning : TUI_COLORS.success}>
             {ctxStr} ({ctxPctNum.toFixed(1)}%)
           </Text>
-          {costStr && <Text color="gray"> {costStr}</Text>}
-          {msgStore.streaming && <Text color="blue"> running</Text>}
+          {costStr && <Text color={TUI_COLORS.textMuted}> {costStr}</Text>}
+          {msgStore.streaming && <ShimmerText text={`${PREFIX.running} running`} />}
         </Text>
       </Box>
 
@@ -634,7 +703,7 @@ export function App({ client: initialClient }: Props) {
         onChange={setInput}
         onSubmit={onSubmit}
         placeholder={askInputMode && pendingAsk
-          ? `ask Q${focusIdx + 1} · 输入 1-${pendingAsk.request.questions[focusIdx]?.options.length || 0} 选择 · 文字作为 note · Enter 提交 · Esc 取消`
+          ? `ask Q${focusIdx + 1} · 1-${pendingAsk.request.questions[focusIdx]?.options.length || 0}`
           : undefined}
       />
     </Box>

@@ -10,8 +10,11 @@ import { useSessionStore, useMessagesStore } from '@mcoder/shared/store/index.js
 import { dispatchSlashCommand } from '@mcoder/shared/commands/index.js';
 import { parsePairingString } from '@mcoder/shared/utils/pairing.js';
 import { AskCard, AskCardSummary, useAskStore } from '@mcoder/shared/ask/index.js';
+import { usePermissionStore, PermissionCardReact } from '@mcoder/shared/permission/index.js';
 import { hasToolUse } from '@mcoder/shared/ask/messages.js';
 import { ASK_USER_TOOL } from '@mcoder/shared/ask/types.js';
+/// 设计文档 §8.8: 权限审批占位 tool name（虚拟，仅用于 desktop/mobile 渲染识别）
+const PERMISSION_TOOL_NAME = '__permission_pending__';
 import type { SessionMeta } from '@mcoder/shared/rpc/types.js';
 import { hydrateSnapshot, type SessionSnapshot } from '@mcoder/shared/rpc/sessionSnapshot.js';
 import { clearSessionUiState } from '@mcoder/shared/store/clearSessionUiState.js';
@@ -111,6 +114,19 @@ function MessageItem({
                     session_id={currentSessionId}
                     client={client}
                     onError={(m) => useMessagesStore.getState().setError(m)}
+                  />
+                );
+              }
+              // 设计文档 §8.8: 权限审批卡片
+              if (block.name === PERMISSION_TOOL_NAME && client && currentSessionId) {
+                return (
+                  <PermissionCardReact
+                    key={j}
+                    request_id={block.id || ''}
+                    tool_call_id={block.id || ''}
+                    session_id={currentSessionId}
+                    client={client}
+                    onError={(m: string) => useMessagesStore.getState().setError(m)}
                   />
                 );
               }
@@ -381,6 +397,40 @@ export function App() {
               msgStore.addMessage({
                 role: 'assistant',
                 content: [{ type: 'tool_use', id: p.tool_call_id, name: ASK_USER_TOOL, args: p.request }],
+              });
+            }
+            break;
+          }
+          case 'permission.pending': {
+            // 设计文档 §8.8: 权限审批 pending
+            const p = notif.params;
+            if (p && p.request) {
+              usePermissionStore.getState().setPending(p.session_id, p.request);
+              if (!hasToolUse(msgStore.messages, p.request.tool_call_id)) {
+                // 插入占位 tool_use block，用虚拟工具名 PERMISSION_TOOL_NAME 让渲染分支识别
+                msgStore.addMessage({
+                  role: 'assistant',
+                  content: [{
+                    type: 'tool_use',
+                    id: p.request.tool_call_id,
+                    name: PERMISSION_TOOL_NAME,
+                    args: { real_tool_name: p.request.tool_name, ...p.request },
+                  }],
+                });
+              }
+            }
+            break;
+          }
+          case 'permission.resolved': {
+            // 设计文档 §8.8: 权限审批决议
+            const p = notif.params;
+            if (p && p.request_id && p.decision) {
+              const decision = p.decision;
+              usePermissionStore.getState().setResolved(p.session_id, p.request_id, {
+                type: decision.type === 'Allow' ? 'allow'
+                  : decision.type === 'AlwaysAllow' ? 'always_allow'
+                  : 'deny',
+                reason: decision.reason,
               });
             }
             break;

@@ -5,6 +5,7 @@ import { Box, Text, useInput } from 'ink';
 import { useSessionStore } from '../store/session.js';
 import { useUiStore } from '../store/ui.js';
 import type { WsClient } from '../rpc/client.js';
+import { TUI_COLORS, PREFIX } from '../theme.js';
 
 interface SettingItem {
   key: string;
@@ -164,30 +165,30 @@ export function SettingView({ client }: { client: WsClient | null }) {
   });
 
   return (
-    <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
+    <Box flexDirection="column" borderStyle="single" borderColor={TUI_COLORS.textMuted} paddingX={1}>
       <Box marginBottom={1}>
-        <Text bold color="cyan">Settings</Text>
-        <Text color="gray">  (↑↓ navigate, Enter edit/toggle, Esc close)</Text>
+        <Text bold color={TUI_COLORS.accent}>Settings</Text>
+        <Text color={TUI_COLORS.textMuted}> · ↑↓ navigate · Enter edit/toggle · Esc close</Text>
       </Box>
 
-      {error && <Text color="red">Error: {error}</Text>}
-      {success && <Text color="green">✓ {success}</Text>}
+      {error && <Text color={TUI_COLORS.error}>{error}</Text>}
+      {success && <Text color={TUI_COLORS.success}>{success}</Text>}
 
       <Box flexDirection="column">
         {settings.map((item, i) => (
           <Box key={item.key}>
-            <Text color={i === selectedIndex ? 'cyan' : undefined} bold={i === selectedIndex}>
-              {i === selectedIndex ? '▸ ' : '  '}
+            <Text color={i === selectedIndex ? TUI_COLORS.accent : TUI_COLORS.textMuted} bold={i === selectedIndex}>
+              {i === selectedIndex ? `${PREFIX.running} ` : '  '}
             </Text>
-            <Box width={22}><Text bold>{item.label}</Text></Box>
+            <Box width={22}><Text bold color={TUI_COLORS.textPrimary}>{item.label}</Text></Box>
             {editing && i === selectedIndex ? (
-              <Text color="yellow">{editValue}_</Text>
+              <Text color={TUI_COLORS.warning}>{editValue}</Text>
             ) : (
-              <Text color={item.type === 'bool' ? (item.value === 'true' ? 'green' : 'red') : 'gray'}>
+              <Text color={item.type === 'bool' ? (item.value === 'true' ? TUI_COLORS.success : TUI_COLORS.error) : TUI_COLORS.textMuted}>
                 {item.value}
               </Text>
             )}
-            <Text color="gray">  {item.description}</Text>
+            <Text color={TUI_COLORS.textMuted}> · {item.description}</Text>
           </Box>
         ))}
       </Box>

@@ -1,13 +1,7 @@
-// Phase 3: TUI Resume 入口（消息区下方、输入框上方的固定状态提示附近；非模态）
-//
-// 设计：
-// - 仅在 can_resume=true 且 loop_state != running 时显示
-// - 通过 snapshot.can_resume / loop_state / stop_reason / 未完成 todo / interrupted
-//   tasks 决定是否显示
-// - 触发键：Ctrl+R（由 App.tsx 注册；ResumeBar 暴露 onResume handler）
-// - 触发后调用 `session.resume` RPC；调用后更新 loop state
-// - 三端共用纯逻辑：mcoder-tui/src/resume/state.ts
-// - Phase 5c: 传入 has_interrupted_tasks；与 Rust decide_resume 5 参数完全一致
+// DESIGN.md §4 / §10: ResumeBar（状态提示条）
+// - single border + textMuted
+// - 移除：⏸ emoji、press Ctrl+R... 提示
+// - 状态用 PREFIX 符号
 
 import React from 'react';
 import { Box, Text } from 'ink';
@@ -17,6 +11,7 @@ import {
   hasResumeEntry,
   type ResumeEntry,
 } from '../resume/state.js';
+import { TUI_COLORS, PREFIX } from '../theme.js';
 
 interface Props {
   sessionId: string | null;
@@ -34,7 +29,6 @@ export function ResumeBar({ sessionId }: Props) {
       (t: any) => t.status === 'pending' || t.status === 'in_progress',
     ) ?? []).length > 0,
     loop_running: !sessionStore.canResume,
-    // Phase 5c: 5 参数与 Rust 同步
     has_interrupted_tasks: (sessionStore.backgroundTasks ?? []).some(
       (t: any) => t.status === 'Interrupted' || t.status === 'interrupted',
     ),
@@ -42,25 +36,24 @@ export function ResumeBar({ sessionId }: Props) {
 
   if (!hasResumeEntry(entry)) return null;
 
-  const label = entry.kind === 'auto_resume'
-    ? '▶ Resume (auto)'
-    : entry.kind === 'requires_input'
-      ? '⏸ Resume (waiting for input)'
-      : '⏸ Resume (waiting for ask)';
-
+  const prefix = entry.kind === 'auto_resume' ? PREFIX.running : PREFIX.pending;
   const color = entry.kind === 'auto_resume'
-    ? 'cyan'
+    ? TUI_COLORS.accent
     : entry.kind === 'waiting_user'
-      ? 'yellow'
-      : 'gray';
+      ? TUI_COLORS.warning
+      : TUI_COLORS.textMuted;
+  const label = entry.kind === 'auto_resume'
+    ? 'Resume (auto)'
+    : entry.kind === 'requires_input'
+      ? 'Resume (waiting for input)'
+      : 'Resume (waiting for ask)';
 
   return (
-    <Box paddingX={1} borderStyle="single" borderColor="gray" flexDirection="column">
+    <Box paddingX={1} borderStyle="single" borderColor={TUI_COLORS.textMuted} flexDirection="column">
       <Box>
-        <Text color={color} bold>{label}</Text>
-        <Text color="gray"> · {entry.reason}</Text>
+        <Text color={color} bold>{prefix} {label}</Text>
+        <Text color={TUI_COLORS.textMuted}> · {entry.reason}</Text>
       </Box>
-      <Text color="gray">press Ctrl+R to resume (non-modal, near fixed status line)</Text>
     </Box>
   );
 }

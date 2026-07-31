@@ -385,6 +385,21 @@ where
                             })),
                             Some(session_id),
                         ),
+                        ServerEvent::PermissionPending { session_id, request } => (
+                            make_notification("permission.pending", serde_json::json!({
+                                "session_id": session_id,
+                                "request": request,
+                            })),
+                            Some(session_id),
+                        ),
+                        ServerEvent::PermissionResolved { session_id, request_id, decision } => (
+                            make_notification("permission.resolved", serde_json::json!({
+                                "session_id": session_id,
+                                "request_id": request_id,
+                                "decision": decision,
+                            })),
+                            Some(session_id),
+                        ),
                         ServerEvent::Error { message } => (
                             make_notification("error", serde_json::json!({
                                 "message": message

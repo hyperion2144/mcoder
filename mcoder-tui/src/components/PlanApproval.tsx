@@ -1,9 +1,12 @@
-// 设计文档 §6.2: components/PlanApproval.tsx - Plan 审批 UI
-// [y] approve  [e] edit  [n] reject
+// DESIGN.md §4 / §6: PlanApproval（交互类，warning round border）
+// - round border + warning
+// - 标题：▸ plan · 等待审批
+// - 移除：JSON.stringify 兜底（用更体面 fallback）
 
 import { Box, Text, useInput } from 'ink';
 import { useSessionStore } from '../store/index.js';
 import type { WsClient } from '../rpc/client.js';
+import { TUI_COLORS, ROLE_COLOR, PREFIX } from '../theme.js';
 
 interface Props {
   client: WsClient;
@@ -17,20 +20,15 @@ export function PlanApproval({ client }: Props) {
     const sid = currentSessionId;
     if (!sid) return;
 
-    // 设计文档 §6.2: [y] approve [e] edit [n] reject
     if (input === 'y') {
-      // approve
       client.request('session.approve', { session_id: sid, plan_id: pendingPlan.id || '' })
         .then(() => setPendingPlan(null))
         .catch(() => {});
     } else if (input === 'n') {
-      // 终审修复 #12：reject 通过 session.approve action=reject 提交（与 server 字段统一）
       client.request('session.approve', { session_id: sid, plan_id: pendingPlan.id || '', action: 'reject' })
         .then(() => setPendingPlan(null))
         .catch(() => {});
     } else if (input === 'e') {
-      // edit - 切换到输入框让用户输入修改意见
-      // 简化实现：reject 并提示用户重新描述
       setPendingPlan(null);
     }
   });
@@ -38,22 +36,22 @@ export function PlanApproval({ client }: Props) {
   if (!pendingPlan) return null;
 
   return (
-    <Box paddingX={1} borderStyle="single" flexDirection="column">
-      <Text color="yellow" bold>Plan pending approval</Text>
+    <Box paddingX={1} borderStyle="round" borderColor={ROLE_COLOR.interaction} flexDirection="column">
+      <Text color={ROLE_COLOR.interaction} bold>{PREFIX.pending} plan · 等待审批</Text>
       <Box flexDirection="column" marginY={0}>
         {Array.isArray(pendingPlan.steps) ? (
           pendingPlan.steps.map((step: any, i: number) => (
-            <Text key={i} color="white">
-              {i + 1}. {step.description || step.text || JSON.stringify(step)}
+            <Text key={i} color={TUI_COLORS.textPrimary}>
+              {i + 1}. {step.description || step.text || '(no description)'}
             </Text>
           ))
         ) : (
-          <Text color="white">{JSON.stringify(pendingPlan, null, 2)}</Text>
+          <Text color={TUI_COLORS.textMuted}>(empty plan)</Text>
         )}
       </Box>
-      <Text color="cyan">[y] approve</Text>
-      <Text color="yellow">[e] edit</Text>
-      <Text color="red">[n] reject</Text>
+      <Text color={TUI_COLORS.success}>[Y] approve</Text>
+      <Text color={TUI_COLORS.warning}>[E] edit</Text>
+      <Text color={TUI_COLORS.error}>[N] reject</Text>
     </Box>
   );
 }

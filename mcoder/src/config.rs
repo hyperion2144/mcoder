@@ -143,6 +143,7 @@ impl Default for AppConfig {
             image_description_timeout_secs: 8,
             web_search: crate::types::WebSearchConfig::default(),
             launch: crate::types::LaunchConfig::default(),
+            permission: crate::types::PermissionConfig::default(),
         }
     }
 }
