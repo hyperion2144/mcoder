@@ -1540,7 +1540,7 @@ html, body, #root {
   align-items: center;
   gap: 4px;
   padding: 8px 12px;
-  min-height: 36px;
+  min-height: 44px;
   border-radius: var(--radius-xl, 12px);
   border: 1px solid var(--border-subtle, #45475a);
   background: var(--bg-surface, #181825);

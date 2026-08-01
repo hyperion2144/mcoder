@@ -3102,6 +3102,14 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
     /// 关闭时必须清理：取消 CancellationToken、清理 pending Ask（避免悬挂 notify）、
     /// 唤醒 waiter（issue 5）
     pub async fn close_session(&self, session_id: &str) -> Result<()> {
+        // m2: 递归关闭所有子 session（subagent/handoff 产生的子 session）
+        let all_sessions = crate::persistence::jsonl::JsonlSession::list(None).unwrap_or_default();
+        for meta in all_sessions {
+            if meta.parent_session_id.as_deref() == Some(session_id) {
+                let _ = Box::pin(self.close_session(&meta.session_id)).await;
+            }
+        }
+
         let entry = self
             .sessions
             .write()
@@ -3130,6 +3138,14 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
     ///
     /// 同 close_session：清理 pending + 取消 token（issue 5）
     pub async fn delete_session(&self, session_id: &str) -> Result<()> {
+        // m2: 递归删除所有子 session（subagent/handoff 产生的子 session）
+        let all_sessions = crate::persistence::jsonl::JsonlSession::list(None).unwrap_or_default();
+        for meta in all_sessions {
+            if meta.parent_session_id.as_deref() == Some(session_id) {
+                let _ = Box::pin(self.delete_session(&meta.session_id)).await;
+            }
+        }
+
         let entry = self.sessions.write().await.remove(session_id);
         if let Some(entry) = entry {
             entry.cancellation.cancel();
@@ -3835,9 +3851,16 @@ pub async fn quick_thinking(
             anyhow::bail!("agent loop already running for session {}", session_id);
         }
 
+        // M2: RAII guard：persist/broadcast 被取消或出错时自动重置 loop_running=false；
+        // 进入 spawn_run_loop 前 disown（所有权移交给 loop task）。
+        let mut guard = loop_running_guard(&entry.loop_running);
+
         self.persist_loop_state(session_id, "running", None).await;
         self.broadcast_state_changed(session_id, "running").await;
 
+        // 把 loop_running 的所有权移交给 loop task
+        guard.armed = false;
+        drop(guard); // 释放对 entry 的借用，使 entry 可 move
         self.spawn_run_loop(session_id.to_string(), entry);
 
         Ok(())
@@ -3890,9 +3913,18 @@ pub async fn quick_thinking(
         if let Some(entry) = sessions.get(session_id) {
             let agent = entry.session.lock().await;
             let loop_running = entry.loop_running.load(std::sync::atomic::Ordering::SeqCst);
-            let loop_state = if loop_running { "running" } else { "idle" };
             let msg_count = agent.messages.len();
-            (loop_state.to_string(), msg_count)
+            drop(agent);
+            drop(sessions);
+            if loop_running {
+                return ("running".to_string(), msg_count);
+            }
+            // m1: loop 不在运行，读 DB 获取准确状态（可能是 stopped/completed 而非 idle）
+            let (db_state, _) = match SessionStateStore::for_session(session_id).await {
+                Some(store) => store.get_session_state(session_id).await,
+                None => ("idle".to_string(), None),
+            };
+            (db_state, msg_count)
         } else {
             // session 不在内存，从 DB 读 loop_state
             let (db_state, _) = match SessionStateStore::for_session(session_id).await {
@@ -3905,15 +3937,21 @@ pub async fn quick_thinking(
 
     /// 广播 session 状态变化通知
     pub async fn broadcast_state_changed(&self, session_id: &str, loop_state: &str) {
-        let msg_count = {
-            let sessions = self.sessions.read().await;
-            if let Some(entry) = sessions.get(session_id) {
-                let agent = entry.session.lock().await;
-                agent.messages.len()
-            } else {
-                0
-            }
-        };
+        // S1 修复: 不在此处加锁 agent mutex（调用方如 emit_session_done 可能已持锁，
+        // tokio::Mutex 不可重入会死锁）。msg_count 传 0（UI 仅用于辅助显示）。
+        // 如需准确 msg_count，调用方应在非持锁上下文调 broadcast_state_changed_with_count。
+        let _ = self.event_tx.send(ServerEvent::Custom {
+            method: "session.state_changed".into(),
+            params: serde_json::json!({
+                "session_id": session_id,
+                "loop_state": loop_state,
+                "message_count": 0,
+            }),
+        });
+    }
+
+    /// 带准确 msg_count 的状态广播（在非持锁上下文调用）
+    pub async fn broadcast_state_changed_with_count(&self, session_id: &str, loop_state: &str, msg_count: usize) {
         let _ = self.event_tx.send(ServerEvent::Custom {
             method: "session.state_changed".into(),
             params: serde_json::json!({
@@ -3952,11 +3990,7 @@ pub async fn quick_thinking(
         let handoff_doc = self.generate_handoff_doc(&messages, task_prompt, &model_config).await?;
 
         // 3. 创建子 session（source=Handoff）
-        let title = if task_prompt.len() > 60 {
-            format!("Handoff: {}", &task_prompt[..60])
-        } else {
-            format!("Handoff: {}", task_prompt)
-        };
+        let title = format!("Handoff: {}", task_prompt.chars().take(60).collect::<String>());
         let child_id = self.create_child_session(
             session_id,
             &title,
@@ -4385,14 +4419,29 @@ async fn execute_readonly_concurrent(
 
 /// 脱敏：替换 API key、密码等敏感信息
 fn sanitize_for_handoff(s: &str) -> String {
-    // 替换 sk-xxx 格式的 API key
-    let re1 = regex::Regex::new(r"sk-[A-Za-z0-9]{20,}").unwrap();
+    // M5: 扩展正则覆盖多种敏感格式
+    // API key: sk-xxx（覆盖 OpenAI sk-xxx + Anthropic sk-ant-xxx）
+    let re1 = regex::Regex::new(r"sk-[A-Za-z0-9_-]{10,}").unwrap();
     let s = re1.replace_all(s, "[REDACTED]");
-    // 替换 ${ENV_VAR} 格式
+    // GitHub token: ghp_/gho_/ghu_/ghs_/ghr_ + 36+ chars
+    let re_gh = regex::Regex::new(r"gh[pousr]_[A-Za-z0-9]{36,}").unwrap();
+    let s = re_gh.replace_all(&s, "[REDACTED]");
+    // AWS access key: AKIA + 16 chars
+    let re_aws = regex::Regex::new(r"AKIA[A-Z0-9]{16}").unwrap();
+    let s = re_aws.replace_all(&s, "[REDACTED]");
+    // Google API key: AIza + 35 chars
+    let re_google = regex::Regex::new(r"AIza[A-Za-z0-9_-]{35}").unwrap();
+    let s = re_google.replace_all(&s, "[REDACTED]");
+    // Bearer token
+    let re_bearer = regex::Regex::new(r"(?i)Bearer\s+[A-Za-z0-9_.-]+").unwrap();
+    let s = re_bearer.replace_all(&s, "Bearer [REDACTED]");
+    // 敏感字段名: password/passwd/pwd/secret/token/api_key/apikey/authorization/credential/private_key
+    let re_sensitive = regex::Regex::new(
+        r"(?i)(password|passwd|pwd|secret|token|api_key|apikey|authorization|credential|private_key)\s*[:=]\s*\S+"
+    ).unwrap();
+    let s = re_sensitive.replace_all(&s, "$1=[REDACTED]");
+    // ${ENV_VAR} 格式
     let re2 = regex::Regex::new(r"\$\{[A-Z_][A-Z0-9_]*\}").unwrap();
     let s = re2.replace_all(&s, "${REDACTED}");
-    // 替换 password=xxx
-    let re3 = regex::Regex::new(r"(?i)(password|passwd|pwd)\s*[:=]\s*\S+").unwrap();
-    let s = re3.replace_all(&s, "$1=[REDACTED]");
     s.to_string()
 }

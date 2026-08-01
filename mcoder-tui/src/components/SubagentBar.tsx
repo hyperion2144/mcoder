@@ -12,7 +12,7 @@ interface ChildSession {
   session_id: string;
   title: string;
   model: string;
-  source: string;       // "subagent" | "handoff" | "normal"
+  source: 'subagent' | 'handoff' | 'normal';
   subagent_role: string | null;
   task_description: string | null;
   loop_state: string;   // "running" | "idle"
@@ -106,6 +106,9 @@ export function SubagentBar({ client, currentSessionId, onSwitchSession, pending
 
   if (children.length === 0) return null;
 
+  // m10: cursor 越界保护——children 变少时 clamp 到有效范围
+  const safeCursor = Math.min(cursor, Math.max(0, children.length - 1));
+
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={focused ? TUI_COLORS.accent : TUI_COLORS.textMuted} paddingX={1} flexShrink={0}>
       <Box>
@@ -115,8 +118,8 @@ export function SubagentBar({ client, currentSessionId, onSwitchSession, pending
       {focused && <Text color={TUI_COLORS.textMuted}>↑↓ navigate {PREFIX.sep} Enter switch {PREFIX.sep} Esc back</Text>}
       {children.map((c, i) => (
         <Box key={c.session_id}>
-          <Text color={i === cursor && focused ? TUI_COLORS.accent : TUI_COLORS.textMuted}>
-            {i === cursor && focused ? `${PREFIX.running} ` : '  '}
+          <Text color={i === safeCursor && focused ? TUI_COLORS.accent : TUI_COLORS.textMuted}>
+            {i === safeCursor && focused ? `${PREFIX.running} ` : '  '}
           </Text>
           <Text color={c.source === 'handoff' ? TUI_COLORS.mauve : TUI_COLORS.textPrimary}>
             {c.source === 'handoff' ? `${PREFIX.thinking} ` : `${PREFIX.pending} `}

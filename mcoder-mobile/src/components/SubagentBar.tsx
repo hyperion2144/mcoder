@@ -6,20 +6,21 @@
 //   - 点击 chip 切换到该子代理 session
 
 import { useState, useEffect } from 'react';
-import { Bot, Brain } from 'lucide-react';
+import { Bot, Brain } from './icons';
+import type { WsClient } from '@mcoder/shared/rpc/client.js';
 
 interface ChildSession {
   session_id: string;
   title: string;
   model: string;
-  source: string;
+  source: 'subagent' | 'handoff' | 'normal';
   subagent_role: string | null;
   loop_state: string;
   message_count: number;
 }
 
 interface Props {
-  client: any;
+  client: WsClient;
   currentSessionId: string | null;
   onSwitchSession: (sessionId: string) => void;
 }

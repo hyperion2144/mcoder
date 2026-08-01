@@ -21,10 +21,11 @@ import {
   CornerDownRight,  // ↳
   Save,             // 保存按钮
   Bot,              // 子代理 chip 图标
+  Brain,            // handoff 子代理 chip 图标
 } from 'lucide-react';
 
 export {
   X, Check, AlertCircle, ChevronDown, ChevronRight, ChevronUp, ArrowLeft,
   Settings, Plus, Trash2, Star, Play, Square, CircleDot, Circle, Plug,
-  CornerDownRight, Save, Bot,
+  CornerDownRight, Save, Bot, Brain,
 };

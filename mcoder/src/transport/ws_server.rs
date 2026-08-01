@@ -1101,6 +1101,17 @@ async fn handle_request(
         "session.list_children" => {
             let p = req.params.unwrap_or_default();
             let parent_session_id = p["parent_session_id"].as_str().unwrap_or("");
+            if parent_session_id.is_empty() {
+                return JsonRpcResponse::err(
+                    req.id,
+                    -32602,
+                    "parent_session_id required for session.list_children".to_string(),
+                );
+            }
+            // m3: 校验 attached_session == parent_session_id
+            if let Err(reason) = check_attached_session(attached_session, parent_session_id) {
+                return JsonRpcResponse::err(req.id, -32602, reason);
+            }
             let children = mgr.list_child_sessions(parent_session_id).await;
             JsonRpcResponse::ok(req.id, serde_json::json!(children))
         }
@@ -1110,6 +1121,10 @@ async fn handle_request(
             let task_prompt = p["task_prompt"].as_str().unwrap_or("").to_string();
             if session_id.is_empty() || task_prompt.is_empty() {
                 return JsonRpcResponse::err(req.id, -32602, "session_id and task_prompt required".to_string());
+            }
+            // m3: 校验 attached_session == session_id
+            if let Err(reason) = check_attached_session(attached_session, &session_id) {
+                return JsonRpcResponse::err(req.id, -32602, reason);
             }
             match mgr.handoff(&session_id, &task_prompt).await {
                 Ok(result) => JsonRpcResponse::ok(req.id, serde_json::to_value(&result).unwrap_or_default()),
@@ -1121,6 +1136,10 @@ async fn handle_request(
             let from_session_id = p["from_session_id"].as_str().unwrap_or("").to_string();
             if from_session_id.is_empty() {
                 return JsonRpcResponse::err(req.id, -32602, "from_session_id required".to_string());
+            }
+            // m3: 校验 attached_session == from_session_id
+            if let Err(reason) = check_attached_session(attached_session, &from_session_id) {
+                return JsonRpcResponse::err(req.id, -32602, reason);
             }
             match mgr.handoff_back(&from_session_id).await {
                 Ok(result) => JsonRpcResponse::ok(req.id, serde_json::to_value(&result).unwrap_or_default()),

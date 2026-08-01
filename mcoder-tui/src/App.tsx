@@ -712,6 +712,11 @@ export function App({ client: initialClient }: Props) {
           // 切换 session（复用 /sessions open 的逻辑）
           (async () => {
             try {
+              // 清理旧 session UI 状态
+              const oldSid = sessionStore.currentSessionId;
+              if (oldSid && oldSid !== targetSid) {
+                clearSessionUiState({ sessionId: oldSid });
+              }
               const snapshot = await client.request('session.attach', { session_id: targetSid }) as SessionSnapshot;
               client.setReconnectSession(targetSid);
               hydrateSnapshot({
@@ -720,6 +725,11 @@ export function App({ client: initialClient }: Props) {
                 currentMessageCount: 0,
                 store: buildHydrateStore(0),
               });
+              // 补全 hydrateSnapshot 不覆盖的状态
+              sessionStore.setLoopState(snapshot.session.loop_state, snapshot.session.stop_reason);
+              sessionStore.setCanResume(snapshot.can_resume);
+              sessionStore.setVersion(snapshot.session.version);
+              sessionStore.setLspServers(snapshot.session.lsp_servers);
             } catch (e: any) {
               msgStore.setError(`switch session failed: ${e.message}`);
             }

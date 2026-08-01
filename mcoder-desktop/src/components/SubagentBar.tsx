@@ -11,20 +11,21 @@
 //   - session.state_changed 通知 { session_id, loop_state, message_count }
 
 import { useState, useEffect } from 'react';
-import { Bot, Brain } from 'lucide-react';
+import { Bot, Brain } from './icons';
+import type { WsClient } from '@mcoder/shared/rpc/client.js';
 
 interface ChildSession {
   session_id: string;
   title: string;
   model: string;
-  source: string;
+  source: 'subagent' | 'handoff' | 'normal';
   subagent_role: string | null;
   loop_state: string;
   message_count: number;
 }
 
 interface Props {
-  client: any;  // WsClient
+  client: WsClient;
   currentSessionId: string | null;
   onSwitchSession: (sessionId: string) => void;
 }

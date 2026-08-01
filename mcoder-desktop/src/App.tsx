@@ -711,16 +711,19 @@ export function App() {
     // /handoff <desc>: 把当前会话 handoff 给新子代理
     if (cmd.startsWith('/handoff ')) {
       const taskPrompt = cmd.slice('/handoff '.length).trim();
-      if (!taskPrompt || !currentSessionId) return;
+      if (!taskPrompt) { msgStore.setError('Usage: /handoff <task description>'); return; }
+      if (!currentSessionId) { msgStore.setError('no active session'); return; }
       try {
         const result: any = await client.request('session.handoff', { session_id: currentSessionId, task_prompt: taskPrompt });
         msgStore.addMessage({ role: 'system', content: [{ type: 'text', text: `Handoff -> ${result.new_session_id}\n\n${result.handoff_doc}` }] });
       } catch (e: any) { msgStore.setError(e.message); }
       return;
     }
+    // /handoff 无参数
+    if (cmd === '/handoff') { msgStore.setError('Usage: /handoff <task description>'); return; }
     // /handoff-back: 从当前子代理 handoff 回父会话
     if (cmd === '/handoff-back') {
-      if (!currentSessionId) return;
+      if (!currentSessionId) { msgStore.setError('no active session'); return; }
       try {
         const result: any = await client.request('session.handoff_back', { from_session_id: currentSessionId });
         msgStore.addMessage({ role: 'system', content: [{ type: 'text', text: `Handoff back to ${result.to_session_id}:\n\n${result.back_doc}` }] });

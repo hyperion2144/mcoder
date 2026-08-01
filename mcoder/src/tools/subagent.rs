@@ -159,7 +159,6 @@ impl Tool for SubagentTool {
                     .context("task required for spawn")?;
                 let _max_iters_override: Option<u32> = args["max_iters"].as_u64().map(|n| n as u32);
                 let timeout_override: Option<u32> = args["timeout"].as_u64().map(|n| n as u32);
-                let sa_id = format!("sa-{}", chrono::Utc::now().timestamp_millis());
 
                 // 获取 deps（late binding）
                 let deps = {
@@ -235,7 +234,7 @@ impl Tool for SubagentTool {
                 }
 
                 // P2: 创建子 session
-                let title = format!("Subagent: {}", &task[..task.len().min(60)]);
+                let title = format!("Subagent: {}", task.chars().take(60).collect::<String>());
                 let child_session_id = deps.session_manager
                     .create_child_session(
                         &ctx.session_id,
@@ -245,6 +244,9 @@ impl Tool for SubagentTool {
                         Some(&role),
                         Some(&task),
                     ).await?;
+
+                // M1: sa_id = child_session_id，使 done/ask op 能通过 child_session_id 查到 tasks
+                let sa_id = child_session_id.clone();
 
                 // 设置子 session 的 role（应用工具白名单 + role system prompt）
                 let _ = deps.session_manager.set_role(&child_session_id, &role).await;
@@ -283,7 +285,6 @@ impl Tool for SubagentTool {
                 let task_manager = ctx.task_manager.clone();
                 let sm = deps.session_manager.clone();
                 let child_id_clone = child_session_id.clone();
-                let parent_session_id = ctx.session_id.clone();
                 let tasks_map = self.tasks.clone();
                 let sa_id_closure = sa_id.clone();
 
@@ -323,8 +324,15 @@ impl Tool for SubagentTool {
                             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                         }
                     } else {
+                        // M3: 无超时分支也加 30 分钟最大等待，防止 is_loop_running race condition 导致永久挂起
+                        let max_wait = std::time::Duration::from_secs(1800);
+                        let deadline = tokio::time::Instant::now() + max_wait;
                         loop {
                             if !sm.is_loop_running(&child_id_clone).await {
+                                break;
+                            }
+                            if tokio::time::Instant::now() >= deadline {
+                                tracing::warn!("subagent loop polling timed out after 30min for session {}", child_id_clone);
                                 break;
                             }
                             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -355,12 +363,7 @@ impl Tool for SubagentTool {
                         Err(_) => "(session closed)".into(),
                     };
 
-                    // inject 结果到父 session
-                    let inject_text = format!(
-                        "[subagent completed] session={}\nresult: {}",
-                        child_id_clone, result_text
-                    );
-                    let _ = sm.inject_message(&parent_session_id, Message::system(&inject_text)).await;
+                    // M9: 不再手动 inject_message，由 inject_completed_tasks 负责注入结果（避免重复注入）
 
                     // 更新 SubagentTask 状态
                     let mut tasks_lock = tasks_map.lock().await;
@@ -376,7 +379,7 @@ impl Tool for SubagentTool {
                     task_id,
                     handle: child_session_id.clone(),
                     status_msg: format!("subagent spawned in session {} (role={}, task={})",
-                        child_session_id, role, &task[..task.len().min(80)]),
+                        child_session_id, role, task.chars().take(80).collect::<String>()),
                 })
             }
             "status" => {
