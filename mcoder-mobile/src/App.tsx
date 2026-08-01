@@ -25,6 +25,7 @@ import { ProjectList } from './components/ProjectList.js';
 import { SessionTabs } from './components/SessionTabs.js';
 import { TodoSummaryBar } from './components/TodoSummaryBar.js';
 import { ResumeBar } from './components/ResumeBar.js';
+import { SubagentBar } from './components/SubagentBar.js';
 import { TreeView } from './components/TreeView.js';
 import { ProviderScreen } from './components/ProviderScreen.js';
 import {
@@ -668,6 +669,30 @@ export function App() {
 
   const handleSlash = useCallback(async (cmd: string) => {
     if (!client) return;
+    // /handoff <desc>: 将当前 session 移交给子代理处理指定任务
+    if (cmd.startsWith('/handoff ')) {
+      const taskPrompt = cmd.slice('/handoff '.length).trim();
+      if (!taskPrompt || !client || !sessionStore.currentSessionId) return;
+      try {
+        const result = await client.request('session.handoff', {
+          session_id: sessionStore.currentSessionId,
+          task_prompt: taskPrompt,
+        });
+        msgStore.addMessage({ role: 'system', content: [{ type: 'text', text: `Handoff -> ${result.new_session_id}\n\n${result.handoff_doc}` }] });
+      } catch (e: any) { msgStore.setError(e.message); }
+      return;
+    }
+    // /handoff-back: 从当前子代理返回到父 session
+    if (cmd === '/handoff-back') {
+      if (!client || !sessionStore.currentSessionId) return;
+      try {
+        const result = await client.request('session.handoff_back', {
+          from_session_id: sessionStore.currentSessionId,
+        });
+        msgStore.addMessage({ role: 'system', content: [{ type: 'text', text: `Handoff back to ${result.to_session_id}:\n\n${result.back_doc}` }] });
+      } catch (e: any) { msgStore.setError(e.message); }
+      return;
+    }
     // 所有 slash command 转发到服务端分发（commands/mod.rs::CommandDispatcher）
     try {
       const result = await dispatchSlashCommand(cmd, client);
@@ -682,7 +707,7 @@ export function App() {
     } catch (e: any) {
       msgStore.setError(e.message);
     }
-  }, [client]);
+  }, [client, sessionStore, msgStore]);
 
   const onSubmit = useCallback((value: string, images: PendingImage[] = []) => {
     if (value.startsWith('/')) {
@@ -892,6 +917,15 @@ export function App() {
 
       {/* Phase 3: Resume 入口（固定状态提示附近；非模态） */}
       <ResumeBar client={client} sessionId={sessionStore.currentSessionId} />
+
+      {/* 子代理实时 chip 栏：水平滚动，无子代理时隐藏 */}
+      {client && sessionStore.currentSessionId && (
+        <SubagentBar
+          client={client}
+          currentSessionId={sessionStore.currentSessionId}
+          onSwitchSession={(sid) => attachSession(sid)}
+        />
+      )}
 
       {/* BottomStatus: 连接状态 / model / ctx / cost / running */}
       <div className="bottom-status">

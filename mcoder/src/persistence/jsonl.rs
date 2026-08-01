@@ -17,6 +17,30 @@ pub struct SessionMeta {
     /// 当前消息树分支末端消息 id（用于分叉/切换；None=空会话或未设置）
     #[serde(default)]
     pub current_head_id: Option<String>,
+    /// 父 session id（子代理/handoff 创建时设置；普通 session 为 None）
+    #[serde(default)]
+    pub parent_session_id: Option<String>,
+    /// session 来源
+    #[serde(default)]
+    pub source: SessionSource,
+    /// 子代理 role（仅 source=subagent 时有值）
+    #[serde(default)]
+    pub subagent_role: Option<String>,
+    /// 子代理任务描述（仅 source=subagent/handoff 时有值）
+    #[serde(default)]
+    pub task_description: Option<String>,
+}
+
+/// session 来源类型
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionSource {
+    #[default]
+    Normal,
+    /// subagent 工具创建
+    Subagent,
+    /// /handoff 命令创建
+    Handoff,
 }
 
 pub struct JsonlSession {
@@ -47,6 +71,10 @@ impl JsonlSession {
             created_at: chrono::Utc::now(),
             model: model.into(),
             current_head_id: None,
+            parent_session_id: None,
+            source: SessionSource::default(),
+            subagent_role: None,
+            task_description: None,
         };
 
         std::fs::write(&meta_path, serde_json::to_string_pretty(&meta)?)?;
@@ -126,6 +154,23 @@ impl JsonlSession {
     /// 更新 model 并持久化到 meta.json（用于运行时切换模型）
     pub fn update_model(&mut self, model: impl Into<String>) -> Result<()> {
         self.meta.model = model.into();
+        let meta_path = self.path.with_extension("meta.json");
+        std::fs::write(&meta_path, serde_json::to_string_pretty(&self.meta)?)?;
+        Ok(())
+    }
+
+    /// 设置子代理/handoff 元数据并持久化
+    pub fn set_child_meta(
+        &mut self,
+        parent_session_id: &str,
+        source: SessionSource,
+        subagent_role: Option<&str>,
+        task_description: Option<&str>,
+    ) -> Result<()> {
+        self.meta.parent_session_id = Some(parent_session_id.to_string());
+        self.meta.source = source;
+        self.meta.subagent_role = subagent_role.map(String::from);
+        self.meta.task_description = task_description.map(String::from);
         let meta_path = self.path.with_extension("meta.json");
         std::fs::write(&meta_path, serde_json::to_string_pretty(&self.meta)?)?;
         Ok(())

@@ -19,10 +19,11 @@ import {
   Circle,           // ○
   Plug,             // 连接（optional）
   CornerDownRight,  // ↳
+  Bot,              // 子代理
 } from 'lucide-react';
 
 export {
   X, Check, AlertCircle, ChevronDown, ChevronRight, ChevronUp, ArrowLeft,
   Settings, Plus, Trash2, Star, Play, Square, CircleDot, Circle, Plug,
-  CornerDownRight,
+  CornerDownRight, Bot,
 };

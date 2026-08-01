@@ -32,6 +32,7 @@ import { PlanPanel } from './components/PlanPanel.js';
 import { TodoPanel } from './components/TodoPanel.js';
 import { TodoSummaryBar } from './components/TodoSummaryBar.js';
 import { ResumeBar } from './components/ResumeBar.js';
+import { SubagentBar } from './components/SubagentBar.js';
 import { TreeView } from './components/TreeView.js';
 import { ProviderPanel } from './components/ProviderPanel.js';
 import { ToolCard } from '@mcoder/shared/toolCard/ToolCardHtml.js';
@@ -706,6 +707,27 @@ export function App() {
 
   const handleSlash = async (cmd: string) => {
     if (!client) return;
+
+    // /handoff <desc>: 把当前会话 handoff 给新子代理
+    if (cmd.startsWith('/handoff ')) {
+      const taskPrompt = cmd.slice('/handoff '.length).trim();
+      if (!taskPrompt || !currentSessionId) return;
+      try {
+        const result: any = await client.request('session.handoff', { session_id: currentSessionId, task_prompt: taskPrompt });
+        msgStore.addMessage({ role: 'system', content: [{ type: 'text', text: `Handoff -> ${result.new_session_id}\n\n${result.handoff_doc}` }] });
+      } catch (e: any) { msgStore.setError(e.message); }
+      return;
+    }
+    // /handoff-back: 从当前子代理 handoff 回父会话
+    if (cmd === '/handoff-back') {
+      if (!currentSessionId) return;
+      try {
+        const result: any = await client.request('session.handoff_back', { from_session_id: currentSessionId });
+        msgStore.addMessage({ role: 'system', content: [{ type: 'text', text: `Handoff back to ${result.to_session_id}:\n\n${result.back_doc}` }] });
+      } catch (e: any) { msgStore.setError(e.message); }
+      return;
+    }
+
     // 所有 slash command 转发到服务端分发（commands/mod.rs::CommandDispatcher）
     try {
       const result = await dispatchSlashCommand(cmd, client);
@@ -987,6 +1009,13 @@ export function App() {
                 <TodoSummaryBar />
                 {/* Phase 3: Resume 入口（固定状态提示附近；非模态） */}
                 <ResumeBar client={client} sessionId={currentSessionId} />
+                {client && currentSessionId && (
+                  <SubagentBar
+                    client={client}
+                    currentSessionId={currentSessionId}
+                    onSwitchSession={(sid) => attachSession(sid)}
+                  />
+                )}
                 {pendingImages.length > 0 && (
                   <div className="pending-images">
                     {pendingImages.map((img, i) => (

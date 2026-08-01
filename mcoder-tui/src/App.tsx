@@ -22,7 +22,7 @@ import {
   MessageList, PlanApproval,
   SessionList, TodoView, TodoSummaryBar, TaskMonitor, ConfigView, HelpView,
   InputBox, AskUserCard, AskUserSummary, ResumeBar, TreeView, ModelView,
-  SettingView, ProviderView, ThinkingPicker,
+  SettingView, ProviderView, ThinkingPicker, SubagentBar,
 } from './components/index.js';
 import { formatContext, formatCost } from './utils/format.js';
 import { parsePairingString } from './utils/pairing.js';
@@ -703,6 +703,30 @@ export function App({ client: initialClient }: Props) {
 
       {/* Todo 摘要条（消息区下方、输入框上方）；全部完成时隐藏 */}
       <TodoSummaryBar />
+
+      {/* 子代理实时面板（无子代理时隐藏；Ctrl+A 切换焦点） */}
+      <SubagentBar
+        client={client}
+        currentSessionId={sid}
+        onSwitchSession={(targetSid) => {
+          // 切换 session（复用 /sessions open 的逻辑）
+          (async () => {
+            try {
+              const snapshot = await client.request('session.attach', { session_id: targetSid }) as SessionSnapshot;
+              client.setReconnectSession(targetSid);
+              hydrateSnapshot({
+                sessionId: targetSid,
+                snapshot,
+                currentMessageCount: 0,
+                store: buildHydrateStore(0),
+              });
+            } catch (e: any) {
+              msgStore.setError(`switch session failed: ${e.message}`);
+            }
+          })();
+        }}
+        pendingPermission={!!(sid && permissionStore.pending[sid])}
+      />
 
       {/* Phase 3: Resume 入口（固定状态提示附近；非模态） */}
       <ResumeBar sessionId={sid} />

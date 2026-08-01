@@ -79,6 +79,37 @@ export async function dispatchSlashCommand(
     const firstWord = stripped.split(/\s+/)[0]?.toLowerCase();
     if (firstWord === 'thinking' || firstWord === 'think') {
       result = { kind: 'meta', result: { type: 'thinking' } };
+    } else if (firstWord === 'handoff') {
+      // /handoff <task description> -> session.handoff RPC
+      const taskPrompt = stripped.slice(firstWord.length).trim();
+      if (!taskPrompt) return { error: 'Usage: /handoff <task description>' };
+      const sid = useSessionStore.getState().currentSessionId;
+      if (!sid) return { error: 'no active session' };
+      try {
+        const handoffResult = await client.request('session.handoff', {
+          session_id: sid,
+          task_prompt: taskPrompt,
+        });
+        return {
+          systemMessage: `Handoff -> ${handoffResult.new_session_id}\n\n${handoffResult.handoff_doc}`,
+        };
+      } catch (e: any) {
+        return { error: e.message };
+      }
+    } else if (firstWord === 'handoff-back') {
+      // /handoff-back -> session.handoff_back RPC
+      const sid = useSessionStore.getState().currentSessionId;
+      if (!sid) return { error: 'no active session' };
+      try {
+        const backResult = await client.request('session.handoff_back', {
+          from_session_id: sid,
+        });
+        return {
+          systemMessage: `Handoff back to ${backResult.to_session_id}:\n\n${backResult.back_doc}`,
+        };
+      } catch (e: any) {
+        return { error: e.message };
+      }
     } else {
       result = await client.request('command.call', { input: stripped });
     }

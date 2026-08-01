@@ -36,6 +36,8 @@ pub struct SubagentDeps {
     pub default_model_config: ModelConfig,
     pub tools: Arc<ToolRegistry>,
     pub role_registry: Arc<RoleRegistry>,
+    /// P2: SessionManager 引用，用于创建子 session
+    pub session_manager: Arc<crate::session_manager::SessionManager>,
 }
 
 /// 子代理工具：让 agent 能启动子代理执行子任务
@@ -155,9 +157,9 @@ impl Tool for SubagentTool {
                 let role = args["role"].as_str().unwrap_or("subagent").to_string();
                 let mut task: String = serde_json::from_value(args["task"].clone())
                     .context("task required for spawn")?;
-                let max_iters_override: Option<u32> = args["max_iters"].as_u64().map(|n| n as u32);
+                let _max_iters_override: Option<u32> = args["max_iters"].as_u64().map(|n| n as u32);
                 let timeout_override: Option<u32> = args["timeout"].as_u64().map(|n| n as u32);
-                let id = format!("sa-{}", chrono::Utc::now().timestamp_millis());
+                let sa_id = format!("sa-{}", chrono::Utc::now().timestamp_millis());
 
                 // 获取 deps（late binding）
                 let deps = {
@@ -170,24 +172,10 @@ impl Tool for SubagentTool {
                 let runtime = Self::build_runtime(&deps, &role)
                     .context("building subagent runtime")?;
 
-                // 从 role 取 max_iters 和 timeout（可被 spawn 参数覆盖）
+                // 从 role 取 timeout（可被 spawn 参数覆盖）
                 let role_config = deps.role_registry.get(&role);
-                let max_iters = max_iters_override
-                    .or_else(|| role_config.and_then(|r| r.max_iters))
-                    .unwrap_or(self.default_max_iters);
                 let timeout_secs = timeout_override
                     .or_else(|| role_config.and_then(|r| r.timeout));
-
-                let entry = SubagentTask {
-                    id: id.clone(),
-                    role: role.clone(),
-                    task: task.clone(),
-                    status: "running".into(),
-                    result: None,
-                    created_at: chrono::Utc::now().to_rfc3339(),
-                    error: None,
-                };
-                self.tasks.lock().await.insert(id.clone(), entry);
 
                 // Sub-agent dispatch: inject role-specific workflow context if active
                 let project_path = ctx.project_path.clone();
@@ -246,76 +234,149 @@ impl Tool for SubagentTool {
                     }
                 }
 
-                let tasks_map = self.tasks.clone();
+                // P2: 创建子 session
+                let title = format!("Subagent: {}", &task[..task.len().min(60)]);
+                let child_session_id = deps.session_manager
+                    .create_child_session(
+                        &ctx.session_id,
+                        &title,
+                        Some(&runtime.model_config.name),
+                        crate::persistence::jsonl::SessionSource::Subagent,
+                        Some(&role),
+                        Some(&task),
+                    ).await?;
+
+                // 设置子 session 的 role（应用工具白名单 + role system prompt）
+                let _ = deps.session_manager.set_role(&child_session_id, &role).await;
+
+                // 注入 system prompt + task 到子 session
+                let system_prompt = if runtime.system_prompt.is_empty() {
+                    format!(
+                        "You are a sub-agent (id={}). You have been given a specific task to complete.\n\
+                        Use the available tools to accomplish your task.\n\
+                        When you are done, call the `subagent` tool with op=done, id={}, and result=<your final answer>.\n\
+                        If you cannot complete the task, also call op=done with an explanation of what went wrong.\n\
+                        Be concise and efficient.",
+                        child_session_id, child_session_id
+                    )
+                } else {
+                    format!("{}\n\n[sub-agent id={}]", runtime.system_prompt, child_session_id)
+                };
+                deps.session_manager
+                    .inject_message(&child_session_id, Message::system(&system_prompt)).await?;
+                deps.session_manager
+                    .inject_message(&child_session_id, Message::user(&task)).await?;
+
+                // 记录到 SubagentTool.tasks（保持 status/list op 兼容）
+                let entry = SubagentTask {
+                    id: sa_id.clone(),
+                    role: role.clone(),
+                    task: task.clone(),
+                    status: "running".into(),
+                    result: None,
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                    error: None,
+                };
+                self.tasks.lock().await.insert(sa_id.clone(), entry);
+
+                // P2: 通过 TaskManager spawn 包装"触发子 session agent loop + 等待完成 + 注入结果"
                 let task_manager = ctx.task_manager.clone();
-                let max_failures = self.max_consecutive_failures;
-                let max_per_iter = self.max_per_iter_tool_failures;
-                let sa_id = id.clone();
-                let sa_task = task.clone();
-                let sa_system_prompt = runtime.system_prompt.clone();
-                let allowed_tools = runtime.allowed_tools.clone();
-                let sa_ctx = ctx.clone();
+                let sm = deps.session_manager.clone();
+                let child_id_clone = child_session_id.clone();
+                let parent_session_id = ctx.session_id.clone();
+                let tasks_map = self.tasks.clone();
+                let sa_id_closure = sa_id.clone();
 
-                // 通过 TaskManager spawn 注册子代理任务
                 let task_id = task_manager.spawn_compat("subagent", async move {
-                    let run_fut = run_subagent(
-                        Arc::new(runtime),
-                        tasks_map.clone(),
-                        sa_id.clone(),
-                        sa_task,
-                        sa_system_prompt,
-                        allowed_tools,
-                        max_iters,
-                        max_failures,
-                        max_per_iter,
-                        sa_ctx,
-                    );
+                    // 启动子 session 的 agent loop
+                    if let Err(e) = sm.start_session_loop(&child_id_clone).await {
+                        let mut tasks_lock = tasks_map.lock().await;
+                        if let Some(t) = tasks_lock.get_mut(&sa_id_closure) {
+                            t.status = "failed".into();
+                            t.error = Some(format!("failed to start session loop: {}", e));
+                        }
+                        return Err(format!("failed to start session loop: {}", e));
+                    }
 
-                    // 设计文档 §8.5: 超时支持
+                    // 等待 loop 结束（轮询 is_loop_running），支持超时
+                    let mut timed_out = false;
                     if let Some(secs) = timeout_secs {
-                        match tokio::time::timeout(
-                            std::time::Duration::from_secs(secs as u64),
-                            run_fut,
-                        ).await {
-                            Ok(_) => {}
-                            Err(_) => {
-                                let mut tasks_lock = tasks_map.lock().await;
-                                if let Some(t) = tasks_lock.get_mut(&sa_id) {
-                                    if t.status != "done" && t.status != "failed" {
-                                        t.status = "timeout".into();
-                                        t.error = Some(format!("subagent timed out after {}s", secs));
-                                    }
-                                }
+                        let deadline = tokio::time::Instant::now()
+                            + std::time::Duration::from_secs(secs as u64);
+                        loop {
+                            if !sm.is_loop_running(&child_id_clone).await {
+                                break;
                             }
+                            if tokio::time::Instant::now() >= deadline {
+                                // 超时，取消子 session
+                                let _ = sm.cancel_session(&child_id_clone).await;
+                                // 等待 loop 实际退出（最多 2s）
+                                for _ in 0..10 {
+                                    if !sm.is_loop_running(&child_id_clone).await {
+                                        break;
+                                    }
+                                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                                }
+                                timed_out = true;
+                                break;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                         }
                     } else {
-                        run_fut.await;
+                        loop {
+                            if !sm.is_loop_running(&child_id_clone).await {
+                                break;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        }
                     }
 
-                    // 从本地 tasks map 读取最终状态与结果
-                    let tasks_lock = tasks_map.lock().await;
-                    if let Some(t) = tasks_lock.get(&sa_id) {
-                        match t.status.as_str() {
-                            "done" => Ok(t.result.clone().unwrap_or_else(|| "(no result)".into())),
-                            "failed" | "timeout" => Err(t.error.clone()
-                                .unwrap_or_else(|| format!("subagent ended with status={}", t.status))),
-                            other => {
-                                if let Some(r) = &t.result {
-                                    Ok(r.clone())
-                                } else {
-                                    Err(format!("subagent ended with unexpected status={}", other))
-                                }
-                            }
+                    if timed_out {
+                        let mut tasks_lock = tasks_map.lock().await;
+                        if let Some(t) = tasks_lock.get_mut(&sa_id_closure) {
+                            t.status = "timeout".into();
+                            t.error = Some(format!("subagent timed out after {}s", timeout_secs.unwrap()));
                         }
-                    } else {
-                        Err("subagent task disappeared".into())
+                        return Err(format!("subagent timed out after {}s", timeout_secs.unwrap()));
                     }
+
+                    // 读子 session 最后一条 assistant 消息作为 result
+                    let result_text = match sm.get_messages(&child_id_clone).await {
+                        Ok(msgs) => {
+                            msgs.iter().rev()
+                                .find(|m| m.role == Role::Assistant)
+                                .and_then(|m| m.content.iter()
+                                    .find_map(|b| match b {
+                                        ContentBlock::Text { text } => Some(text.clone()),
+                                        _ => None,
+                                    }))
+                                .unwrap_or_else(|| "(no output)".into())
+                        }
+                        Err(_) => "(session closed)".into(),
+                    };
+
+                    // inject 结果到父 session
+                    let inject_text = format!(
+                        "[subagent completed] session={}\nresult: {}",
+                        child_id_clone, result_text
+                    );
+                    let _ = sm.inject_message(&parent_session_id, Message::system(&inject_text)).await;
+
+                    // 更新 SubagentTask 状态
+                    let mut tasks_lock = tasks_map.lock().await;
+                    if let Some(t) = tasks_lock.get_mut(&sa_id_closure) {
+                        t.status = "done".into();
+                        t.result = Some(result_text.clone());
+                    }
+
+                    Ok(result_text)
                 }).await?;
 
                 Ok(ToolOutput::AsyncTask {
                     task_id,
-                    handle: id.clone(),
-                    status_msg: format!("subagent spawned (id={}, role={}, task={})", id, role, &task[..task.len().min(80)]),
+                    handle: child_session_id.clone(),
+                    status_msg: format!("subagent spawned in session {} (role={}, task={})",
+                        child_session_id, role, &task[..task.len().min(80)]),
                 })
             }
             "status" => {

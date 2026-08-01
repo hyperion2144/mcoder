@@ -242,18 +242,6 @@ async fn start_server_full(
             (None, None)
         }
     };
-    if let (Some(m), Some(llm)) = (default_model_config, default_llm) {
-        subagent_tool.set_dependencies(Arc::new(tools::subagent::SubagentDeps {
-            default_llm: llm,
-            default_model_config: m,
-            tools: tools.clone(),
-            role_registry: role_registry.clone(),
-        })).await;
-    } else {
-        tracing::warn!(
-            "subagent tool disabled (no valid default_model); session_manager will return friendly error on subagent spawn"
-        );
-    }
 
     // 构建 slash command 分发器
     let command_dispatcher = Arc::new(commands::CommandDispatcher::new(
@@ -262,15 +250,30 @@ async fn start_server_full(
     ));
 
     let mgr = session_manager::SessionManager::new(
-        tools,
+        tools.clone(),
         app_config.clone(),
         plugins.clone(),
-        role_registry,
+        role_registry.clone(),
         experience_store,
         mcp_manager,
         command_dispatcher,
         ask_registry.clone(),
     );
+
+    // P2: SessionManager 已创建，现在可以注入含 session_manager 引用的 SubagentDeps
+    if let (Some(m), Some(llm)) = (default_model_config, default_llm) {
+        subagent_tool.set_dependencies(Arc::new(tools::subagent::SubagentDeps {
+            default_llm: llm,
+            default_model_config: m,
+            tools: tools.clone(),
+            role_registry: role_registry.clone(),
+            session_manager: mgr.clone(),
+        })).await;
+    } else {
+        tracing::warn!(
+            "subagent tool disabled (no valid default_model); session_manager will return friendly error on subagent spawn"
+        );
+    }
 
     // ask_user 工具：late binding 注入 event_tx（在 SessionManager 创建后）
     ask_user_tool.set_event_tx(mgr.event_tx());

@@ -14,7 +14,7 @@ use crate::tools::ToolRegistry;
 use crate::types::{AppConfig, CancellationToken, ContentBlock, Message, ModelConfig, Role, ToolOutput};
 use crate::workflow::extract_spawn_subagent;
 use anyhow::{Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -254,6 +254,20 @@ pub struct SessionManager {
     session_thinking_overrides: RwLock<HashMap<String, crate::types::ThinkingDepth>>,
 }
 
+/// handoff / handoff_back 结果结构
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HandoffResult {
+    pub handoff_doc: String,
+    pub new_session_id: String,
+    pub original_session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HandoffBackResult {
+    pub back_doc: String,
+    pub to_session_id: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerEvent {
@@ -391,6 +405,11 @@ pub enum ServerEvent {
         default_model: String,
         default_provider: Option<String>,
     },
+    /// 自定义通知：用于 session.state_changed 等无需新增 enum 变体的事件
+    Custom {
+        method: String,
+        params: serde_json::Value,
+    },
 }
 
 /// RAII guard：构造时 armed=true；drop 时若仍 armed 则把 flag 重置为 false。
@@ -447,6 +466,7 @@ impl SessionManager {
         let unfinished = self.unfinished_todos(session_id).await;
         // Phase 2: 同步持久化 loop_state=stopped + stop_reason
         self.persist_loop_state(session_id, "stopped", Some(reason)).await;
+        self.broadcast_state_changed(session_id, "stopped").await;
         let _ = self.event_tx.send(ServerEvent::SessionDone {
             session_id: session_id.to_string(),
             reason: reason.to_string(),
@@ -783,6 +803,7 @@ fn resolve_model(&self, model_name: Option<&str>) -> Result<ModelConfig> {
 
         // Phase 2: 持久化 loop_state=idle（新建 session 默认 idle）
         self.persist_loop_state(&session_id, "idle", None).await;
+        self.broadcast_state_changed(&session_id, "idle").await;
 
         // 设计文档 §8.3.3: 触发 OnSessionCreate hook
         let hook_ctx = crate::plugin::HookContext::new(
@@ -1162,6 +1183,7 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
         let entry_clone = entry.clone();
         // Phase 2: 进入 loop 前持久化 loop_state=running
         mgr.persist_loop_state(&sid, "running", None).await;
+        mgr.broadcast_state_changed(&sid, "running").await;
         // 把 loop_running 的所有权移交给 loop task
         guard.armed = false;
         mgr.spawn_run_loop(sid, entry_clone);
@@ -1258,6 +1280,7 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
         let sid = session_id.to_string();
         let entry_clone = entry.clone();
         mgr.persist_loop_state(&sid, "running", None).await;
+        mgr.broadcast_state_changed(&sid, "running").await;
         guard.armed = false;
         mgr.spawn_run_loop(sid, entry_clone);
 
@@ -1528,6 +1551,7 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
 
         // 6. 持久化 loop_state=running（覆盖之前的 stopped/stop_reason 字段）
         self.persist_loop_state(session_id, "running", None).await;
+        self.broadcast_state_changed(session_id, "running").await;
 
         // 7. 复用 spawn_run_loop 启动入口（与 send_message 共用 spawn 逻辑）
         let sid = session_id.to_string();
@@ -1583,6 +1607,7 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
             };
             if current_state == "running" {
                 mgr.persist_loop_state(&sid, "stopped", Some("failed")).await;
+                mgr.broadcast_state_changed(&sid, "stopped").await;
             }
             if let Err(e) = result {
                 let _ = mgr.event_tx.send(ServerEvent::Error {
@@ -3149,6 +3174,7 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
         }
         // Phase 2: cancel 时立即持久化 loop_state=stopped, stop_reason=cancelled
         self.persist_loop_state(session_id, "stopped", Some("cancelled")).await;
+        self.broadcast_state_changed(session_id, "stopped").await;
         Ok(())
     }
 
@@ -3731,6 +3757,368 @@ pub async fn quick_thinking(
         Ok(())
     }
 
+    // ==================== P1: 子代理 session 化 ====================
+
+    /// 创建子 session（subagent 或 handoff）
+    /// 复用 create_session 创建基础 session，然后设置 child meta
+    pub async fn create_child_session(
+        self: &Arc<Self>,
+        parent_session_id: &str,
+        title: &str,
+        model_name: Option<&str>,
+        source: crate::persistence::jsonl::SessionSource,
+        subagent_role: Option<&str>,
+        task_description: Option<&str>,
+    ) -> Result<String> {
+        // 获取父 session 的 project_path
+        let parent_entry = {
+            let sessions = self.sessions.read().await;
+            sessions.get(parent_session_id).cloned()
+                .ok_or_else(|| anyhow::anyhow!("parent session '{parent_session_id}' not found"))?
+        };
+        let project_path = {
+            let parent_agent = parent_entry.session.lock().await;
+            parent_agent.session.project_path().to_path_buf()
+        };
+
+        // 创建基础 session
+        let child_id = self.create_session(&project_path, title, model_name).await?;
+
+        // 设置 child meta（需要 load jsonl 再 set_child_meta）
+        let mut jsonl = crate::persistence::jsonl::JsonlSession::load(&child_id)?;
+        jsonl.set_child_meta(parent_session_id, source, subagent_role, task_description)?;
+
+        Ok(child_id)
+    }
+
+    /// 注入消息到 session（不触发 agent loop）
+    /// 用于 handoff 文档注入、子代理 system prompt 注入等
+    pub async fn inject_message(
+        self: &Arc<Self>,
+        session_id: &str,
+        message: crate::types::Message,
+    ) -> Result<()> {
+        let entry = {
+            let sessions = self.sessions.read().await;
+            sessions.get(session_id).cloned()
+                .ok_or_else(|| anyhow::anyhow!("session '{session_id}' not found"))?
+        };
+        let mut agent = entry.session.lock().await;
+        agent.add_message(message.clone())?;
+        // 广播消息事件（让 attached 客户端看到）
+        let _ = self.event_tx.send(ServerEvent::Message {
+            session_id: session_id.to_string(),
+            message,
+        });
+        Ok(())
+    }
+
+    /// P2: 直接启动 session 的 agent loop（不加额外消息）
+    /// 用于子代理 session：消息已通过 inject_message 注入，只需触发 loop。
+    /// 调用方需保证此前没有并发 loop（内部 CAS loop_running false→true）。
+    pub async fn start_session_loop(
+        self: &Arc<Self>,
+        session_id: &str,
+    ) -> Result<()> {
+        let entry = {
+            let sessions = self.sessions.read().await;
+            sessions.get(session_id).cloned()
+                .ok_or_else(|| anyhow::anyhow!("session '{session_id}' not found"))?
+        };
+
+        // CAS loop_running false -> true
+        if entry.loop_running.compare_exchange(
+            false, true,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        ).is_err() {
+            anyhow::bail!("agent loop already running for session {}", session_id);
+        }
+
+        self.persist_loop_state(session_id, "running", None).await;
+        self.broadcast_state_changed(session_id, "running").await;
+
+        self.spawn_run_loop(session_id.to_string(), entry);
+
+        Ok(())
+    }
+
+    /// P2: 查询 session 的 agent loop 是否正在运行
+    pub async fn is_loop_running(&self, session_id: &str) -> bool {
+        let sessions = self.sessions.read().await;
+        if let Some(entry) = sessions.get(session_id) {
+            entry.loop_running.load(std::sync::atomic::Ordering::SeqCst)
+        } else {
+            false
+        }
+    }
+
+    /// 列出指定父 session 的所有子代理 session
+    /// 返回每个子 session 的实时状态
+    pub async fn list_child_sessions(
+        self: &Arc<Self>,
+        parent_session_id: &str,
+    ) -> Vec<serde_json::Value> {
+        let all_sessions = crate::persistence::jsonl::JsonlSession::list(None)
+            .unwrap_or_default();
+
+        let mut children = Vec::new();
+        for meta in all_sessions {
+            if meta.parent_session_id.as_deref() == Some(parent_session_id) {
+                // 获取实时状态
+                let (loop_state, msg_count) = self.get_session_runtime_state(&meta.session_id).await;
+                children.push(serde_json::json!({
+                    "session_id": meta.session_id,
+                    "title": meta.title,
+                    "model": meta.model,
+                    "source": meta.source,
+                    "subagent_role": meta.subagent_role,
+                    "task_description": meta.task_description,
+                    "parent_session_id": meta.parent_session_id,
+                    "loop_state": loop_state,
+                    "message_count": msg_count,
+                    "created_at": meta.created_at.to_rfc3339(),
+                }));
+            }
+        }
+        children
+    }
+
+    /// 获取 session 的实时 loop_state 和 message_count
+    async fn get_session_runtime_state(&self, session_id: &str) -> (String, usize) {
+        let sessions = self.sessions.read().await;
+        if let Some(entry) = sessions.get(session_id) {
+            let agent = entry.session.lock().await;
+            let loop_running = entry.loop_running.load(std::sync::atomic::Ordering::SeqCst);
+            let loop_state = if loop_running { "running" } else { "idle" };
+            let msg_count = agent.messages.len();
+            (loop_state.to_string(), msg_count)
+        } else {
+            // session 不在内存，从 DB 读 loop_state
+            let (db_state, _) = match SessionStateStore::for_session(session_id).await {
+                Some(store) => store.get_session_state(session_id).await,
+                None => ("idle".to_string(), None),
+            };
+            (db_state, 0)
+        }
+    }
+
+    /// 广播 session 状态变化通知
+    pub async fn broadcast_state_changed(&self, session_id: &str, loop_state: &str) {
+        let msg_count = {
+            let sessions = self.sessions.read().await;
+            if let Some(entry) = sessions.get(session_id) {
+                let agent = entry.session.lock().await;
+                agent.messages.len()
+            } else {
+                0
+            }
+        };
+        let _ = self.event_tx.send(ServerEvent::Custom {
+            method: "session.state_changed".into(),
+            params: serde_json::json!({
+                "session_id": session_id,
+                "loop_state": loop_state,
+                "message_count": msg_count,
+            }),
+        });
+    }
+
+    // ==================== P4: handoff / handoff_back ====================
+
+    /// session.handoff - 生成交接文档 + 创建子 session + 注入文档
+    pub async fn handoff(
+        self: &Arc<Self>,
+        session_id: &str,
+        task_prompt: &str,
+    ) -> Result<HandoffResult> {
+        // 1. 获取当前 session 消息
+        let entry = {
+            let sessions = self.sessions.read().await;
+            sessions.get(session_id).cloned()
+                .ok_or_else(|| anyhow::anyhow!("session '{session_id}' not found"))?
+        };
+        let (messages, model_config, project_path) = {
+            let agent = entry.session.lock().await;
+            (
+                agent.messages.clone(),
+                (*agent.model_config).clone(),
+                agent.session.project_path().to_path_buf(),
+            )
+        };
+        let _ = project_path; // project_path 由 create_child_session 内部从 parent 获取
+
+        // 2. 用 LLM 生成 handoff 文档
+        let handoff_doc = self.generate_handoff_doc(&messages, task_prompt, &model_config).await?;
+
+        // 3. 创建子 session（source=Handoff）
+        let title = if task_prompt.len() > 60 {
+            format!("Handoff: {}", &task_prompt[..60])
+        } else {
+            format!("Handoff: {}", task_prompt)
+        };
+        let child_id = self.create_child_session(
+            session_id,
+            &title,
+            Some(&model_config.name),
+            crate::persistence::jsonl::SessionSource::Handoff,
+            None,
+            Some(task_prompt),
+        ).await?;
+
+        // 4. 注入 handoff 文档到子 session（不触发 agent loop）
+        self.inject_message(&child_id, crate::types::Message::system(&handoff_doc)).await?;
+
+        Ok(HandoffResult {
+            handoff_doc,
+            new_session_id: child_id,
+            original_session_id: session_id.to_string(),
+        })
+    }
+
+    /// session.handoff_back - 生成回传文档 + 注入回父 session
+    pub async fn handoff_back(
+        self: &Arc<Self>,
+        from_session_id: &str,
+    ) -> Result<HandoffBackResult> {
+        // 1. 从 meta 读 parent_session_id
+        let jsonl = crate::persistence::jsonl::JsonlSession::load(from_session_id)?;
+        let parent_session_id = jsonl.meta().parent_session_id.clone()
+            .ok_or_else(|| anyhow::anyhow!("session '{from_session_id}' has no parent (not a child session)"))?;
+
+        // 2. 获取 from_session 的消息
+        let entry = {
+            let sessions = self.sessions.read().await;
+            sessions.get(from_session_id).cloned()
+                .ok_or_else(|| anyhow::anyhow!("session '{from_session_id}' not found"))?
+        };
+        let (messages, model_config) = {
+            let agent = entry.session.lock().await;
+            (agent.messages.clone(), (*agent.model_config).clone())
+        };
+
+        // 3. 用 LLM 生成回传文档
+        let back_doc = self.generate_handoff_back_doc(&messages, &model_config).await?;
+
+        // 4. 注入到父 session
+        let inject_text = format!("## Handoff Back from {}\n\n{}", from_session_id, back_doc);
+        self.inject_message(&parent_session_id, crate::types::Message::system(&inject_text)).await?;
+
+        Ok(HandoffBackResult {
+            back_doc,
+            to_session_id: parent_session_id,
+        })
+    }
+
+    /// LLM 生成 handoff 文档
+    async fn generate_handoff_doc(
+        self: &Arc<Self>,
+        messages: &[crate::types::Message],
+        task_prompt: &str,
+        model_config: &crate::types::ModelConfig,
+    ) -> Result<String> {
+        // 序列化消息（复用 compaction 的序列化 + 限制长度）
+        let serialized: String = messages.iter()
+            .map(crate::agent::compaction::serialize_for_summary)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let truncated = if serialized.len() > 20000 {
+            crate::agent::compaction::fallback_truncate(&serialized, 10000, 10000)
+        } else {
+            serialized
+        };
+
+        // 脱敏
+        let sanitized = sanitize_for_handoff(&truncated);
+
+        let prompt = format!(
+            r#"你是一个交接文档生成器。根据以下对话历史，生成一份结构化的交接 Markdown 文档。
+
+## 任务描述
+{task_prompt}
+
+## 对话历史
+{sanitized}
+
+## 输出格式（严格遵守）
+# Handoff Document
+
+## Project Context
+- 项目路径、模型等元信息
+
+## Task
+{task_prompt}
+
+## Key Decisions
+- 从对话中提取的关键决策
+
+## File Pointers
+- 引用过的文件路径列表
+
+## Pitfalls
+- 踩过的坑、已排除的方案
+
+## 规则
+1. 不要复制代码内容
+2. 不要包含 API key、密码
+3. 保持简洁（< 500 词）
+4. 聚焦于"下一个会话需要知道什么""#,
+            task_prompt = task_prompt,
+            sanitized = sanitized
+        );
+
+        let req = vec![crate::types::Message::user(&prompt)];
+        let llm = crate::llm::create_adapter(model_config)?;
+        let resp = llm.chat(&req, &[], model_config).await?;
+        Ok(resp.content.unwrap_or_else(|| "handoff doc generation failed".into()))
+    }
+
+    /// LLM 生成回传文档
+    async fn generate_handoff_back_doc(
+        self: &Arc<Self>,
+        messages: &[crate::types::Message],
+        model_config: &crate::types::ModelConfig,
+    ) -> Result<String> {
+        let serialized: String = messages.iter()
+            .map(crate::agent::compaction::serialize_for_summary)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let truncated = if serialized.len() > 20000 {
+            crate::agent::compaction::fallback_truncate(&serialized, 10000, 10000)
+        } else {
+            serialized
+        };
+        let sanitized = sanitize_for_handoff(&truncated);
+
+        let prompt = format!(
+            r#"你是一个回传文档生成器。根据以下子代理的对话历史，生成一份简洁的回传 Markdown 文档。
+
+## 对话历史
+{sanitized}
+
+## 输出格式
+## Summary
+- 完成了什么
+
+## Key Learnings
+- 学到了什么、哪些结论不是一眼能看出的
+
+## Code Changes
+- 改了哪些文件，一句话摘要
+
+## 规则
+1. 保持简洁（< 300 词）
+2. 不要包含 API key、密码
+3. 聚焦于"父会话需要知道什么""#,
+            sanitized = sanitized
+        );
+
+        let req = vec![crate::types::Message::user(&prompt)];
+        let llm = crate::llm::create_adapter(model_config)?;
+        let resp = llm.chat(&req, &[], model_config).await?;
+        Ok(resp.content.unwrap_or_else(|| "handoff back doc generation failed".into()))
+    }
+
     /// S2 修复: 构造 session 当前生效的 ModelConfig（合并 provider 默认 + override）
     /// agent.model_config 是 provider 默认值；session override 只覆盖 thinking_depth。
     /// 这个函数把两者合并，确保 adapter 总是用最新配置。
@@ -3992,3 +4380,19 @@ async fn execute_readonly_concurrent(
 // 由 `crate::persistence::session_state::session_state_db_path` 唯一计算。
 //
 // 旧 `todos.db` / `async_tasks.db` 路径已废弃（用户已确认：不兼容旧 DB）。
+
+// ==================== handoff 脱敏 ====================
+
+/// 脱敏：替换 API key、密码等敏感信息
+fn sanitize_for_handoff(s: &str) -> String {
+    // 替换 sk-xxx 格式的 API key
+    let re1 = regex::Regex::new(r"sk-[A-Za-z0-9]{20,}").unwrap();
+    let s = re1.replace_all(s, "[REDACTED]");
+    // 替换 ${ENV_VAR} 格式
+    let re2 = regex::Regex::new(r"\$\{[A-Z_][A-Z0-9_]*\}").unwrap();
+    let s = re2.replace_all(&s, "${REDACTED}");
+    // 替换 password=xxx
+    let re3 = regex::Regex::new(r"(?i)(password|passwd|pwd)\s*[:=]\s*\S+").unwrap();
+    let s = re3.replace_all(&s, "$1=[REDACTED]");
+    s.to_string()
+}

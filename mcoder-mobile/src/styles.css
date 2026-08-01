@@ -1524,6 +1524,61 @@ html, body, #root {
   opacity: 0.6;
 }
 
+/* ===== Subagent Bar (Mobile) ===== */
+.subagent-bar {
+  display: flex;
+  gap: 8px;
+  padding: 6px 12px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  flex-shrink: 0;
+  scrollbar-width: none;
+}
+.subagent-bar::-webkit-scrollbar { display: none; }
+.subagent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  min-height: 36px;
+  border-radius: var(--radius-xl, 12px);
+  border: 1px solid var(--border-subtle, #45475a);
+  background: var(--bg-surface, #181825);
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-secondary, #a6adc8);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.subagent-chip:active {
+  opacity: 0.7;
+  transform: scale(0.97);
+}
+.subagent-chip.running {
+  border-color: var(--accent, #89b4fa);
+  color: var(--text-primary, #cdd6f4);
+}
+.subagent-chip.handoff {
+  border-color: var(--mauve, #cba6f7);
+  color: var(--mauve, #cba6f7);
+}
+.subagent-chip-name {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.subagent-chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent, #89b4fa);
+  animation: subagent-pulse 1.5s ease-in-out infinite;
+}
+@keyframes subagent-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
 .todo-summary-header {
   display: flex;
   justify-content: space-between;

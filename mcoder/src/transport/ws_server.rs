@@ -536,6 +536,15 @@ where
                             })),
                             None,
                         ),
+                        ServerEvent::Custom { method, params } => {
+                            // Custom 通知：method 作为 notification method，params 直接展开
+                            // params 中若有 session_id 则按 session 过滤，否则广播
+                            let sid = params.get("session_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                            (
+                                make_notification(&method, params),
+                                sid,
+                            )
+                        }
                     };
                     // 过滤：session 事件只推给 attached 的 client；全局事件推给所有
                     let should_send = match (&attached_session, target_session) {
@@ -1084,6 +1093,37 @@ async fn handle_request(
                         "current": applied.map(|d| format!("{:?}", d).to_lowercase()).unwrap_or_else(|| "none".to_string()),
                     }))
                 }
+                Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+            }
+        }
+
+        // ===== Subagent / Handoff (P1/P4) =====
+        "session.list_children" => {
+            let p = req.params.unwrap_or_default();
+            let parent_session_id = p["parent_session_id"].as_str().unwrap_or("");
+            let children = mgr.list_child_sessions(parent_session_id).await;
+            JsonRpcResponse::ok(req.id, serde_json::json!(children))
+        }
+        "session.handoff" => {
+            let p = req.params.unwrap_or_default();
+            let session_id = p["session_id"].as_str().unwrap_or("").to_string();
+            let task_prompt = p["task_prompt"].as_str().unwrap_or("").to_string();
+            if session_id.is_empty() || task_prompt.is_empty() {
+                return JsonRpcResponse::err(req.id, -32602, "session_id and task_prompt required".to_string());
+            }
+            match mgr.handoff(&session_id, &task_prompt).await {
+                Ok(result) => JsonRpcResponse::ok(req.id, serde_json::to_value(&result).unwrap_or_default()),
+                Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+            }
+        }
+        "session.handoff_back" => {
+            let p = req.params.unwrap_or_default();
+            let from_session_id = p["from_session_id"].as_str().unwrap_or("").to_string();
+            if from_session_id.is_empty() {
+                return JsonRpcResponse::err(req.id, -32602, "from_session_id required".to_string());
+            }
+            match mgr.handoff_back(&from_session_id).await {
+                Ok(result) => JsonRpcResponse::ok(req.id, serde_json::to_value(&result).unwrap_or_default()),
                 Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
             }
         }

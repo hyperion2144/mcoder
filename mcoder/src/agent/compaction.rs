@@ -129,7 +129,7 @@ pub fn estimate_messages_total(messages: &[Message]) -> usize {
 }
 
 /// 把 Message 的 content 序列化成可读文本（给 LLM 摘要用）
-fn serialize_for_summary(msg: &Message) -> String {
+pub fn serialize_for_summary(msg: &Message) -> String {
     let role = format!("[{:?}]", msg.role);
     let mut parts = Vec::new();
     for b in &msg.content {
