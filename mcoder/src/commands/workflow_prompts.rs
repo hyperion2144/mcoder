@@ -471,7 +471,10 @@ Planner completed for {name}
 "##,
         name = change_name
     );
-    format!("{}{}{}{}", ORCHESTRATOR_RULE, CONTEXT_REMINDER, fix_note, body)
+    format!(
+        "{}{}{}{}",
+        ORCHESTRATOR_RULE, CONTEXT_REMINDER, fix_note, body
+    )
 }
 
 pub fn apply_prompt(change_name: &str, fix_mode: bool) -> String {
@@ -627,7 +630,10 @@ Implementation complete for {name}
 "##,
         name = change_name
     );
-    format!("{}{}{}{}", ORCHESTRATOR_RULE, CONTEXT_REMINDER, fix_note, body)
+    format!(
+        "{}{}{}{}",
+        ORCHESTRATOR_RULE, CONTEXT_REMINDER, fix_note, body
+    )
 }
 
 pub fn review_prompt(change_name: &str, fix_mode: bool) -> String {
@@ -770,7 +776,10 @@ bash(commands=["git add -A", "git commit -m 'docs(review): triple review for {na
 "##,
         name = change_name
     );
-    format!("{}{}{}{}", ORCHESTRATOR_RULE, CONTEXT_REMINDER, fix_note, body)
+    format!(
+        "{}{}{}{}",
+        ORCHESTRATOR_RULE, CONTEXT_REMINDER, fix_note, body
+    )
 }
 
 pub fn archive_prompt(change_name: &str) -> String {

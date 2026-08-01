@@ -540,6 +540,7 @@ impl SessionManager {
         let cfg_arc: Arc<AppConfig> = config;
         let cfg = Arc::try_unwrap(cfg_arc)
             .unwrap_or_else(|arc| (*arc).clone());
+        crate::i18n::set_current_lang(&cfg.language);
         Arc::new(Self {
             sessions: RwLock::new(HashMap::new()),
             tools,
@@ -666,14 +667,18 @@ fn resolve_model(&self, model_name: Option<&str>) -> Result<ModelConfig> {
         // 4. M7 修复: 用户明确请求的模型不存在时直接报错，不静默 fallback 到 default_model
         //    （仅当 model_name 为 None 时才用 default_model，那已经在步骤 1-3 处理了）
         if model_name.is_some() {
+            let lang = crate::i18n::current_lang();
             anyhow::bail!(
-                "model '{}' not found in config.models or providers",
+                "{}: {}",
+                crate::i18n::t("error.model_not_found", &lang),
                 name
             );
         }
 
+        let lang = crate::i18n::current_lang();
         anyhow::bail!(
-            "default_model '{}' not found in config.models or providers",
+            "{}: {}",
+            crate::i18n::t("error.model_not_found", &lang),
             cfg.default_model
         );
     }
@@ -911,7 +916,10 @@ fn resolve_model(&self, model_name: Option<&str>) -> Result<ModelConfig> {
     pub async fn call_tool(&self, session_id: &str, name: &str, args: serde_json::Value) -> Result<crate::types::ToolOutput> {
         let entry = {
             let sessions = self.sessions.read().await;
-            sessions.get(session_id).cloned().context("session not found")?
+            sessions.get(session_id).cloned().with_context(|| {
+                let lang = crate::i18n::current_lang();
+                crate::i18n::t("error.session_not_found", &lang)
+            })?
         };
         // LSP 异步诊断：tool 执行前 drain pending 队列，拼成 ToolResult 注入到 messages
         // 这样 LLM 在看到本次工具结果时也能看到之前 write/edit 的 LSP 反馈
@@ -1141,7 +1149,12 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
             std::sync::atomic::Ordering::SeqCst,
             std::sync::atomic::Ordering::SeqCst,
         ).is_err() {
-            anyhow::bail!("agent loop already running for session {} (409 Conflict)", session_id);
+            let lang = crate::i18n::current_lang();
+            anyhow::bail!(
+                "{}: {} (409 Conflict)",
+                crate::i18n::t("error.agent_loop_running", &lang),
+                session_id
+            );
         }
         // RAII guard：早退（ask/错误）时自动重置 loop_running=false；
         // 进入 spawn_run_loop 前 disown（所有权移交给 loop task）。
@@ -1212,7 +1225,12 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
             std::sync::atomic::Ordering::SeqCst,
             std::sync::atomic::Ordering::SeqCst,
         ).is_err() {
-            anyhow::bail!("agent loop already running for session {} (409 Conflict)", session_id);
+            let lang = crate::i18n::current_lang();
+            anyhow::bail!(
+                "{}: {} (409 Conflict)",
+                crate::i18n::t("error.agent_loop_running", &lang),
+                session_id
+            );
         }
         let mut guard = loop_running_guard(&entry.loop_running);
 
@@ -1374,9 +1392,13 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
         };
         match decision {
             crate::resume_policy::ResumeDecisionKind::Conflict => {
+                let lang = crate::i18n::current_lang();
                 anyhow::bail!(
-                    "agent loop already running for session {} (loop_state={}, loop_running={})",
-                    session_id, db_loop_state, loop_running_inmem
+                    "{}: {} (loop_state={}, loop_running={})",
+                    crate::i18n::t("error.agent_loop_running", &lang),
+                    session_id,
+                    db_loop_state,
+                    loop_running_inmem
                 );
             }
             crate::resume_policy::ResumeDecisionKind::WaitingForUser => {
@@ -1448,8 +1470,10 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
             )
             .is_err()
         {
+            let lang = crate::i18n::current_lang();
             anyhow::bail!(
-                "agent loop already running for session {} (409 Conflict)",
+                "{}: {} (409 Conflict)",
+                crate::i18n::t("error.agent_loop_running", &lang),
                 session_id
             );
         }
@@ -2068,10 +2092,15 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
                                         "tool {} denied by permission gate: {}",
                                         tc.name, e
                                     );
+                                    let lang = crate::i18n::current_lang();
                                     let block_msg = Message::new(Role::Tool, vec![ContentBlock::ToolResult {
                                         id: tc.id.clone(),
                                         output: crate::types::ToolOutput::Error {
-                                            message: format!("permission denied: {}", e),
+                                            message: format!(
+                                                "{}: {}",
+                                                crate::i18n::t("error.permission_denied", &lang),
+                                                e
+                                            ),
                                         },
                                     }]);
                                     let _ = self.event_tx.send(ServerEvent::Message {
@@ -2104,10 +2133,15 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
                         };
                         if !role_allowed {
                             tracing::info!("tool {} blocked by role whitelist", tc.name);
+                            let lang = crate::i18n::current_lang();
                             let block_msg = Message::new(Role::Tool, vec![ContentBlock::ToolResult {
                                     id: tc.id.clone(),
                                     output: crate::types::ToolOutput::Error {
-                                        message: format!("tool '{}' is not allowed in current role", tc.name),
+                                        message: format!(
+                                            "{}: {}",
+                                            crate::i18n::t("error.tool_not_allowed", &lang),
+                                            tc.name
+                                        ),
                                     },
                                 }]);
                             let _ = self.event_tx.send(ServerEvent::Message {
@@ -3647,7 +3681,12 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
         let model_exists = new_config.models.contains_key(&model)
             || new_config.providers.iter().any(|(pname, p)| p.has_model(pname, &model));
         if !model_exists && !model.is_empty() {
-            anyhow::bail!("model '{model}' not found in providers/models");
+            let lang = crate::i18n::current_lang();
+            anyhow::bail!(
+                "{}: {}",
+                crate::i18n::t("error.model_not_found", &lang),
+                model
+            );
         }
         // 校验 provider 参数存在
         if let Some(ref pname) = provider {
@@ -3671,6 +3710,7 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
         new_config.language = lang.to_string();
         crate::config::save_config(&new_config)?;
         *guard = new_config;
+        crate::i18n::set_current_lang(lang);
         drop(guard);
         self.broadcast_config_updated("set_language").await;
         Ok(())
@@ -3711,12 +3751,15 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
                 "url": url,
                 "hint": format!("HTTP {}; check base_url and api_key", r.status().as_u16()),
             })),
-            Err(e) => Ok(serde_json::json!({
-                "ok": false,
-                "url": url,
-                "error": e.to_string(),
-                "hint": "cannot reach server; check network and base_url",
-            })),
+            Err(e) => {
+                let lang = crate::i18n::current_lang();
+                Ok(serde_json::json!({
+                    "ok": false,
+                    "url": url,
+                    "error": e.to_string(),
+                    "hint": crate::i18n::t("error.cannot_connect", &lang),
+                }))
+            },
         }
     }
 
@@ -3862,7 +3905,12 @@ pub async fn quick_thinking(
             std::sync::atomic::Ordering::SeqCst,
             std::sync::atomic::Ordering::SeqCst,
         ).is_err() {
-            anyhow::bail!("agent loop already running for session {}", session_id);
+            let lang = crate::i18n::current_lang();
+            anyhow::bail!(
+                "{}: {}",
+                crate::i18n::t("error.agent_loop_running", &lang),
+                session_id
+            );
         }
 
         // M2: RAII guard：persist/broadcast 被取消或出错时自动重置 loop_running=false；
@@ -4079,40 +4127,40 @@ pub async fn quick_thinking(
         // 脱敏
         let sanitized = sanitize_for_handoff(&truncated);
 
-        let lang = crate::i18n::current_lang();
-        let intro = crate::i18n::t("handoff.doc_prompt_intro", &lang);
+        // Handoff prompts are LLM input and intentionally remain English across UI languages.
+        let intro = crate::i18n::t("handoff.doc_prompt_intro", "en");
         let prompt = format!(
             r#"{intro}
 
-## 任务描述
+## Task
 {task_prompt}
 
-## 对话历史
+## Conversation History
 {sanitized}
 
-## 输出格式（严格遵守）
+## Output Format (strictly follow)
 # Handoff Document
 
 ## Project Context
-- 项目路径、模型等元信息
+- Project path, model, role, and other metadata
 
 ## Task
 {task_prompt}
 
 ## Key Decisions
-- 从对话中提取的关键决策
+- Key decisions extracted from the conversation
 
 ## File Pointers
-- 引用过的文件路径列表
+- Referenced file paths without duplicating their content
 
 ## Pitfalls
-- 踩过的坑、已排除的方案
+- Pitfalls encountered and approaches already ruled out
 
-## 规则
-1. 不要复制代码内容
-2. 不要包含 API key、密码
-3. 保持简洁（< 500 词）
-4. 聚焦于"下一个会话需要知道什么""#,
+## Rules
+1. Do not duplicate code content
+2. Do not include API keys or passwords
+3. Keep concise (< 500 words)
+4. Focus on what the next session needs to know"#,
             intro = intro,
             task_prompt = task_prompt,
             sanitized = sanitized
@@ -4141,28 +4189,27 @@ pub async fn quick_thinking(
         };
         let sanitized = sanitize_for_handoff(&truncated);
 
-        let lang = crate::i18n::current_lang();
-        let intro = crate::i18n::t("handoff.back_prompt_intro", &lang);
+        let intro = crate::i18n::t("handoff.back_prompt_intro", "en");
         let prompt = format!(
             r#"{intro}
 
-## 对话历史
+## Conversation History
 {sanitized}
 
-## 输出格式
+## Output Format
 ## Summary
-- 完成了什么
+- What was completed
 
 ## Key Learnings
-- 学到了什么、哪些结论不是一眼能看出的
+- Non-obvious findings and lessons learned
 
 ## Code Changes
-- 改了哪些文件，一句话摘要
+- Changed files with a one-line summary for each
 
-## 规则
-1. 保持简洁（< 300 词）
-2. 不要包含 API key、密码
-3. 聚焦于"父会话需要知道什么""#,
+## Rules
+1. Keep concise (< 300 words)
+2. Do not include API keys or passwords
+3. Focus on what the parent session needs to know"#,
             intro = intro,
             sanitized = sanitized
         );
@@ -4362,11 +4409,17 @@ async fn execute_readonly_concurrent(
             // 不允许的工具：直接 spawn 同步返回错误消息
             let id = tc.id.clone();
             let name = tc.name.clone();
+            let lang = crate::i18n::current_lang();
+            let message = format!(
+                "{}: {}",
+                crate::i18n::t("error.tool_not_allowed", &lang),
+                name
+            );
             let handle = tokio::spawn(async move {
                 Message::new(Role::Tool, vec![ContentBlock::ToolResult {
                         id,
                         output: crate::types::ToolOutput::Error {
-                            message: format!("tool '{}' is not allowed in current role", name),
+                            message,
                         },
                     }])
             });

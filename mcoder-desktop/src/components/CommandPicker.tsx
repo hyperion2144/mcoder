@@ -15,6 +15,8 @@ interface Props {
   filter: string;  // 用户输入的内容（如 "/ha"）
   onSelect: (command: string) => void;
   onClose: () => void;
+  /** 权限审批 pending 时为 true：当前组件是被动面板，主要由父级决定是否渲染 */
+  pendingPermission?: boolean;
 }
 
 export interface CommandPickerHandle {
@@ -23,7 +25,7 @@ export interface CommandPickerHandle {
 }
 
 export const CommandPicker = forwardRef<CommandPickerHandle, Props>(function CommandPicker(
-  { client, filter, onSelect, onClose },
+  { client, filter, onSelect, onClose, pendingPermission },
   ref,
 ) {
   const [commands, setCommands] = useState<CommandEntry[]>([]);

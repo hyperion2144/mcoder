@@ -19,17 +19,20 @@ interface Props {
   pendingPermission?: boolean;
 }
 
-const DEPTHS = [
-  { value: 'none', label: 'None', descKey: 'thinking.none.desc' },
-  { value: 'low', label: 'Low', descKey: 'thinking.low.desc' },
-  { value: 'medium', label: 'Medium', descKey: 'thinking.medium.desc' },
-  { value: 'high', label: 'High', descKey: 'thinking.high.desc' },
-  { value: 'max', label: 'Max', descKey: 'thinking.max.desc' },
-];
+function getDepths() {
+  return [
+    { value: 'none', label: t('thinking.none'), descKey: 'thinking.none.desc' },
+    { value: 'low', label: t('thinking.low'), descKey: 'thinking.low.desc' },
+    { value: 'medium', label: t('thinking.medium'), descKey: 'thinking.medium.desc' },
+    { value: 'high', label: t('thinking.high'), descKey: 'thinking.high.desc' },
+    { value: 'max', label: t('thinking.max'), descKey: 'thinking.max.desc' },
+  ];
+}
 
 export function ThinkingPicker({ client, sessionId, currentDepth, onClose, onApplied, pendingPermission }: Props) {
+  const depths = getDepths();
   // 初始选中当前深度
-  const initialIdx = Math.max(0, DEPTHS.findIndex((d) => d.value === currentDepth));
+  const initialIdx = Math.max(0, depths.findIndex((d) => d.value === currentDepth));
   const [selected, setSelected] = useState(initialIdx);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,9 +41,9 @@ export function ThinkingPicker({ client, sessionId, currentDepth, onClose, onApp
     if (key.escape) { onClose(); return; }
     if (busy) return;
     if (key.upArrow) setSelected((i) => Math.max(0, i - 1));
-    else if (key.downArrow) setSelected((i) => Math.min(DEPTHS.length - 1, i + 1));
+    else if (key.downArrow) setSelected((i) => Math.min(depths.length - 1, i + 1));
     else if (key.return) {
-      const depth = DEPTHS[selected].value;
+      const depth = depths[selected].value;
       if (!sessionId) {
         setError('no active session');
         return;
@@ -63,7 +66,7 @@ export function ThinkingPicker({ client, sessionId, currentDepth, onClose, onApp
       <Text color={TUI_COLORS.accent} bold>{PREFIX.setting} {t('ui.thinking_depth')}</Text>
       <Text color={TUI_COLORS.textMuted}>↑↓ {t('ui.navigate')} {PREFIX.sep} Enter {t('ui.select')} {PREFIX.sep} Esc {t('ui.close')}</Text>
       <Text color={TUI_COLORS.textMuted}>{'─'.repeat(40)}</Text>
-      {DEPTHS.map((d, i) => (
+      {depths.map((d, i) => (
         <Box key={d.value}>
           <Text color={i === selected ? TUI_COLORS.accent : TUI_COLORS.textMuted} bold={i === selected}>
             {i === selected ? `${PREFIX.running} ` : '  '}

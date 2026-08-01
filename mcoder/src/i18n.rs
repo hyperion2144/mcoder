@@ -3,7 +3,9 @@
 //! 用法: i18n::t("error.session_not_found", &lang)
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
+
+static LANG_CACHE: OnceLock<RwLock<String>> = OnceLock::new();
 
 /// 翻译 key -> { lang -> text }
 /// 只存用户可见的文本（错误消息、命令描述、handoff prompt 等）
@@ -55,6 +57,180 @@ fn build_translations() -> HashMap<&'static str, HashMap<&'static str, &'static 
         let mut l = HashMap::new();
         l.insert("en", "permission denied");
         l.insert("zh", "权限不足");
+        l
+    });
+    m.insert("error.usage_mode", {
+        let mut l = HashMap::new();
+        l.insert("en", "usage: /mode <role>");
+        l.insert("zh", "用法：/mode <角色>");
+        l
+    });
+    m.insert("error.usage_model_set", {
+        let mut l = HashMap::new();
+        l.insert("en", "usage: /model set <name>");
+        l.insert("zh", "用法：/model set <名称>");
+        l
+    });
+    m.insert("error.usage_model", {
+        let mut l = HashMap::new();
+        l.insert("en", "usage: /model [list|set <name>]");
+        l.insert("zh", "用法：/model [list|set <名称>]");
+        l
+    });
+    m.insert("error.usage_sessions_sub", {
+        let mut l = HashMap::new();
+        l.insert("en", "usage: /sessions");
+        l.insert("zh", "用法：/sessions");
+        l
+    });
+    m.insert("error.usage_sessions", {
+        let mut l = HashMap::new();
+        l.insert("en", "usage: /sessions <list|new|open <id>|delete <id>>");
+        l.insert("zh", "用法：/sessions <list|new|open <ID>|delete <ID>>");
+        l
+    });
+    m.insert("error.usage_task_cancel", {
+        let mut l = HashMap::new();
+        l.insert("en", "usage: /task cancel <id>");
+        l.insert("zh", "用法：/task cancel <ID>");
+        l
+    });
+    m.insert("error.usage_task", {
+        let mut l = HashMap::new();
+        l.insert("en", "usage: /task <list|cancel <id>>");
+        l.insert("zh", "用法：/task <list|cancel <ID>>");
+        l
+    });
+    m.insert("error.usage_config", {
+        let mut l = HashMap::new();
+        l.insert("en", "usage: /config <get|set> <key> [value]");
+        l.insert("zh", "用法：/config <get|set> <键> [值]");
+        l
+    });
+    m.insert("error.usage_config_get", {
+        let mut l = HashMap::new();
+        l.insert("en", "usage: /config get <key>");
+        l.insert("zh", "用法：/config get <键>");
+        l
+    });
+    m.insert("error.usage_config_set", {
+        let mut l = HashMap::new();
+        l.insert("en", "usage: /config set <key> <value>");
+        l.insert("zh", "用法：/config set <键> <值>");
+        l
+    });
+    m.insert("error.unsupported_lang", {
+        let mut l = HashMap::new();
+        l.insert("en", "unsupported language; use 'en' or 'zh'");
+        l.insert("zh", "不支持的语言；请使用 'en' 或 'zh'");
+        l
+    });
+    m.insert("error.usage_workflow", {
+        let mut l = HashMap::new();
+        l.insert(
+            "en",
+            "usage: /workflow <init|roadmap|propose|plan|apply|review|archive|continue|ff|loop|list> [change_id]",
+        );
+        l.insert(
+            "zh",
+            "用法：/workflow <init|roadmap|propose|plan|apply|review|archive|continue|ff|loop|list> [变更ID]",
+        );
+        l
+    });
+    m.insert("error.unknown_meta", {
+        let mut l = HashMap::new();
+        l.insert("en", "unknown meta command");
+        l.insert("zh", "未知元命令");
+        l
+    });
+    m.insert("error.auth_failed", {
+        let mut l = HashMap::new();
+        l.insert("en", "authentication failed: invalid or missing token");
+        l.insert("zh", "身份验证失败：令牌无效或缺失");
+        l
+    });
+    m.insert("error.tool_not_allowed", {
+        let mut l = HashMap::new();
+        l.insert("en", "tool is not allowed in current role");
+        l.insert("zh", "当前角色不允许使用此工具");
+        l
+    });
+    m.insert("error.model_not_found", {
+        let mut l = HashMap::new();
+        l.insert("en", "model not found");
+        l.insert("zh", "模型未找到");
+        l
+    });
+    m.insert("error.cannot_connect", {
+        let mut l = HashMap::new();
+        l.insert("en", "cannot reach server; check network and base_url");
+        l.insert("zh", "无法连接服务器；请检查网络和 base_url");
+        l
+    });
+    m.insert("error.session_id_required", {
+        let mut l = HashMap::new();
+        l.insert("en", "session_id is required");
+        l.insert("zh", "必须提供 session_id");
+        l
+    });
+    m.insert("error.message_id_required", {
+        let mut l = HashMap::new();
+        l.insert("en", "message_id is required");
+        l.insert("zh", "必须提供 message_id");
+        l
+    });
+    m.insert("error.model_required", {
+        let mut l = HashMap::new();
+        l.insert("en", "model is required");
+        l.insert("zh", "必须提供 model");
+        l
+    });
+    m.insert("error.task_id_required", {
+        let mut l = HashMap::new();
+        l.insert("en", "task_id is required");
+        l.insert("zh", "必须提供 task_id");
+        l
+    });
+    m.insert("error.parent_session_id_required", {
+        let mut l = HashMap::new();
+        l.insert("en", "parent_session_id is required");
+        l.insert("zh", "必须提供 parent_session_id");
+        l
+    });
+    m.insert("error.handoff_params_required", {
+        let mut l = HashMap::new();
+        l.insert("en", "session_id and task_prompt are required");
+        l.insert("zh", "必须提供 session_id 和 task_prompt");
+        l
+    });
+    m.insert("error.from_session_id_required", {
+        let mut l = HashMap::new();
+        l.insert("en", "from_session_id is required");
+        l.insert("zh", "必须提供 from_session_id");
+        l
+    });
+    m.insert("error.input_required", {
+        let mut l = HashMap::new();
+        l.insert("en", "input is required");
+        l.insert("zh", "必须提供 input");
+        l
+    });
+    m.insert("error.not_attached", {
+        let mut l = HashMap::new();
+        l.insert("en", "caller is not attached to a session");
+        l.insert("zh", "调用方尚未附加到任何会话");
+        l
+    });
+    m.insert("error.cross_session_denied", {
+        let mut l = HashMap::new();
+        l.insert("en", "cross-session access denied");
+        l.insert("zh", "禁止跨会话访问");
+        l
+    });
+    m.insert("error.method_not_found", {
+        let mut l = HashMap::new();
+        l.insert("en", "method not found");
+        l.insert("zh", "方法未找到");
         l
     });
 
@@ -610,10 +786,11 @@ fn build_translations() -> HashMap<&'static str, HashMap<&'static str, &'static 
 /// 翻译函数
 /// lang: "en" 或 "zh"，其他值 fallback 到 "en"
 pub fn t(key: &'static str, lang: &str) -> &'static str {
+    let lang = lang.to_ascii_lowercase();
     let translations = TRANSLATIONS.get_or_init(build_translations);
     if let Some(langs) = translations.get(key) {
         langs
-            .get(lang)
+            .get(lang.as_str())
             .or_else(|| langs.get("en"))
             .copied()
             .unwrap_or(key)
@@ -622,13 +799,24 @@ pub fn t(key: &'static str, lang: &str) -> &'static str {
     }
 }
 
-/// 获取当前配置的语言
+/// 获取当前缓存的界面语言，不触发配置读盘。
 pub fn current_lang() -> String {
-    // 从 config 读取
-    if let Ok(cfg) = crate::config::load_config(None) {
-        if cfg.language == "zh" {
-            return "zh".into();
-        }
-    }
-    "en".into()
+    LANG_CACHE
+        .get_or_init(|| RwLock::new("en".into()))
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+/// 同步运行时界面语言缓存。
+pub fn set_current_lang(lang: &str) {
+    let lang = if lang.eq_ignore_ascii_case("zh") {
+        "zh"
+    } else {
+        "en"
+    };
+    *LANG_CACHE
+        .get_or_init(|| RwLock::new("en".into()))
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = lang.into();
 }

@@ -219,12 +219,14 @@ where
     };
 
     if !authenticated {
+        let lang = crate::i18n::current_lang();
+        let message = crate::i18n::t("error.auth_failed", &lang);
         let err = make_notification("error", serde_json::json!({
-            "message": "authentication failed: invalid or missing token"
+            "message": message
         }));
         let _ = write.send(Message::Text(err)).await;
         let _ = write.send(Message::Close(None)).await;
-        anyhow::bail!("authentication failed");
+        anyhow::bail!("{}", message);
     }
 
     // 认证成功，发送 ack
@@ -573,6 +575,7 @@ async fn handle_request(
     mgr: &Arc<SessionManager>,
     attached_session: &Option<String>,
 ) -> JsonRpcResponse {
+    let lang = crate::i18n::current_lang();
     match req.method.as_str() {
         "ping" => JsonRpcResponse::ok(req.id, serde_json::json!("pong")),
 
@@ -685,7 +688,7 @@ async fn handle_request(
                 return JsonRpcResponse::err(
                     req.id,
                     -1,
-                    "missing 'session_id' for session.resume".to_string(),
+                    crate::i18n::t("error.session_id_required", &lang).to_string(),
                 );
             }
             match mgr.resume_session(session_id).await {
@@ -702,7 +705,7 @@ async fn handle_request(
                 return JsonRpcResponse::err(
                     req.id,
                     -32602,
-                    "session_id required for session.tree".to_string(),
+                    crate::i18n::t("error.session_id_required", &lang).to_string(),
                 );
             }
             if let Err(reason) = check_attached_session(attached_session, session_id) {
@@ -722,14 +725,14 @@ async fn handle_request(
                 return JsonRpcResponse::err(
                     req.id,
                     -32602,
-                    "session_id required for session.checkout".to_string(),
+                    crate::i18n::t("error.session_id_required", &lang).to_string(),
                 );
             }
             if message_id.is_empty() {
                 return JsonRpcResponse::err(
                     req.id,
                     -32602,
-                    "message_id required for session.checkout".to_string(),
+                    crate::i18n::t("error.message_id_required", &lang).to_string(),
                 );
             }
             if let Err(reason) = check_attached_session(attached_session, session_id) {
@@ -772,14 +775,14 @@ async fn handle_request(
                 return JsonRpcResponse::err(
                     req.id,
                     -32602,
-                    "session_id required for session.model.set".to_string(),
+                    crate::i18n::t("error.session_id_required", &lang).to_string(),
                 );
             }
             if model.is_empty() {
                 return JsonRpcResponse::err(
                     req.id,
                     -32602,
-                    "model required for session.model.set".to_string(),
+                    crate::i18n::t("error.model_required", &lang).to_string(),
                 );
             }
             match mgr.set_model(session_id, model).await {
@@ -825,7 +828,7 @@ async fn handle_request(
                 return JsonRpcResponse::err(
                     req.id,
                     -32602,
-                    "session_id required for ask.pending (caller must be attached to a session)".to_string(),
+                    crate::i18n::t("error.session_id_required", &lang).to_string(),
                 );
             }
             // 校验 attached_session == session_id（防止越权读取）
@@ -870,7 +873,11 @@ async fn handle_request(
             let tool_args = params["args"].clone();
 
             if session_id.is_empty() {
-                return JsonRpcResponse::err(req.id, -1, "missing 'session_id' for tool.call".to_string());
+                return JsonRpcResponse::err(
+                    req.id,
+                    -1,
+                    crate::i18n::t("error.session_id_required", &lang).to_string(),
+                );
             }
             // Phase 5c: 校验 attached_session == session_id
             if let Err(reason) = check_attached_session(attached_session, session_id) {
@@ -897,7 +904,7 @@ async fn handle_request(
                 return JsonRpcResponse::err(
                     req.id,
                     -32602,
-                    "session_id required for task.list (caller must be attached to a session)".to_string(),
+                    crate::i18n::t("error.session_id_required", &lang).to_string(),
                 );
             }
             // 校验 attached_session == session_id
@@ -917,14 +924,14 @@ async fn handle_request(
                 return JsonRpcResponse::err(
                     req.id,
                     -32602,
-                    "session_id required for task.cancel (caller must be attached to a session)".to_string(),
+                    crate::i18n::t("error.session_id_required", &lang).to_string(),
                 );
             }
             if task_id.is_empty() {
                 return JsonRpcResponse::err(
                     req.id,
                     -32602,
-                    "task_id required for task.cancel".to_string(),
+                    crate::i18n::t("error.task_id_required", &lang).to_string(),
                 );
             }
             // 校验 attached_session == session_id
@@ -1050,7 +1057,12 @@ async fn handle_request(
                 } else {
                     // params 是完整对象 -> 替换
                     let params: crate::types::ModelParams = serde_json::from_value(p["params"].clone())
-                        .map_err(|e| anyhow::anyhow!("invalid params: {e}"))?;
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "{}: {e}",
+                                crate::i18n::t("error.invalid_params", &lang)
+                            )
+                        })?;
                     mgr.set_model_params(provider, model, params).await
                 }
             }.await;
@@ -1104,7 +1116,7 @@ async fn handle_request(
                 return JsonRpcResponse::err(
                     req.id,
                     -1,
-                    "unsupported language, use 'en' or 'zh'".to_string(),
+                    crate::i18n::t("error.unsupported_lang", &lang).to_string(),
                 );
             }
             match mgr.set_language(&lang).await {
@@ -1126,7 +1138,7 @@ async fn handle_request(
                 return JsonRpcResponse::err(
                     req.id,
                     -32602,
-                    "parent_session_id required for session.list_children".to_string(),
+                    crate::i18n::t("error.parent_session_id_required", &lang).to_string(),
                 );
             }
             // m3: 校验 attached_session == parent_session_id
@@ -1141,7 +1153,11 @@ async fn handle_request(
             let session_id = p["session_id"].as_str().unwrap_or("").to_string();
             let task_prompt = p["task_prompt"].as_str().unwrap_or("").to_string();
             if session_id.is_empty() || task_prompt.is_empty() {
-                return JsonRpcResponse::err(req.id, -32602, "session_id and task_prompt required".to_string());
+                return JsonRpcResponse::err(
+                    req.id,
+                    -32602,
+                    crate::i18n::t("error.handoff_params_required", &lang).to_string(),
+                );
             }
             // m3: 校验 attached_session == session_id
             if let Err(reason) = check_attached_session(attached_session, &session_id) {
@@ -1156,7 +1172,11 @@ async fn handle_request(
             let p = req.params.unwrap_or_default();
             let from_session_id = p["from_session_id"].as_str().unwrap_or("").to_string();
             if from_session_id.is_empty() {
-                return JsonRpcResponse::err(req.id, -32602, "from_session_id required".to_string());
+                return JsonRpcResponse::err(
+                    req.id,
+                    -32602,
+                    crate::i18n::t("error.from_session_id_required", &lang).to_string(),
+                );
             }
             // m3: 校验 attached_session == from_session_id
             if let Err(reason) = check_attached_session(attached_session, &from_session_id) {
@@ -1175,7 +1195,11 @@ async fn handle_request(
             let params = req.params.unwrap_or_default();
             let input = params["input"].as_str().unwrap_or("");
             if input.is_empty() {
-                return JsonRpcResponse::err(req.id, -1, "missing 'input' field".to_string());
+                return JsonRpcResponse::err(
+                    req.id,
+                    -1,
+                    crate::i18n::t("error.input_required", &lang).to_string(),
+                );
             }
             // 去掉前导 /
             let input = input.strip_prefix('/').unwrap_or(input);
@@ -1209,7 +1233,11 @@ async fn handle_request(
         method => JsonRpcResponse::err(
             req.id,
             -32601,
-            format!("method not found: {}", method),
+            format!(
+                "{}: {}",
+                crate::i18n::t("error.method_not_found", &lang),
+                method
+            ),
         ),
     }
 }
@@ -1233,12 +1261,11 @@ pub fn check_attached_session(
     param_session_id: &str,
 ) -> Result<(), String> {
     // 1. caller 必须 attach
+    let lang = crate::i18n::current_lang();
     let attached = match attached_session.as_deref() {
         Some(s) => s,
         None => {
-            return Err(format!(
-                "caller not attached to any session; refusing session-scoped RPC"
-            ));
+            return Err(crate::i18n::t("error.not_attached", &lang).to_string());
         }
     };
     // 2. param 为空：放行（让外层 caller 决定走哪条分支）
@@ -1248,8 +1275,10 @@ pub fn check_attached_session(
     // 3. 必须匹配
     if attached != param_session_id {
         return Err(format!(
-            "caller attached to '{}' but params.session_id='{}' (cross-session denied)",
-            attached, param_session_id
+            "{}: attached={}, requested={}",
+            crate::i18n::t("error.cross_session_denied", &lang),
+            attached,
+            param_session_id
         ));
     }
     Ok(())

@@ -46,9 +46,15 @@ pub enum MetaCommandResult {
     /// 切换 role
     Mode { role: String },
     /// 列出/切换模型
-    Model { action: String, model: Option<String> },
+    Model {
+        action: String,
+        model: Option<String>,
+    },
     /// 会话管理
-    Sessions { action: String, session_id: Option<String> },
+    Sessions {
+        action: String,
+        session_id: Option<String>,
+    },
     /// 撤销
     Undo { id: Option<String> },
     /// 查看差异
@@ -56,7 +62,10 @@ pub enum MetaCommandResult {
     /// 取消当前 agent loop
     Cancel,
     /// 任务管理
-    Task { action: String, task_id: Option<String> },
+    Task {
+        action: String,
+        task_id: Option<String>,
+    },
     /// 配置管理
     Config { key: String, value: Option<String> },
     /// 配对
@@ -88,9 +97,8 @@ pub enum MetaCommandResult {
 
 /// 内置元命令名
 pub const META_COMMANDS: &[&str] = &[
-    "help", "mode", "model", "sessions", "undo", "diff", "cancel",
-    "task", "config", "pair", "exit", "quit", "workflow", "tree", "setting", "remote",
-    "lang",
+    "help", "mode", "model", "sessions", "undo", "diff", "cancel", "task", "config", "pair",
+    "exit", "quit", "workflow", "tree", "setting", "remote", "lang",
 ];
 
 /// 判断是否为元命令
@@ -100,13 +108,14 @@ pub fn is_meta_command(name: &str) -> bool {
 
 /// 解析元命令，返回结构化结果
 pub fn parse_meta_command(name: &str, args: &[&str]) -> Result<MetaCommandResult> {
+    let lang = crate::i18n::current_lang();
     match name {
         "help" => Ok(MetaCommandResult::Help),
         "exit" | "quit" => Ok(MetaCommandResult::Exit),
         "mode" => {
             let role = args
                 .first()
-                .ok_or_else(|| anyhow::anyhow!("usage: /mode <role>"))?;
+                .ok_or_else(|| anyhow::anyhow!("{}", crate::i18n::t("error.usage_mode", &lang)))?;
             Ok(MetaCommandResult::Mode {
                 role: role.to_string(),
             })
@@ -123,15 +132,15 @@ pub fn parse_meta_command(name: &str, args: &[&str]) -> Result<MetaCommandResult
                     model: None,
                 }),
                 "set" => {
-                    let model = args
-                        .get(1)
-                        .ok_or_else(|| anyhow::anyhow!("usage: /model set <name>"))?;
+                    let model = args.get(1).ok_or_else(|| {
+                        anyhow::anyhow!("{}", crate::i18n::t("error.usage_model_set", &lang))
+                    })?;
                     Ok(MetaCommandResult::Model {
                         action: "set".into(),
                         model: Some(model.to_string()),
                     })
                 }
-                _ => anyhow::bail!("usage: /model [list|set <name>]"),
+                _ => anyhow::bail!("{}", crate::i18n::t("error.usage_model", &lang)),
             }
         }
         "sessions" => {
@@ -142,15 +151,19 @@ pub fn parse_meta_command(name: &str, args: &[&str]) -> Result<MetaCommandResult
                     session_id: None,
                 }),
                 "open" | "delete" => {
-                    let id = args
-                        .get(1)
-                        .ok_or_else(|| anyhow::anyhow!("usage: /sessions {} <id>", action))?;
+                    let id = args.get(1).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "{} {} <id>",
+                            crate::i18n::t("error.usage_sessions_sub", &lang),
+                            action
+                        )
+                    })?;
                     Ok(MetaCommandResult::Sessions {
                         action: action.to_string(),
                         session_id: Some(id.to_string()),
                     })
                 }
-                _ => anyhow::bail!("usage: /sessions <list|new|open <id>|delete <id>>"),
+                _ => anyhow::bail!("{}", crate::i18n::t("error.usage_sessions", &lang)),
             }
         }
         "undo" => Ok(MetaCommandResult::Undo {
@@ -166,43 +179,42 @@ pub fn parse_meta_command(name: &str, args: &[&str]) -> Result<MetaCommandResult
                     task_id: None,
                 }),
                 "cancel" => {
-                    let id = args
-                        .get(1)
-                        .ok_or_else(|| anyhow::anyhow!("usage: /task cancel <id>"))?;
+                    let id = args.get(1).ok_or_else(|| {
+                        anyhow::anyhow!("{}", crate::i18n::t("error.usage_task_cancel", &lang))
+                    })?;
                     Ok(MetaCommandResult::Task {
                         action: "cancel".into(),
                         task_id: Some(id.to_string()),
                     })
                 }
-                _ => anyhow::bail!("usage: /task <list|cancel <id>>"),
+                _ => anyhow::bail!("{}", crate::i18n::t("error.usage_task", &lang)),
             }
         }
         "config" => {
-            let key = args
-                .first()
-                .copied()
-                .ok_or_else(|| anyhow::anyhow!("usage: /config <get|set> <key> [value]"))?;
+            let key = args.first().copied().ok_or_else(|| {
+                anyhow::anyhow!("{}", crate::i18n::t("error.usage_config", &lang))
+            })?;
             match key {
                 "get" => {
-                    let k = args
-                        .get(1)
-                        .ok_or_else(|| anyhow::anyhow!("usage: /config get <key>"))?;
+                    let k = args.get(1).ok_or_else(|| {
+                        anyhow::anyhow!("{}", crate::i18n::t("error.usage_config_get", &lang))
+                    })?;
                     Ok(MetaCommandResult::Config {
                         key: k.to_string(),
                         value: None,
                     })
                 }
                 "set" => {
-                    let k = args
-                        .get(1)
-                        .ok_or_else(|| anyhow::anyhow!("usage: /config set <key> <value>"))?;
+                    let k = args.get(1).ok_or_else(|| {
+                        anyhow::anyhow!("{}", crate::i18n::t("error.usage_config_set", &lang))
+                    })?;
                     let v = args.get(2).map(|s| s.to_string());
                     Ok(MetaCommandResult::Config {
                         key: k.to_string(),
                         value: v,
                     })
                 }
-                _ => anyhow::bail!("usage: /config <get|set> <key> [value]"),
+                _ => anyhow::bail!("{}", crate::i18n::t("error.usage_config", &lang)),
             }
         }
         "pair" => Ok(MetaCommandResult::Pair),
@@ -229,18 +241,20 @@ pub fn parse_meta_command(name: &str, args: &[&str]) -> Result<MetaCommandResult
                     lang: "zh".to_string(),
                 }),
                 Some(other) => anyhow::bail!(
-                    "unsupported language '{}'; use 'en' or 'zh'",
+                    "{}: {}",
+                    crate::i18n::t("error.unsupported_lang", &lang),
                     other
                 ),
             }
         }
         "workflow" => {
             let action = args.first().copied().unwrap_or("list");
-            let valid = ["init", "roadmap", "propose", "plan", "apply", "review", "archive", "continue", "ff", "loop", "list"];
+            let valid = [
+                "init", "roadmap", "propose", "plan", "apply", "review", "archive", "continue",
+                "ff", "loop", "list",
+            ];
             if !valid.contains(&action) {
-                anyhow::bail!(
-                    "usage: /workflow <init|roadmap|propose|plan|apply|review|archive|continue|ff|loop|list> [change_id]"
-                );
+                anyhow::bail!("{}", crate::i18n::t("error.usage_workflow", &lang));
             }
             let workflow_args = args.get(1..).unwrap_or(&[]);
             let change_id_index = workflow_args.iter().position(|arg| *arg != "--fix");
@@ -259,7 +273,7 @@ pub fn parse_meta_command(name: &str, args: &[&str]) -> Result<MetaCommandResult
                 prompt,
             })
         }
-        _ => anyhow::bail!("unknown meta command: {}", name),
+        _ => anyhow::bail!("{}: {}", crate::i18n::t("error.unknown_meta", &lang), name),
     }
 }
 
@@ -279,7 +293,9 @@ fn workflow_prompt(action: &str, change_id: Option<&str>) -> String {
         "propose" => crate::commands::workflow_prompts::propose_prompt(change_id.unwrap_or("")),
         "plan" => crate::commands::workflow_prompts::plan_prompt(change_id.unwrap_or(""), false),
         "apply" => crate::commands::workflow_prompts::apply_prompt(change_id.unwrap_or(""), false),
-        "review" => crate::commands::workflow_prompts::review_prompt(change_id.unwrap_or(""), false),
+        "review" => {
+            crate::commands::workflow_prompts::review_prompt(change_id.unwrap_or(""), false)
+        }
         "archive" => crate::commands::workflow_prompts::archive_prompt(change_id.unwrap_or("")),
         "continue" => crate::commands::workflow_prompts::continue_prompt(),
         "ff" => crate::commands::workflow_prompts::ff_prompt(),
@@ -486,13 +502,14 @@ impl CommandDispatcher {
     /// 列出所有可调用的命令（元命令 + 自定义命令 + user-invocable skills）
     pub async fn list_all(&self) -> Vec<serde_json::Value> {
         let mut result = Vec::new();
+        let lang = crate::i18n::current_lang();
 
         // 元命令
         for &name in META_COMMANDS {
             result.push(serde_json::json!({
                 "name": name,
                 "type": "meta",
-                "description": meta_command_description(name),
+                "description": meta_command_description(name, &lang),
             }));
         }
 
@@ -521,8 +538,7 @@ impl CommandDispatcher {
     }
 }
 
-fn meta_command_description(name: &str) -> &'static str {
-    let lang = crate::i18n::current_lang();
+fn meta_command_description(name: &str, lang: &str) -> &'static str {
     match name {
         "help" => crate::i18n::t("cmd.help", &lang),
         "mode" => crate::i18n::t("cmd.mode", &lang),

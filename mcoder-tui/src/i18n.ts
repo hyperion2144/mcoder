@@ -5,6 +5,7 @@
 type Lang = 'en' | 'zh';
 
 let currentLang: Lang = 'en';
+let listeners: Array<() => void> = [];
 
 const translations: Record<string, Record<Lang, string>> = {
   // ===== 通用 UI =====
@@ -134,6 +135,11 @@ const translations: Record<string, Record<Lang, string>> = {
   'ui.cannot_get_schema': { en: 'Cannot get protocol fields', zh: '无法获取协议字段' },
   'ui.no_providers_add': { en: 'No providers. Press a to add.', zh: '无供应商。按 a 添加。' },
   // ===== 思考深度描述 =====
+  'thinking.none': { en: 'None', zh: '关闭' },
+  'thinking.low': { en: 'Low', zh: '低' },
+  'thinking.medium': { en: 'Medium', zh: '中' },
+  'thinking.high': { en: 'High', zh: '高' },
+  'thinking.max': { en: 'Max', zh: '最高' },
   'thinking.none.desc': { en: 'No thinking', zh: '不启用思考' },
   'thinking.low.desc': { en: 'Light thinking', zh: '浅度思考' },
   'thinking.medium.desc': { en: 'Medium thinking', zh: '中度思考' },
@@ -153,6 +159,14 @@ const translations: Record<string, Record<Lang, string>> = {
 
 export function setLang(lang: Lang) {
   currentLang = lang;
+  listeners.forEach((listener) => listener());
+}
+
+export function onLangChange(cb: () => void): () => void {
+  listeners.push(cb);
+  return () => {
+    listeners = listeners.filter((listener) => listener !== cb);
+  };
 }
 
 export function getLang(): Lang {

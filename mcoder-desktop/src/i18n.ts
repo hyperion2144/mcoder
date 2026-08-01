@@ -128,6 +128,11 @@ const translations: Record<string, Record<Lang, string>> = {
   'cmd.lang_usage': { en: 'Usage: /lang <en|zh>', zh: '用法: /lang <en|zh>' },
   'cmd.lang_set': { en: 'Language set to', zh: '语言已设置为' },
   'cmd.lang_current': { en: 'Current language:', zh: '当前语言:' },
+  // ===== 角色标签 =====
+  'role.you': { en: 'You', zh: '你' },
+  'role.ai': { en: 'AI', zh: 'AI' },
+  'role.system': { en: 'System', zh: '系统' },
+  'role.tool': { en: 'Tool', zh: '工具' },
   // ===== 其它 UI =====
   'ui.refresh': { en: 'Refresh', zh: '刷新' },
   'ui.approve': { en: 'Approve', zh: '通过' },

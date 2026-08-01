@@ -28,7 +28,7 @@ import { formatContext, formatCost } from './utils/format.js';
 import { parsePairingString } from './utils/pairing.js';
 import { TUI_COLORS, PREFIX } from './theme.js';
 import { ShimmerText } from './components/ShimmerText.js';
-import { t, loadLang } from './i18n.js';
+import { t, loadLang, onLangChange } from './i18n.js';
 
 interface Props {
   client: WsClient;
@@ -39,6 +39,7 @@ export function App({ client: initialClient }: Props) {
   const [input, setInput] = useState('');
   // 输入 / 开头时弹出命令选择面板
   const [showCommandPicker, setShowCommandPicker] = useState(false);
+  const [, setLangVersion] = useState(0);
   // S3 修复: 思考深度按 sessionId 分别存储（quick_thinking 不写盘也不触发 config_updated）
   const thinkingBySessionRef = useRef<Map<string, string>>(new Map());
   const getThinkingFor = (sid: string | null): string =>
@@ -233,6 +234,9 @@ export function App({ client: initialClient }: Props) {
   useEffect(() => {
     // intentionally empty (Phase 2: pending_ask comes from snapshot)
   }, [sid]);
+
+  // 语言变化时刷新所有使用 t() 的 TUI 文本
+  useEffect(() => onLangChange(() => setLangVersion((version) => version + 1)), []);
 
   // 启动时从后端加载语言设置
   useEffect(() => {
@@ -721,7 +725,10 @@ export function App({ client: initialClient }: Props) {
           sessionId={sid}
           currentDepth={getThinkingFor(sid)}
           onApplied={(depth) => setThinkingFor(sid, depth)}
-          onClose={() => uiStore.setView('chat')}
+          onClose={() => {
+            uiStore.setView('chat');
+            setShowCommandPicker(false);
+          }}
           pendingPermission={!!(sid && permissionStore.pending[sid])}
         />
       )}
@@ -761,6 +768,7 @@ export function App({ client: initialClient }: Props) {
           })();
         }}
         pendingPermission={!!(sid && permissionStore.pending[sid])}
+        isActive={!showCommandPicker}
       />
 
       {/* Phase 3: Resume 入口（固定状态提示附近；非模态） */}

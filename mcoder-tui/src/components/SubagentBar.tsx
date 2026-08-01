@@ -25,11 +25,13 @@ interface Props {
   currentSessionId: string | null;
   /** 切换到指定 session */
   onSwitchSession: (sessionId: string) => void;
+  /** 命令选择面板等覆盖层打开时不激活 useInput */
+  isActive?: boolean;
   /** 有 pending permission 时不激活 useInput */
   pendingPermission?: boolean;
 }
 
-export function SubagentBar({ client, currentSessionId, onSwitchSession, pendingPermission }: Props) {
+export function SubagentBar({ client, currentSessionId, onSwitchSession, isActive = true, pendingPermission }: Props) {
   const [children, setChildren] = useState<ChildSession[]>([]);
   const [focused, setFocused] = useState(false);
   const [cursor, setCursor] = useState(0);
@@ -103,7 +105,7 @@ export function SubagentBar({ client, currentSessionId, onSwitchSession, pending
         setFocused(false);
       }
     }
-  }, { isActive: !pendingPermission });
+  }, { isActive: isActive && !pendingPermission });
 
   if (children.length === 0) return null;
 

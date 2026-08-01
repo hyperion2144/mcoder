@@ -8,6 +8,7 @@ import { useState, useEffect } from 'react';
 import { useMessagesStore, useUiStore } from '../store/index.js';
 import { useAskStore } from '../ask/store.js';
 import { TUI_COLORS, PREFIX } from '../theme.js';
+import { t } from '../i18n.js';
 
 interface Props {
   value: string;
@@ -68,7 +69,7 @@ export function InputBox({ value, onChange, onSubmit, placeholder, isActive = tr
           value={value}
           onChange={onChange}
           onSubmit={onSubmit}
-          placeholder={placeholder || 'type a message · /help for commands'}
+          placeholder={placeholder || t('ui.send_message_shift')}
         />
       </Box>
     </Box>

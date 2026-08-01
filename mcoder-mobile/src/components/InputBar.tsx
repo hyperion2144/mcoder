@@ -12,21 +12,24 @@ export interface PendingImage {
 
 interface Props {
   value?: string;
-  onValueChange?: (value: string) => void;
-  /** 输入变更回调（与 onValueChange 类似，但通常用于父组件做副作用，如展开 / 命令面板） */
-  onChange?: (value: string) => void;
+  /** 输入变更回调（父组件负责 setInput + 副作用，如命令面板展开） */
+  onChange: (value: string) => void;
   onSubmit: (value: string, images: PendingImage[]) => void;
   onCancel?: () => void;
+  /** IME composition 状态变化回调（父组件用于在选词期间屏蔽 onChange 副作用） */
+  onCompositionStateChange?: (composing: boolean) => void;
   streaming: boolean;
   disabled: boolean;
 }
 
-export function InputBar({ value: valueProp, onValueChange, onChange, onSubmit, onCancel, streaming, disabled }: Props) {
+export function InputBar({ value: valueProp, onChange, onSubmit, onCancel, onCompositionStateChange, streaming, disabled }: Props) {
   const [internalValue, setInternalValue] = useState('');
   const value = valueProp ?? internalValue;
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // IME composition 状态：选词期间不应触发 send / 命令面板展开
+  const isComposingRef = useRef(false);
 
   // 自适应高度
   useEffect(() => {
@@ -37,18 +40,18 @@ export function InputBar({ value: valueProp, onValueChange, onChange, onSubmit, 
   }, [value]);
 
   const handleSubmit = () => {
+    // S3: 选词期间 Enter 用于确认 IME 选择，不应发送
+    if (isComposingRef.current) return;
     const trimmed = value.trim();
     if ((!trimmed && pendingImages.length === 0) || disabled || streaming) return;
     onSubmit(trimmed, pendingImages);
-    if (onValueChange) onValueChange('');
-    else setInternalValue('');
+    setInternalValue('');
     setPendingImages([]);
   };
 
   const handleChange = (val: string) => {
-    if (onValueChange) onValueChange(val);
-    else setInternalValue(val);
-    if (onChange) onChange(val);
+    setInternalValue(val);
+    onChange(val);
   };
 
   // P1-4: 流式响应时按钮变为取消，可点击
@@ -56,12 +59,25 @@ export function InputBar({ value: valueProp, onValueChange, onChange, onSubmit, 
     if (onCancel) onCancel();
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    // 移动端 Enter 直接发送（Shift+Enter 换行在桌面端，移动端用回车键）
+  // S3: IME composition 防护 - 中文输入法选词期间按 Enter 不应发送消息
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
     }
+  };
+
+  // S5: 跟踪 IME composition 状态，让父组件在选词期间屏蔽命令面板等副作用
+  const handleCompositionStart = () => {
+    isComposingRef.current = true;
+    onCompositionStateChange?.(true);
+  };
+  const handleCompositionEnd = (e: React.CompositionEvent<HTMLTextAreaElement>) => {
+    isComposingRef.current = false;
+    onCompositionStateChange?.(false);
+    // 强制通知一次父组件，让其检查 IME 结束后的 input（例如展开命令面板）
+    onChange(e.currentTarget.value);
   };
 
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -118,6 +134,8 @@ export function InputBar({ value: valueProp, onValueChange, onChange, onSubmit, 
           value={value}
           onChange={(e) => handleChange(e.target.value)}
           onKeyDown={handleKeyDown}
+          onCompositionStart={handleCompositionStart}
+          onCompositionEnd={handleCompositionEnd}
           placeholder={disabled ? t('ui.offline') : t('ui.send_message')}
           rows={1}
           disabled={disabled}

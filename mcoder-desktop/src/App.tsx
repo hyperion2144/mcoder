@@ -91,7 +91,7 @@ function MessageItem({
   resultsById: Map<string, any>;
 }) {
   const roleLabel: Record<string, string> = {
-    user: 'You', assistant: 'AI', system: 'SYS', tool: 'TOOL',
+    user: t('role.you'), assistant: t('role.ai'), system: t('role.system'), tool: t('role.tool'),
   };
   const label = roleLabel[msg.role] || msg.role;
   return (
@@ -223,9 +223,13 @@ export function App() {
   const [, setLangVersion] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const commandPickerRef = useRef<CommandPickerHandle>(null);
+  // M7: textarea ref 用于在选中命令后恢复焦点（避免点击 picker 后 textarea 失焦）
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sessionStore = useSessionStore();
   const msgStore = useMessagesStore();
   const desktop = useDesktopStore();
+  // M5: 权限审批 pending 状态 —— 用来避免在权限卡弹出时同时显示命令选择器
+  const permissionStore = usePermissionStore();
   // Phase 5c: 跟踪当前 session id（用于切 session 时清旧）
   const currentSessionIdRef = useRef<string | null>(null);
   // 暴露 useEffect 内的 setupClient，供设置面板切换远程服务器时复用
@@ -241,6 +245,10 @@ export function App() {
 
   const { view, currentProject, openTabs } = desktop;
   const { sessions, currentSessionId, pendingPlan, pendingTodos } = sessionStore;
+  // M5: 当前 session 是否处于权限审批 pending
+  const pendingPermission = !!(
+    currentSessionId && permissionStore.pending[currentSessionId]
+  );
 
   // attach 到指定会话：调用 session.attach 拿 SessionSnapshot，再用 hydrateSnapshot 一次性 hydrate
   // Phase 2: 不再单独调 ask.pending / todo.list / task.list —— 全部来自 snapshot
@@ -722,9 +730,14 @@ export function App() {
     if (cmd.startsWith('/lang ')) {
       const lang = cmd.slice('/lang '.length).trim();
       if (lang === 'en' || lang === 'zh') {
-        try { await client.request('config.set_language', { language: lang }); } catch {}
-        setLang(lang as 'en' | 'zh');
-        setLangVersion(v => v + 1);
+        // M6: RPC 失败不切前端状态（避免前后端漂移）
+        try {
+          await client.request('config.set_language', { language: lang });
+          setLang(lang as 'en' | 'zh');
+          setLangVersion(v => v + 1);
+        } catch (e: any) {
+          msgStore.setError(`Failed to set language: ${e?.message || e}`);
+        }
       } else {
         msgStore.setError(t('cmd.lang_usage'));
       }
@@ -1040,9 +1053,9 @@ export function App() {
                 ))}
                 {streaming && (
                   <div className="message message-assistant">
-                    <div className="message-avatar">A</div>
+                    <div className="message-avatar">{t('role.ai').charAt(0)}</div>
                     <div className="message-body">
-                      <div className="message-header"><span className="message-role">AI</span></div>
+                      <div className="message-header"><span className="message-role">{t('role.ai')}</span></div>
                       <div className="message-content">
                         <div className="streaming-dots">
                           <span className="dot" /><span className="dot" /><span className="dot" />
@@ -1082,21 +1095,32 @@ export function App() {
                   </div>
                 )}
                 <div className="input-wrap">
-                  {showCommandPicker && client && (
+                  {/* M5: pending permission 时不渲染命令选择器，避免与权限卡快捷键冲突 */}
+                  {showCommandPicker && client && !pendingPermission && (
                     <CommandPicker
                       ref={commandPickerRef}
                       client={client}
                       filter={input}
-                      onSelect={(cmd) => { setInput(cmd + ' '); setShowCommandPicker(false); }}
+                      onSelect={(cmd) => {
+                        setInput(cmd + ' ');
+                        setShowCommandPicker(false);
+                        // M7: 选中命令后恢复焦点到 textarea（pointer 点击会劫持焦点）
+                        setTimeout(() => textareaRef.current?.focus(), 0);
+                      }}
                       onClose={() => setShowCommandPicker(false)}
+                      pendingPermission={pendingPermission}
                     />
                   )}
                   <textarea
+                    ref={textareaRef}
                     value={input}
                     onChange={e => {
                       const val = e.target.value;
                       setInput(val);
-                      setShowCommandPicker(val.startsWith('/') && !val.includes(' '));
+                      // M5: pending permission 时不弹出命令选择器
+                      setShowCommandPicker(
+                        !pendingPermission && val.startsWith('/') && !val.includes(' '),
+                      );
                     }}
                     onKeyDown={onInputKeyDown}
                     placeholder={t('ui.send_message_shift')}

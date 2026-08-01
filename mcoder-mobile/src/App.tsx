@@ -201,6 +201,8 @@ export function App() {
   // 命令选择面板
   const [input, setInput] = useState('');
   const [showCommandPicker, setShowCommandPicker] = useState(false);
+  // S5: IME composition 状态 - 选词期间父组件不展开/收起命令面板，避免闪烁
+  const [isComposing, setIsComposing] = useState(false);
   // 语言版本号：语言变更时递增以触发重渲染
   const [, setLangVersion] = useState(0);
   const sessionStore = useSessionStore();
@@ -745,8 +747,10 @@ export function App() {
 
   const handleInputChange = useCallback((val: string) => {
     setInput(val);
+    // S5: IME 选词期间不切换命令面板显示状态，避免闪烁
+    if (isComposing) return;
     setShowCommandPicker(val.startsWith('/') && !val.includes(' '));
-  }, []);
+  }, [isComposing]);
 
   const onSubmit = useCallback((value: string, images: PendingImage[] = []) => {
     setShowCommandPicker(false);
@@ -984,15 +988,15 @@ export function App() {
           {contextUsed > 1000 ? `${(contextUsed / 1000).toFixed(1)}k` : contextUsed}/{contextWindow > 1000 ? `${(contextWindow / 1000).toFixed(0)}k` : contextWindow}
         </span>
         {sessionCost > 0 && <span className="status-cost">${sessionCost.toFixed(3)}</span>}
-        {msgStore.streaming && <span className="status-running">running</span>}
+        {msgStore.streaming && <span className="status-running">{t('ui.running')}</span>}
       </div>
 
       <InputBar
         value={input}
-        onValueChange={setInput}
         onSubmit={onSubmit}
         onCancel={cancelStreaming}
         onChange={handleInputChange}
+        onCompositionStateChange={setIsComposing}
         streaming={msgStore.streaming}
         disabled={networkStatus === 'offline'}
       />
@@ -1016,7 +1020,7 @@ export function App() {
         <div className="model-sheet-overlay" onClick={() => setShowModelSheet(false)}>
           <div className="model-sheet" onClick={(e) => e.stopPropagation()}>
             <div className="model-sheet-header">
-              <span className="model-sheet-title">Select Model</span>
+              <span className="model-sheet-title">{t('ui.select_model')}</span>
               <button className="model-sheet-close" onClick={() => setShowModelSheet(false)}><X size={18} /></button>
             </div>
             <div className="model-sheet-list">
@@ -1040,7 +1044,7 @@ export function App() {
         <div className="model-sheet-overlay" onClick={() => setShowThinkingSheet(false)}>
           <div className="model-sheet" onClick={(e) => e.stopPropagation()}>
             <div className="model-sheet-header">
-              <span className="model-sheet-title">Thinking Depth</span>
+              <span className="model-sheet-title">{t('ui.thinking_depth')}</span>
               <button className="model-sheet-close" onClick={() => setShowThinkingSheet(false)}><X size={18} /></button>
             </div>
             <div className="model-sheet-list">
@@ -1092,10 +1096,10 @@ export function App() {
         <div className="settings-page">
           <div className="settings-header">
             <button onClick={() => setShowSettings(false)}><ArrowLeft size={18} /></button>
-            <span>Settings</span>
+            <span>{t('ui.settings')}</span>
             <div className="settings-tabs">
-              <button className={settingsTab === 'general' ? 'tab active' : 'tab'} onClick={() => setSettingsTab('general')}>General</button>
-              <button className={settingsTab === 'providers' ? 'tab active' : 'tab'} onClick={() => setSettingsTab('providers')}>Providers</button>
+              <button className={settingsTab === 'general' ? 'tab active' : 'tab'} onClick={() => setSettingsTab('general')}>{t('ui.general')}</button>
+              <button className={settingsTab === 'providers' ? 'tab active' : 'tab'} onClick={() => setSettingsTab('providers')}>{t('ui.providers')}</button>
             </div>
           </div>
           <div className="settings-body">
@@ -1126,8 +1130,8 @@ export function App() {
             {settingsTab === 'general' && (<>
             <div className="setting-row">
               <div className="setting-label">
-                <span className="setting-name">Model</span>
-                <span className="setting-desc">LLM model for this session</span>
+                <span className="setting-name">{t('ui.model')}</span>
+                <span className="setting-desc">{t('ui.model_desc')}</span>
               </div>
               <div className="setting-control">
                 <button className="setting-model-btn" onClick={() => { setShowSettings(false); handleModelTap(); }}>
@@ -1137,8 +1141,8 @@ export function App() {
             </div>
             <div className="setting-row">
               <div className="setting-label">
-                <span className="setting-name">Role</span>
-                <span className="setting-desc">Agent role / mode</span>
+                <span className="setting-name">{t('ui.role')}</span>
+                <span className="setting-desc">{t('ui.role_desc')}</span>
               </div>
               <div className="setting-control">
                 <select value={sessionStore.currentRole} onChange={(e) => handleRoleChange(e.target.value)}>
@@ -1152,8 +1156,8 @@ export function App() {
             </div>
             <div className="setting-row">
               <div className="setting-label">
-                <span className="setting-name">Max Iterations</span>
-                <span className="setting-desc">Max agent loop iterations</span>
+                <span className="setting-name">{t('ui.max_iterations')}</span>
+                <span className="setting-desc">{t('ui.max_iterations_desc')}</span>
               </div>
               <div className="setting-control">
                 <input type="number" min={1} key={`iters-${configValues.loop_max_iters}`} defaultValue={configValues.loop_max_iters ?? ''} onBlur={(e) => { const v = e.target.value; if (v !== '') handleConfigSet('loop_max_iters', Number(v)); }} />
@@ -1161,8 +1165,8 @@ export function App() {
             </div>
             <div className="setting-row">
               <div className="setting-label">
-                <span className="setting-name">Compact Threshold</span>
-                <span className="setting-desc">Context fill ratio (0-1) to trigger compaction</span>
+                <span className="setting-name">{t('ui.compact_threshold')}</span>
+                <span className="setting-desc">{t('ui.compact_threshold_desc')}</span>
               </div>
               <div className="setting-control">
                 <input type="number" min={0} max={1} step={0.1} key={`threshold-${configValues.compact?.threshold}`} defaultValue={configValues.compact?.threshold ?? ''} onBlur={(e) => { const v = e.target.value; if (v !== '') handleConfigSet('compact.threshold', Number(v)); }} />
@@ -1170,8 +1174,8 @@ export function App() {
             </div>
             <div className="setting-row">
               <div className="setting-label">
-                <span className="setting-name">Compact Keep Recent</span>
-                <span className="setting-desc">Messages to keep after compaction</span>
+                <span className="setting-name">{t('ui.compact_keep_recent')}</span>
+                <span className="setting-desc">{t('ui.compact_keep_recent_desc')}</span>
               </div>
               <div className="setting-control">
                 <input type="number" min={0} key={`keeprecent-${configValues.compact?.keep_recent}`} defaultValue={configValues.compact?.keep_recent ?? ''} onBlur={(e) => { const v = e.target.value; if (v !== '') handleConfigSet('compact.keep_recent', Number(v)); }} />
@@ -1179,8 +1183,8 @@ export function App() {
             </div>
             <div className="setting-row">
               <div className="setting-label">
-                <span className="setting-name">Memory Auto Recall</span>
-                <span className="setting-desc">Automatically recall relevant memories</span>
+                <span className="setting-name">{t('ui.memory_auto_recall')}</span>
+                <span className="setting-desc">{t('ui.memory_auto_recall_desc')}</span>
               </div>
               <div className="setting-control">
                 <button className={`setting-toggle ${configValues.memory?.auto_recall ? 'on' : 'off'}`} onClick={() => handleConfigSet('memory.auto_recall', !configValues.memory?.auto_recall)} />
@@ -1188,8 +1192,8 @@ export function App() {
             </div>
             <div className="setting-row">
               <div className="setting-label">
-                <span className="setting-name">Memory Auto Capture</span>
-                <span className="setting-desc">Automatically capture memories from conversations</span>
+                <span className="setting-name">{t('ui.memory_auto_capture')}</span>
+                <span className="setting-desc">{t('ui.memory_auto_capture_desc')}</span>
               </div>
               <div className="setting-control">
                 <button className={`setting-toggle ${configValues.memory?.auto_capture ? 'on' : 'off'}`} onClick={() => handleConfigSet('memory.auto_capture', !configValues.memory?.auto_capture)} />
@@ -1198,19 +1202,19 @@ export function App() {
             <div className="setting-section-title">Info</div>
             <div className="setting-row setting-row-info">
               <div className="setting-label">
-                <span className="setting-name">Version</span>
+                <span className="setting-name">{t('ui.version')}</span>
               </div>
               <div className="setting-control setting-control-text">{version || '-'}</div>
             </div>
             <div className="setting-row setting-row-info">
               <div className="setting-label">
-                <span className="setting-name">Project Path</span>
+                <span className="setting-name">{t('ui.project_path')}</span>
               </div>
               <div className="setting-control setting-control-text" title={projectPath}>{projectPath || '-'}</div>
             </div>
             <div className="setting-row setting-row-info">
               <div className="setting-label">
-                <span className="setting-name">LSP Servers</span>
+                <span className="setting-name">{t('ui.lsp_servers')}</span>
               </div>
               <div className="setting-control setting-control-text">{lspServers.length > 0 ? lspServers.join(', ') : '-'}</div>
             </div>

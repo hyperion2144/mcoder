@@ -107,7 +107,7 @@ const translations: Record<string, Record<Lang, string>> = {
   'ui.offline': { en: 'offline...', zh: '离线...' },
   'ui.set_default': { en: 'Set as default', zh: '设为默认' },
   'ui.edit_params': { en: 'Edit params', zh: '编辑参数' },
-  'ui.key_set': { en: 'key', zh: '密钥' },
+  'ui.key_set': { en: 'key set', zh: '已设密钥' },
   'ui.no_key': { en: 'no key', zh: '无密钥' },
   'ui.disabled': { en: 'disabled', zh: '已禁用' },
   'ui.not_set': { en: '(not set)', zh: '(未设置)' },
@@ -122,7 +122,7 @@ const translations: Record<string, Record<Lang, string>> = {
   'ui.switch_hint': { en: 'switch', zh: '切换' },
   'ui.back_hint': { en: 'back', zh: '返回' },
   // ===== Mobile 专用 =====
-  'ui.approve': { en: 'Approve', zh: '批准' },
+  'ui.approve': { en: 'Approve', zh: '通过' },
   'ui.reject': { en: 'Reject', zh: '拒绝' },
   'ui.todos': { en: 'Todos', zh: '待办' },
   'ui.select_model': { en: 'Select Model', zh: '选择模型' },
