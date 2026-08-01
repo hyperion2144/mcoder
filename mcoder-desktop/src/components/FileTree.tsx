@@ -4,6 +4,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import type { WsClient } from '@mcoder/shared/rpc/client.js';
 import { ChevronDown, ChevronRight, ChevronUp } from './icons.js';
+import { t } from '../i18n.js';
 
 interface FileNode {
   name: string;
@@ -146,21 +147,21 @@ export function FileTree({ client, onFileSelect }: FileTreeProps) {
   return (
     <div className="file-tree">
       <div className="file-tree-header">
-        <span>Files</span>
+        <span>{t('ui.files')}</span>
         <button
           className="file-tree-refresh"
           onClick={() => {
             setExpanded(new Set());
             setSelectedFile(null);
           }}
-          title="Collapse all"
+          title={t('ui.collapse_all')}
         >
           <ChevronUp size={12} />
         </button>
       </div>
       <div className="file-tree-content">
         {tree.length === 0 && (
-          <div className="file-tree-empty">No files</div>
+          <div className="file-tree-empty">{t('ui.no_files')}</div>
         )}
         {tree.map(node => renderNode(node))}
       </div>

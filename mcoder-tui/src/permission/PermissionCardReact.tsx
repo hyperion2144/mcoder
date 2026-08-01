@@ -12,6 +12,7 @@ import {
 } from './store.js';
 import { CSS_COLORS, LEVEL_BADGE, DECISION_BADGE } from './tokens.js';
 import { PREFIX } from '../theme.js';
+import { t } from '../i18n.js';
 
 interface Props {
   request_id: string;
@@ -81,7 +82,7 @@ export function PermissionCard({
         <span className="permission-level-badge" style={{ backgroundColor: badge.css }}>
           {badge.text}
         </span>
-        <span className="permission-card-status">等待确认</span>
+        <span className="permission-card-status">{t('ui.waiting_confirm')}</span>
       </div>
       <div className="permission-card-body">
         <div className="permission-row">
@@ -139,7 +140,7 @@ export function PermissionCardSummary({
   return (
     <div className="permission-card permission-summary" data-tool-call-id={tool_call_id}>
       <div className="permission-card-header" style={{ color: b.css }}>
-        <span className="permission-card-title">permission · {b.text}</span>
+        <span className="permission-card-title">permission · {t(b.text)}</span>
       </div>
     </div>
   );

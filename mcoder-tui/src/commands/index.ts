@@ -15,6 +15,7 @@ import { useSessionStore, useMessagesStore } from '../store/index.js';
 import { generateQrCode } from '../utils/pairing.js';
 import { useAskStore } from '../ask/store.js';
 import { hydrateSnapshot, type SessionSnapshot } from '../rpc/sessionSnapshot.js';
+import { t, setLang } from '../i18n.js';
 
 /// 服务端返回的 DispatchResult（对应 commands/mod.rs::DispatchResult）
 export type DispatchResult =
@@ -82,16 +83,16 @@ export async function dispatchSlashCommand(
     } else if (firstWord === 'handoff') {
       // /handoff <task description> -> session.handoff RPC
       const taskPrompt = stripped.slice(firstWord.length).trim();
-      if (!taskPrompt) return { error: 'Usage: /handoff <task description>' };
+      if (!taskPrompt) return { error: t('ui.usage') };
       const sid = useSessionStore.getState().currentSessionId;
-      if (!sid) return { error: 'no active session' };
+      if (!sid) return { error: t('ui.no_active_session') };
       try {
         const handoffResult = await client.request('session.handoff', {
           session_id: sid,
           task_prompt: taskPrompt,
         });
         return {
-          systemMessage: `Handoff -> ${handoffResult.new_session_id}\n\n${handoffResult.handoff_doc}`,
+          systemMessage: `${t('ui.handoff_to')} ${handoffResult.new_session_id}\n\n${handoffResult.handoff_doc}`,
         };
       } catch (e: any) {
         return { error: e.message };
@@ -99,17 +100,37 @@ export async function dispatchSlashCommand(
     } else if (firstWord === 'handoff-back') {
       // /handoff-back -> session.handoff_back RPC
       const sid = useSessionStore.getState().currentSessionId;
-      if (!sid) return { error: 'no active session' };
+      if (!sid) return { error: t('ui.no_active_session') };
       try {
         const backResult = await client.request('session.handoff_back', {
           from_session_id: sid,
         });
         return {
-          systemMessage: `Handoff back to ${backResult.to_session_id}:\n\n${backResult.back_doc}`,
+          systemMessage: `${t('ui.handoff_back_to')} ${backResult.to_session_id}:\n\n${backResult.back_doc}`,
         };
       } catch (e: any) {
         return { error: e.message };
       }
+    } else if (firstWord === 'lang') {
+      // /lang <en|zh> -> config.set_language RPC
+      const lang = stripped.slice(firstWord.length).trim();
+      if (lang === 'en' || lang === 'zh') {
+        try {
+          await client.request('config.set_language', { language: lang });
+          setLang(lang);
+          return { systemMessage: `${t('cmd.lang_set')} ${lang}` };
+        } catch (e: any) {
+          return { error: e.message };
+        }
+      } else if (!lang) {
+        try {
+          const result = await client.request('config.get_language');
+          return { systemMessage: `${t('cmd.lang_current')} ${result.language}` };
+        } catch (e: any) {
+          return { error: e.message };
+        }
+      }
+      return { error: t('cmd.lang_usage') };
     } else {
       result = await client.request('command.call', { input: stripped });
     }
@@ -242,7 +263,7 @@ async function handleMetaCommand(
         }
       } else if (action === 'new') {
         try {
-          const result = await client.request('sessions.create', { title: 'New Session' });
+          const result = await client.request('sessions.create', { title: t('ui.new_session') });
           sessionStore.setCurrentSession(result.session_id);
           client.setReconnectSession(result.session_id);
           msgStore.setMessages([]);

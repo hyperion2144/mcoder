@@ -22,12 +22,13 @@ import {
   MessageList, PlanApproval,
   SessionList, TodoView, TodoSummaryBar, TaskMonitor, ConfigView, HelpView,
   InputBox, AskUserCard, AskUserSummary, ResumeBar, TreeView, ModelView,
-  SettingView, ProviderView, ThinkingPicker, SubagentBar,
+  SettingView, ProviderView, ThinkingPicker, SubagentBar, CommandPicker,
 } from './components/index.js';
 import { formatContext, formatCost } from './utils/format.js';
 import { parsePairingString } from './utils/pairing.js';
 import { TUI_COLORS, PREFIX } from './theme.js';
 import { ShimmerText } from './components/ShimmerText.js';
+import { t, loadLang } from './i18n.js';
 
 interface Props {
   client: WsClient;
@@ -36,6 +37,8 @@ interface Props {
 export function App({ client: initialClient }: Props) {
   const [client, setClient] = useState(initialClient);
   const [input, setInput] = useState('');
+  // 输入 / 开头时弹出命令选择面板
+  const [showCommandPicker, setShowCommandPicker] = useState(false);
   // S3 修复: 思考深度按 sessionId 分别存储（quick_thinking 不写盘也不触发 config_updated）
   const thinkingBySessionRef = useRef<Map<string, string>>(new Map());
   const getThinkingFor = (sid: string | null): string =>
@@ -210,6 +213,11 @@ export function App({ client: initialClient }: Props) {
           }
           break;
         }
+        case 'config_updated': {
+          // 重新加载语言设置（后端 config.set_language 会广播此通知）
+          loadLang(client).catch(() => {});
+          break;
+        }
       }
     };
     client.onNotification(handler);
@@ -219,12 +227,17 @@ export function App({ client: initialClient }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client]);
 
-  // Phase 2: 不再在 sid 变化后单独调 ask.pending —— pending_ask 由 session.attach 的
+  // Phase 2: 不再在 sid 变化后单独调 ask.pending -- pending_ask 由 session.attach 的
   // SessionSnapshot.pending_ask 字段提供，并由 hydrateSnapshot 一次性写入 store。
   // 此处保留 useEffect 钩子空实现仅为保留引用语义；如需扩展，加在 hydrate 路径上。
   useEffect(() => {
     // intentionally empty (Phase 2: pending_ask comes from snapshot)
   }, [sid]);
+
+  // 启动时从后端加载语言设置
+  useEffect(() => {
+    loadLang(client).catch(() => {});
+  }, [client]);
 
   const loadSessions = async () => {
     try {
@@ -299,7 +312,7 @@ export function App({ client: initialClient }: Props) {
         }
       }
       if (!allFilled) {
-        msgStore.setError('请回答所有问题（数字键选择 + 可选 note）');
+        msgStore.setError(t('error.answer_all'));
         return;
       }
       submitAsk({ cancelled: false, answers });
@@ -338,7 +351,7 @@ export function App({ client: initialClient }: Props) {
     let sid2 = sessionStore.currentSessionId;
     if (!sid2) {
       try {
-        const result = await client.request('sessions.create', { title: 'New Session' });
+        const result = await client.request('sessions.create', { title: t('ui.new_session') });
         sessionStore.setCurrentSession(result.session_id);
         client.setReconnectSession(result.session_id);
         // Phase 5c: 把 reconnect 回调注册成统一的 hydrate 入口
@@ -504,7 +517,19 @@ export function App({ client: initialClient }: Props) {
     }
   };
 
+  // 输入变化时检测 / 开头以弹出/隐藏命令选择面板
+  const handleInputChange = (value: string) => {
+    setInput(value);
+    if (value.startsWith('/') && !value.includes(' ')) {
+      setShowCommandPicker(true);
+    } else {
+      setShowCommandPicker(false);
+    }
+  };
+
   const onSubmit = (value: string) => {
+    // 命令选择面板打开时，Enter 由面板处理（选中命令），不提交
+    if (showCommandPicker) return;
     if (value.startsWith('/')) {
       handleSlashCommand(value);
       setInput('');
@@ -744,7 +769,7 @@ export function App({ client: initialClient }: Props) {
       {/* Bottom status bar - fixed */}
       <Box justifyContent="space-between" paddingX={1} flexShrink={0}>
         <Text color={sessionStore.connected ? TUI_COLORS.success : TUI_COLORS.error}>
-          {sessionStore.connected ? '●' : '○'} {sessionStore.connected ? 'connected' : 'disconnected'}
+          {sessionStore.connected ? '●' : '○'} {sessionStore.connected ? t('ui.connected') : t('ui.disconnected')}
         </Text>
         <Text>
           <Text color={ctxPctNum > 90 ? TUI_COLORS.error : ctxPctNum > 70 ? TUI_COLORS.warning : TUI_COLORS.success}>
@@ -754,15 +779,30 @@ export function App({ client: initialClient }: Props) {
           {getThinkingFor(sid) !== 'none' && (
             <Text color={TUI_COLORS.mauve}> {PREFIX.thinking}{getThinkingFor(sid)}</Text>
           )}
-          {msgStore.streaming && <ShimmerText text={`${PREFIX.running} running`} />}
+          {msgStore.streaming && <ShimmerText text={`${PREFIX.running} ${t('ui.running')}`} />}
         </Text>
       </Box>
+
+      {/* 命令选择面板（输入 / 时弹出，显示在输入框上方） */}
+      {showCommandPicker && sid && (
+        <CommandPicker
+          client={client}
+          filter={input}
+          onSelect={(cmd) => {
+            setInput(cmd + ' ');
+            setShowCommandPicker(false);
+          }}
+          onClose={() => setShowCommandPicker(false)}
+          pendingPermission={!!(sid && permissionStore.pending[sid])}
+        />
+      )}
 
       {/* 输入框。ask 模式下显示 ask 提示 */}
       <InputBox
         value={input}
-        onChange={setInput}
+        onChange={handleInputChange}
         onSubmit={onSubmit}
+        isActive={!showCommandPicker}
         placeholder={askInputMode && pendingAsk
           ? `ask Q${focusIdx + 1} ${PREFIX.sep} 1-${pendingAsk.request.questions[focusIdx]?.options.length || 0}`
           : undefined}

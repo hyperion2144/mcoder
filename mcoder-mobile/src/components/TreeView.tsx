@@ -10,6 +10,7 @@ import { hydrateSnapshot, type SessionSnapshot } from '@mcoder/shared/rpc/sessio
 import { useSessionStore, useMessagesStore } from '@mcoder/shared/store/index.js';
 import { useAskStore } from '@mcoder/shared/ask/index.js';
 import { X } from './icons.js';
+import { t } from '../i18n.js';
 
 interface Props {
   client: WsClient;
@@ -104,13 +105,13 @@ export function TreeView({ client, onClose }: Props) {
     <div className="tree-modal-overlay" onClick={onClose}>
       <div className="tree-modal" onClick={(e) => e.stopPropagation()}>
         <div className="tree-modal-header">
-          <span className="tree-modal-title">Message Tree</span>
-          <button className="tree-modal-close" onClick={onClose} aria-label="close"><X size={18} /></button>
+          <span className="tree-modal-title">{t('ui.message_tree')}</span>
+          <button className="tree-modal-close" onClick={onClose} aria-label={t('ui.close')}><X size={18} /></button>
         </div>
         <div className="tree-modal-body">
-          {loading && !tree && <div className="tree-modal-empty">Loading...</div>}
+          {loading && !tree && <div className="tree-modal-empty">{t('ui.loading')}</div>}
           {error && <div className="tree-modal-error">{error}</div>}
-          {tree && tree.nodes.length === 0 && <div className="tree-modal-empty">No messages</div>}
+          {tree && tree.nodes.length === 0 && <div className="tree-modal-empty">{t('ui.no_messages')}</div>}
           {tree && tree.nodes.length > 0 && (
             <div className="tree-modal-list">
               {withDepth(tree.nodes).map(({ node, depth }) => (
@@ -124,13 +125,13 @@ export function TreeView({ client, onClose }: Props) {
                     {node.preview.length > 50 ? node.preview.slice(0, 50) + '...' : node.preview}
                   </span>
                   {node.is_head ? (
-                    <span className="tree-modal-head-badge">head</span>
+                    <span className="tree-modal-head-badge">{t('ui.head')}</span>
                   ) : (
                     <button
                       className="tree-modal-checkout"
                       onClick={() => doCheckout(node.id)}
                     >
-                      checkout
+                      {t('ui.checkout')}
                     </button>
                   )}
                 </div>

@@ -5,6 +5,7 @@
 import React, { useState, useMemo } from 'react';
 import type { SessionMeta } from '@mcoder/shared/rpc/types.js';
 import { X } from './icons.js';
+import { t } from '../i18n.js';
 
 interface Props {
   sessions: SessionMeta[];
@@ -76,16 +77,16 @@ export function ProjectList({ sessions, onSelectProject, onNewSession, onDisconn
   return (
     <div className="project-list-page">
       <div className="project-list-header">
-        <span className="project-list-title">Projects</span>
+        <span className="project-list-title">{t('ui.projects')}</span>
         <button className="project-list-disconnect" onClick={onDisconnect}>
-          Disconnect
+          {t('ui.disconnect')}
         </button>
       </div>
 
       <div className="project-new-bar">
         {!showNew ? (
           <button className="project-new-toggle" onClick={() => setShowNew(true)}>
-            + New Session
+            + {t('ui.new_session')}
           </button>
         ) : (
           <div className="project-new-form">
@@ -101,11 +102,11 @@ export function ProjectList({ sessions, onSelectProject, onNewSession, onDisconn
               spellCheck={false}
               autoFocus
             />
-            <button className="project-new-confirm" onClick={handleCreate}>Create</button>
+            <button className="project-new-confirm" onClick={handleCreate}>{t('ui.create')}</button>
             <button
               className="project-new-cancel"
               onClick={() => { setShowNew(false); setNewPath(''); }}
-              aria-label="cancel"
+              aria-label={t('ui.cancel')}
             >
               <X size={16} />
             </button>
@@ -116,7 +117,7 @@ export function ProjectList({ sessions, onSelectProject, onNewSession, onDisconn
       <div className="project-cards">
         {projects.length === 0 && (
           <div className="project-empty">
-            No projects yet.{'\n'}Create a new session to get started.
+            {t('ui.no_projects')}
           </div>
         )}
         {projects.map((p) => (

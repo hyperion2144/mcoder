@@ -3440,12 +3440,14 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
             Some("memory.auto_recall") => serde_json::json!(cfg.memory.auto_recall),
             Some("memory.auto_capture") => serde_json::json!(cfg.memory.auto_capture),
             Some("server") => serde_json::json!(cfg.server),
+            Some("language") => serde_json::json!(cfg.language),
             Some(_) | None => serde_json::json!({
                 "default_model": cfg.default_model,
                 "loop_max_iters": cfg.loop_max_iters,
                 "server": cfg.server,
                 "tui": cfg.tui,
                 "memory": cfg.memory,
+                "language": cfg.language,
             }),
         }
     }
@@ -3659,6 +3661,18 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
         *guard = new_config;
         drop(guard);
         self.broadcast_config_updated("set_default").await;
+        Ok(())
+    }
+
+    /// config.set_language - 设置界面语言并持久化
+    pub async fn set_language(self: &Arc<Self>, lang: &str) -> Result<()> {
+        let mut guard = self.config.write().await;
+        let mut new_config = (*guard).clone();
+        new_config.language = lang.to_string();
+        crate::config::save_config(&new_config)?;
+        *guard = new_config;
+        drop(guard);
+        self.broadcast_config_updated("set_language").await;
         Ok(())
     }
 
@@ -4065,8 +4079,10 @@ pub async fn quick_thinking(
         // 脱敏
         let sanitized = sanitize_for_handoff(&truncated);
 
+        let lang = crate::i18n::current_lang();
+        let intro = crate::i18n::t("handoff.doc_prompt_intro", &lang);
         let prompt = format!(
-            r#"你是一个交接文档生成器。根据以下对话历史，生成一份结构化的交接 Markdown 文档。
+            r#"{intro}
 
 ## 任务描述
 {task_prompt}
@@ -4097,6 +4113,7 @@ pub async fn quick_thinking(
 2. 不要包含 API key、密码
 3. 保持简洁（< 500 词）
 4. 聚焦于"下一个会话需要知道什么""#,
+            intro = intro,
             task_prompt = task_prompt,
             sanitized = sanitized
         );
@@ -4124,8 +4141,10 @@ pub async fn quick_thinking(
         };
         let sanitized = sanitize_for_handoff(&truncated);
 
+        let lang = crate::i18n::current_lang();
+        let intro = crate::i18n::t("handoff.back_prompt_intro", &lang);
         let prompt = format!(
-            r#"你是一个回传文档生成器。根据以下子代理的对话历史，生成一份简洁的回传 Markdown 文档。
+            r#"{intro}
 
 ## 对话历史
 {sanitized}
@@ -4144,6 +4163,7 @@ pub async fn quick_thinking(
 1. 保持简洁（< 300 词）
 2. 不要包含 API key、密码
 3. 聚焦于"父会话需要知道什么""#,
+            intro = intro,
             sanitized = sanitized
         );
 
@@ -4187,7 +4207,7 @@ pub async fn quick_thinking(
 
     /// 读取当前配置快照（同步；用于 sync 读路径）
     /// 设计文档 §provider: AppConfig clone ≈ 几 KB，可忽略
-    fn current_config(&self) -> AppConfig {
+    pub fn current_config(&self) -> AppConfig {
         self.config.blocking_read().clone()
     }
 

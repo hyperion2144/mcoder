@@ -8,6 +8,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { TUI_COLORS, PREFIX } from '../theme.js';
+import { t } from '../i18n.js';
 import type { WsClient } from '../rpc/client.js';
 import {
   listProviders, listModels, listProtocols, addProvider, deleteProvider,
@@ -190,7 +191,7 @@ export function ProviderView({ client, onClose, pendingPermission }: Props) {
             const fields = parseSchemaFields(schema);
             // M2 修复: schema 缺失 fields 数组时显式提示用户（不再 fallback）
             if (!fields) {
-              setParamsLoadError('无法获取协议字段');
+              setParamsLoadError(t('ui.cannot_get_schema'));
               return;
             }
             setParamsLoadError(null);
@@ -360,22 +361,22 @@ export function ProviderView({ client, onClose, pendingPermission }: Props) {
   }, { isActive: !pendingPermission }); // S4: 有 pending permission 时停用
 
   if (mode === 'add') {
-    const labels = ['name', 'protocol', 'base_url', 'api_key', 'models (逗号分隔)'];
+    const labels = ['name', t('ui.protocol_field'), 'base_url', 'api_key', `models (${t('ui.comma_separated')})`];
     const vals = [name, protocol, baseUrl, apiKey, modelsInput];
     return (
       <Box flexDirection="column" borderStyle="single" borderColor={TUI_COLORS.accent} paddingX={1}>
-        <Text color={TUI_COLORS.textPrimary}>{PREFIX.setting} Add Provider</Text>
+        <Text color={TUI_COLORS.textPrimary}>{PREFIX.setting} {t('ui.add_provider')}</Text>
         {labels.map((label, i) => (
           <Box key={label}>
             <Text color={i === formField ? TUI_COLORS.accent : TUI_COLORS.textMuted}>{i === formField ? `${PREFIX.selected} ` : '  '}{label.padEnd(20)}</Text>
             <Text color={TUI_COLORS.textPrimary}>{vals[i] || (i === formField ? '▏' : '')}</Text>
           </Box>
         ))}
-        <Text color={TUI_COLORS.textMuted}>{`Tab: 下一字段 ${PREFIX.sep} ↑↓: 协议切换 ${PREFIX.sep} Enter: 下一字段/提交 ${PREFIX.sep} Esc: 取消`}</Text>
+        <Text color={TUI_COLORS.textMuted}>{t('hint.provider_add_form')}</Text>
         {/* L1 修复: 用 PREFIX.error */}
         {error && <Text color={TUI_COLORS.error}>{PREFIX.error} {error}</Text>}
         {/* L2 修复: 用 PREFIX.loading */}
-        {busy && <Text color={TUI_COLORS.accent}>{PREFIX.loading} 提交中...</Text>}
+        {busy && <Text color={TUI_COLORS.accent}>{PREFIX.loading} {t('ui.submitting')}</Text>}
       </Box>
     );
   }
@@ -385,16 +386,16 @@ export function ProviderView({ client, onClose, pendingPermission }: Props) {
     if (paramsLoadError) {
       return (
         <Box flexDirection="column" borderStyle="single" borderColor={TUI_COLORS.error} paddingX={1}>
-          <Text color={TUI_COLORS.textPrimary}>{PREFIX.setting} Params: {paramsProvider.name} / {model}</Text>
+          <Text color={TUI_COLORS.textPrimary}>{PREFIX.setting} {t('ui.params')}: {paramsProvider.name} / {model}</Text>
           <Text color={TUI_COLORS.error}>{PREFIX.error} {paramsLoadError}</Text>
-          <Text color={TUI_COLORS.textMuted}>{PREFIX.sep} Esc: 关闭</Text>
+          <Text color={TUI_COLORS.textMuted}>{PREFIX.sep} {t('hint.esc_close')}</Text>
         </Box>
       );
     }
     return (
       <Box flexDirection="column" borderStyle="single" borderColor={TUI_COLORS.accent} paddingX={1}>
-        <Text color={TUI_COLORS.textPrimary}>{PREFIX.setting} Params: {paramsProvider.name} / {model} ({paramsModelIdx + 1}/{paramsProvider.models.length})</Text>
-        <Text color={TUI_COLORS.textMuted}>{PREFIX.textMuted} protocol: {paramsProvider.protocol}</Text>
+        <Text color={TUI_COLORS.textPrimary}>{PREFIX.setting} {t('ui.params')}: {paramsProvider.name} / {model} ({paramsModelIdx + 1}/{paramsProvider.models.length})</Text>
+        <Text color={TUI_COLORS.textMuted}>{PREFIX.textMuted} {t('ui.protocol_field')}: {paramsProvider.protocol}</Text>
         <Text color={TUI_COLORS.textMuted}>{'─'.repeat(60)}</Text>
         {paramsFields.map((f, i) => (
           <Box key={f.name}>
@@ -412,33 +413,33 @@ export function ProviderView({ client, onClose, pendingPermission }: Props) {
             <Text color={TUI_COLORS.textMuted}> ({f.type}{f.options ? `: ${f.options.join('/')}` : ''})</Text>
           </Box>
         ))}
-        <Text color={TUI_COLORS.textMuted}>{`↑↓/Tab: 切换字段 ${PREFIX.sep} ←/→: 枚举切换 ${PREFIX.sep} M: 切换模型 ${PREFIX.sep} Enter: 保存 ${PREFIX.sep} Esc: 取消`}</Text>
+        <Text color={TUI_COLORS.textMuted}>{t('hint.provider_params')}</Text>
         {error && <Text color={TUI_COLORS.error}>{PREFIX.error} {error}</Text>}
-        {busy && <Text color={TUI_COLORS.accent}>{PREFIX.loading} 加载中...</Text>}
+        {busy && <Text color={TUI_COLORS.accent}>{PREFIX.loading} {t('ui.loading')}</Text>}
       </Box>
     );
   }
 
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={TUI_COLORS.accent} paddingX={1}>
-      <Text color={TUI_COLORS.textPrimary}>{PREFIX.setting} Providers ({providers.length})</Text>
-      <Text color={TUI_COLORS.textMuted}>{`${PREFIX.textMuted} Models: ${models.length} | a:add t:test d:delete e:toggle p:params ⏎:set-default Esc:close`}</Text>
+      <Text color={TUI_COLORS.textPrimary}>{PREFIX.setting} {t('ui.providers')} ({providers.length})</Text>
+      <Text color={TUI_COLORS.textMuted}>{`${PREFIX.textMuted} ${t('ui.models')}: ${models.length} | a:${t('ui.add')} t:${t('ui.test')} d:${t('ui.delete')} e:toggle p:${t('ui.params')} ⏎:${t('ui.set_default')} Esc:${t('ui.close')}`}</Text>
       <Text color={TUI_COLORS.textMuted}>{'─'.repeat(60)}</Text>
       {providers.length === 0 && (
-        <Text color={TUI_COLORS.textMuted}>  无供应商。按 a 添加。</Text>
+        <Text color={TUI_COLORS.textMuted}>  {t('ui.no_providers_add')}</Text>
       )}
       {providers.map((p, i) => (
         <Box key={p.name}>
           <Text color={i === cursor ? TUI_COLORS.accent : TUI_COLORS.textMuted}>{i === cursor ? `${PREFIX.selected} ` : '  '}</Text>
           <Text color={TUI_COLORS.textPrimary}>{p.name.padEnd(20)} </Text>
           <Text color={TUI_COLORS.textMuted}>{p.protocol.padEnd(14)} </Text>
-          <Text color={TUI_COLORS.textMuted}>{p.models.length} models  </Text>
-          {!p.enabled && <Text color={TUI_COLORS.warning}>disabled</Text>}
+          <Text color={TUI_COLORS.textMuted}>{p.models.length} {t('ui.models')}  </Text>
+          {!p.enabled && <Text color={TUI_COLORS.warning}>{t('ui.disabled')}</Text>}
         </Box>
       ))}
       {mode === 'confirm-delete' && providers[cursor] && (
         <Box marginTop={1}>
-          <Text color={TUI_COLORS.error}>删除 "{providers[cursor].name}"? y/n</Text>
+          <Text color={TUI_COLORS.error}>{t('ui.delete')} "{providers[cursor].name}"? y/n</Text>
         </Box>
       )}
       {/* L5 修复: 显示当前 cursor 对应 provider 的 testResult（结构化 ok/text） */}
@@ -453,7 +454,7 @@ export function ProviderView({ client, onClose, pendingPermission }: Props) {
       {/* L1 修复: 用 PREFIX.error */}
       {error && <Text color={TUI_COLORS.error}>{PREFIX.error} {error}</Text>}
       {/* L2 修复: 用 PREFIX.loading */}
-      {busy && <Text color={TUI_COLORS.accent}>{PREFIX.loading} 加载中...</Text>}
+      {busy && <Text color={TUI_COLORS.accent}>{PREFIX.loading} {t('ui.loading')}</Text>}
     </Box>
   );
 }

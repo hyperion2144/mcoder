@@ -6,6 +6,7 @@ import { useState, useEffect } from 'react';
 import { Box, Text } from 'ink';
 import type { WsClient } from '../rpc/client.js';
 import { TUI_COLORS } from '../theme.js';
+import { t } from '../i18n.js';
 
 interface CommandEntry {
   name: string;
@@ -30,14 +31,14 @@ export function HelpView({ client }: Props) {
 
   return (
     <Box flexDirection="column" paddingX={1} borderStyle="single" borderColor={TUI_COLORS.textMuted}>
-      <Text bold color={TUI_COLORS.accent}>Commands</Text>
+      <Text bold color={TUI_COLORS.accent}>{t('ui.commands')}</Text>
       {cmds.map(c => (
         <Text key={c.name + c.type} color={TUI_COLORS.textPrimary}>
           {'/' + c.name.padEnd(30)} {c.description}
         </Text>
       ))}
       <Text color={TUI_COLORS.textMuted}> </Text>
-      <Text color={TUI_COLORS.textMuted} bold>Shortcuts</Text>
+      <Text color={TUI_COLORS.textMuted} bold>{t('ui.shortcuts')}</Text>
       <Text color={TUI_COLORS.textPrimary}>Ctrl+S                    sessions list</Text>
       <Text color={TUI_COLORS.textPrimary}>Ctrl+T                    todo view</Text>
       <Text color={TUI_COLORS.textPrimary}>Ctrl+K                    task monitor</Text>

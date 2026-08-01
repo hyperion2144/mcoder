@@ -17,6 +17,7 @@ import { TUI_COLORS, PREFIX } from '../theme.js';
 const PERMISSION_TOOL_NAME = '__permission_pending__';
 import { useAskStore } from '../ask/store.js';
 import { formatUsageDelta, shortenPath } from '../utils/format.js';
+import { t } from '../i18n.js';
 
 function MessageView({
   msg,

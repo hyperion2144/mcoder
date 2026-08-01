@@ -6,6 +6,7 @@ import { useSessionStore } from '../store/session.js';
 import { useUiStore } from '../store/ui.js';
 import type { WsClient } from '../rpc/client.js';
 import { TUI_COLORS, PREFIX } from '../theme.js';
+import { t, getLang, setLang } from '../i18n.js';
 
 interface SettingItem {
   key: string;
@@ -44,16 +45,17 @@ export function SettingView({ client }: { client: WsClient | null }) {
   }, [client, sid]);
 
   const settings: SettingItem[] = [
-    { key: 'model', label: 'Model', description: 'LLM model for this session', type: 'text', value: sessionStore.currentModel || '-' },
-    { key: 'role', label: 'Role', description: 'Agent role (default/plan/execute/review/goal/loop)', type: 'role', value: sessionStore.currentRole || 'default' },
-    { key: 'loop_max_iters', label: 'Max Iterations', description: 'Max agent loop iterations', type: 'number', value: String(configValues.loop_max_iters ?? '?'), rpcKey: 'loop_max_iters' },
-    { key: 'compact.threshold', label: 'Compact Threshold', description: 'Context usage threshold to trigger compaction (0-1)', type: 'float', value: String(configValues.compact?.threshold ?? '?'), rpcKey: 'compact.threshold' },
-    { key: 'compact.keep_recent', label: 'Compact Keep Recent', description: 'Messages to keep during compaction', type: 'number', value: String(configValues.compact?.keep_recent ?? '?'), rpcKey: 'compact.keep_recent' },
-    { key: 'memory.auto_recall', label: 'Memory Auto Recall', description: 'Automatically recall relevant memories', type: 'bool', value: String(configValues.memory?.auto_recall ?? '?'), rpcKey: 'memory.auto_recall' },
-    { key: 'memory.auto_capture', label: 'Memory Auto Capture', description: 'Automatically capture decisions to memory', type: 'bool', value: String(configValues.memory?.auto_capture ?? '?'), rpcKey: 'memory.auto_capture' },
-    { key: 'version', label: 'Version', description: 'mcoder version', type: 'readonly', value: sessionStore.version || '-' },
-    { key: 'project', label: 'Project', description: 'Project path', type: 'readonly', value: sessionStore.projectPath || '-' },
-    { key: 'lsp', label: 'LSP Servers', description: 'Active LSP servers', type: 'readonly', value: sessionStore.lspServers.join(', ') || 'none' },
+    { key: 'language', label: t('ui.language'), description: '', type: 'readonly', value: getLang() === 'zh' ? '中文' : 'English' },
+    { key: 'model', label: t('ui.model'), description: t('ui.model_desc'), type: 'text', value: sessionStore.currentModel || '-' },
+    { key: 'role', label: t('ui.role'), description: t('ui.role_desc'), type: 'role', value: sessionStore.currentRole || 'default' },
+    { key: 'loop_max_iters', label: t('ui.max_iterations'), description: t('ui.max_iterations_desc'), type: 'number', value: String(configValues.loop_max_iters ?? '?'), rpcKey: 'loop_max_iters' },
+    { key: 'compact.threshold', label: t('ui.compact_threshold'), description: t('ui.compact_threshold_desc'), type: 'float', value: String(configValues.compact?.threshold ?? '?'), rpcKey: 'compact.threshold' },
+    { key: 'compact.keep_recent', label: t('ui.compact_keep_recent'), description: t('ui.compact_keep_recent_desc'), type: 'number', value: String(configValues.compact?.keep_recent ?? '?'), rpcKey: 'compact.keep_recent' },
+    { key: 'memory.auto_recall', label: t('ui.memory_auto_recall'), description: t('ui.memory_auto_recall_desc'), type: 'bool', value: String(configValues.memory?.auto_recall ?? '?'), rpcKey: 'memory.auto_recall' },
+    { key: 'memory.auto_capture', label: t('ui.memory_auto_capture'), description: t('ui.memory_auto_capture_desc'), type: 'bool', value: String(configValues.memory?.auto_capture ?? '?'), rpcKey: 'memory.auto_capture' },
+    { key: 'version', label: t('ui.version'), description: '', type: 'readonly', value: sessionStore.version || '-' },
+    { key: 'project', label: t('ui.project_path'), description: '', type: 'readonly', value: sessionStore.projectPath || '-' },
+    { key: 'lsp', label: t('ui.lsp_servers'), description: '', type: 'readonly', value: sessionStore.lspServers.join(', ') || 'none' },
   ];
 
   useInput((input, key) => {
@@ -119,6 +121,16 @@ export function SettingView({ client }: { client: WsClient | null }) {
     }
     if (key.return) {
       const item = settings[selectedIndex];
+      if (item.key === 'language') {
+        // Toggle language between en/zh
+        const newLang = getLang() === 'en' ? 'zh' : 'en';
+        if (client) {
+          client.request('config.set_language', { language: newLang })
+            .then(() => { setLang(newLang); setSuccess(`${t('ui.language')} -> ${newLang}`); setError(null); })
+            .catch((e: any) => { setError(e.message); setSuccess(null); });
+        }
+        return;
+      }
       if (item.type === 'readonly') return;
 
       if (item.type === 'bool') {
@@ -167,7 +179,7 @@ export function SettingView({ client }: { client: WsClient | null }) {
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={TUI_COLORS.textMuted} paddingX={1}>
       <Box marginBottom={1}>
-        <Text bold color={TUI_COLORS.accent}>Settings</Text>
+        <Text bold color={TUI_COLORS.accent}>{t('ui.settings')}</Text>
         <Text color={TUI_COLORS.textMuted}>{` ${PREFIX.sep} ↑↓ navigate ${PREFIX.sep} Enter edit/toggle ${PREFIX.sep} Esc close`}</Text>
       </Box>
 

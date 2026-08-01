@@ -2,6 +2,7 @@
 // 触摸友好的输入框，支持斜杠命令和图片附件
 
 import React, { useState, useRef, useEffect } from 'react';
+import { t } from '../i18n.js';
 
 export interface PendingImage {
   data: string;
@@ -10,14 +11,19 @@ export interface PendingImage {
 }
 
 interface Props {
+  value?: string;
+  onValueChange?: (value: string) => void;
+  /** 输入变更回调（与 onValueChange 类似，但通常用于父组件做副作用，如展开 / 命令面板） */
+  onChange?: (value: string) => void;
   onSubmit: (value: string, images: PendingImage[]) => void;
   onCancel?: () => void;
   streaming: boolean;
   disabled: boolean;
 }
 
-export function InputBar({ onSubmit, onCancel, streaming, disabled }: Props) {
-  const [value, setValue] = useState('');
+export function InputBar({ value: valueProp, onValueChange, onChange, onSubmit, onCancel, streaming, disabled }: Props) {
+  const [internalValue, setInternalValue] = useState('');
+  const value = valueProp ?? internalValue;
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -34,8 +40,15 @@ export function InputBar({ onSubmit, onCancel, streaming, disabled }: Props) {
     const trimmed = value.trim();
     if ((!trimmed && pendingImages.length === 0) || disabled || streaming) return;
     onSubmit(trimmed, pendingImages);
-    setValue('');
+    if (onValueChange) onValueChange('');
+    else setInternalValue('');
     setPendingImages([]);
+  };
+
+  const handleChange = (val: string) => {
+    if (onValueChange) onValueChange(val);
+    else setInternalValue(val);
+    if (onChange) onChange(val);
   };
 
   // P1-4: 流式响应时按钮变为取消，可点击
@@ -97,15 +110,15 @@ export function InputBar({ onSubmit, onCancel, streaming, disabled }: Props) {
           className="attach-btn"
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled || streaming}
-          aria-label="attach image"
+          aria-label={t('ui.attach_image')}
         >+</button>
         <textarea
           ref={textareaRef}
           className={`input-textarea ${isCommand ? 'input-command' : ''}`}
           value={value}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(e) => handleChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={disabled ? 'offline...' : 'message or /help'}
+          placeholder={disabled ? t('ui.offline') : t('ui.send_message')}
           rows={1}
           disabled={disabled}
           autoCapitalize="none"
@@ -116,9 +129,9 @@ export function InputBar({ onSubmit, onCancel, streaming, disabled }: Props) {
           onClick={streaming ? handleCancel : handleSubmit}
           // streaming 时按钮始终可用（允许取消）；非 streaming 时要求有内容且未离线
           disabled={streaming ? false : ((!value.trim() && pendingImages.length === 0) || disabled)}
-          aria-label={streaming ? 'cancel' : 'send'}
+          aria-label={streaming ? t('ui.stop') : t('ui.send')}
         >
-          {streaming ? 'Stop' : 'Send'}
+          {streaming ? t('ui.stop') : t('ui.send')}
         </button>
       </div>
     </div>

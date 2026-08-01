@@ -10,6 +10,7 @@ import {
   type ProviderInfo, type ModelInfo, type ProtocolInfo,
 } from '../rpc/config.js';
 import { Check, AlertCircle, ArrowLeft, Plus, ChevronDown, ChevronRight, Star, Save } from './icons.js';
+import { t } from '../i18n.js';
 
 interface Props {
   /** WS client request 函数 */
@@ -178,7 +179,7 @@ export function ProviderScreen({ req, onConfigUpdated }: Props) {
       <div className="provider-screen">
         <div className="provider-screen-header">
           <button className="back-btn" onClick={() => setEditingParams(null)}><ArrowLeft size={18} /></button>
-          <span>Params: {editingParams.model}</span>
+          <span>{t('ui.params')}: {editingParams.model}</span>
         </div>
         <form className="provider-form" onSubmit={(e) => { e.preventDefault(); handleSaveParams(); }}>
           {Object.entries(protocolSchema).map(([key, schema]: [string, any]) => {
@@ -188,14 +189,14 @@ export function ProviderScreen({ req, onConfigUpdated }: Props) {
               <label>{key} {schema.description ? `(${schema.description})` : ''}</label>
               {schema.type === 'enum' ? (
                 <select value={paramValues[key] ?? ''} onChange={(e) => setParamValues({ ...paramValues, [key]: e.target.value || undefined })}>
-                  <option value="">(default)</option>
+                  <option value="">{t('ui.default')}</option>
                   {schema.values.map((v: string) => <option key={v} value={v}>{v}</option>)}
                 </select>
               ) : schema.type === 'float' || schema.type === 'int' ? (
                 <input type="number" step={schema.type === 'float' ? 0.1 : 1} min={schema.min} max={schema.max}
                   value={paramValues[key] ?? ''} onChange={(e) => setParamValues({ ...paramValues, [key]: e.target.value === '' ? undefined : Number(e.target.value) })} />
               ) : schema.type === 'string_list' ? (
-                <input type="text" placeholder="comma-separated"
+                <input type="text" placeholder={t('ui.comma_separated')}
                   value={(paramValues[key] || []).join(', ')}
                   onChange={(e) => setParamValues({ ...paramValues, [key]: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })} />
               ) : schema.type === 'object' ? (
@@ -208,8 +209,8 @@ export function ProviderScreen({ req, onConfigUpdated }: Props) {
           })}
           {error && <div className="error-banner">{error}</div>}
           <div className="form-actions">
-            <button type="button" className="secondary-btn" onClick={() => setEditingParams(null)}>Cancel</button>
-            <button type="submit" className="primary-btn" disabled={busy}>{busy ? 'Saving...' : (<><Save size={14} /> Save</>)}</button>
+            <button type="button" className="secondary-btn" onClick={() => setEditingParams(null)}>{t('ui.cancel')}</button>
+            <button type="submit" className="primary-btn" disabled={busy}>{busy ? t('ui.saving') : (<><Save size={14} /> {t('ui.save')}</>)}</button>
           </div>
         </form>
       </div>
@@ -221,16 +222,16 @@ export function ProviderScreen({ req, onConfigUpdated }: Props) {
       <div className="provider-screen">
         <div className="provider-screen-header">
           <button className="back-btn" onClick={() => setMode('list')}><ArrowLeft size={18} /></button>
-          <span>Add Provider</span>
+          <span>{t('ui.add_provider')}</span>
         </div>
         <form className="provider-form" onSubmit={submitAdd}>
           <div className="form-row">
-            <label>Name</label>
+            <label>{t('ui.name')}</label>
             <input type="text" value={name} onChange={(e) => setName(e.target.value)} required
               placeholder="e.g. openai-official" />
           </div>
           <div className="form-row">
-            <label>Protocol</label>
+            <label>{t('ui.protocol')}</label>
             <select value={protocol} onChange={(e) => {
               const v = e.target.value;
               setProtocol(v);
@@ -243,26 +244,26 @@ export function ProviderScreen({ req, onConfigUpdated }: Props) {
             </select>
           </div>
           <div className="form-row">
-            <label>Base URL</label>
+            <label>{t('ui.base_url')}</label>
             <input type="text" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}
               placeholder="https://api.openai.com/v1" required />
           </div>
           <div className="form-row">
-            <label>API Key</label>
+            <label>{t('ui.api_key')}</label>
             <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
               placeholder="sk-..." />
-            <span className="form-hint">支持 {'${ENV_VAR}'} 环境变量语法</span>
+            <span className="form-hint">{t('ui.env_var_hint')}</span>
           </div>
           <div className="form-row">
-            <label>Models</label>
+            <label>{t('ui.models')}</label>
             <input type="text" value={modelsInput} onChange={(e) => setModelsInput(e.target.value)}
-              placeholder="gpt-4o, gpt-4o-mini (逗号分隔)" />
+              placeholder={`gpt-4o, gpt-4o-mini (${t('ui.comma_separated')})`} />
           </div>
           {error && <div className="error-banner">{error}</div>}
           <div className="form-actions">
-            <button type="button" className="secondary-btn" onClick={() => setMode('list')}>Cancel</button>
+            <button type="button" className="secondary-btn" onClick={() => setMode('list')}>{t('ui.cancel')}</button>
             <button type="submit" className="primary-btn" disabled={busy || !name.trim() || !baseUrl.trim()}>
-              {busy ? 'Adding...' : 'Add'}
+              {busy ? t('ui.adding') : t('ui.add')}
             </button>
           </div>
         </form>
@@ -273,8 +274,8 @@ export function ProviderScreen({ req, onConfigUpdated }: Props) {
   return (
     <div className="provider-screen">
       <div className="provider-screen-header">
-        <span>Providers</span>
-        <button className="primary-btn" disabled={busy} onClick={() => setMode('add')}><Plus size={14} /> Add</button>
+        <span>{t('ui.providers')}</span>
+        <button className="primary-btn" disabled={busy} onClick={() => setMode('add')}><Plus size={14} /> {t('ui.add')}</button>
       </div>
 
       <div className="provider-summary">
@@ -286,8 +287,8 @@ export function ProviderScreen({ req, onConfigUpdated }: Props) {
 
       {providers.length === 0 && (
         <div className="empty-state">
-          <p>No providers configured.</p>
-          <p>Tap "Add" to set up OpenAI / Anthropic / Ollama / etc.</p>
+          <p>{t('ui.no_providers')}</p>
+          <p>{t('ui.no_providers_hint')}</p>
         </div>
       )}
 
@@ -303,8 +304,8 @@ export function ProviderScreen({ req, onConfigUpdated }: Props) {
                 <span className="provider-protocol">{p.protocol}</span>
               </div>
               <div className="provider-status">
-                {!p.enabled && <span className="badge disabled">disabled</span>}
-                {p.has_api_key ? <span className="badge ok">key</span> : <span className="badge warn">no key</span>}
+                {!p.enabled && <span className="badge disabled">{t('ui.disabled')}</span>}
+                {p.has_api_key ? <span className="badge ok">{t('ui.key_set')}</span> : <span className="badge warn">{t('ui.no_key')}</span>}
                 <span className="caret">{expandedProvider === p.name ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
               </div>
             </div>
@@ -317,8 +318,8 @@ export function ProviderScreen({ req, onConfigUpdated }: Props) {
                     {p.models.map((m) => (
                       <li key={m}>
                         <code>{m}</code>
-                        <button className="link-btn" disabled={busy} onClick={() => handleSetDefault(m, p.name)} title="Set as default"><Star size={14} /></button>
-                        <button className="link-btn" disabled={busy} onClick={() => handleEditParams(p.name, m, p.protocol)} title="Edit params">Params</button>
+                        <button className="link-btn" disabled={busy} onClick={() => handleSetDefault(m, p.name)} title={t('ui.set_default')}><Star size={14} /></button>
+                        <button className="link-btn" disabled={busy} onClick={() => handleEditParams(p.name, m, p.protocol)} title={t('ui.edit_params')}>{t('ui.params')}</button>
                       </li>
                     ))}
                   </ul>
@@ -335,11 +336,11 @@ export function ProviderScreen({ req, onConfigUpdated }: Props) {
                   </div>
                 )}
                 <div className="provider-card-actions">
-                  <button className="secondary-btn" disabled={busy} onClick={() => handleTest(p)}>Test</button>
+                  <button className="secondary-btn" disabled={busy} onClick={() => handleTest(p)}>{t('ui.test')}</button>
                   <button className="secondary-btn" disabled={busy} onClick={() => handleToggle(p)}>
-                    {p.enabled ? 'Disable' : 'Enable'}
+                    {p.enabled ? t('ui.disable') : t('ui.enable')}
                   </button>
-                  <button className="danger-btn" disabled={busy} onClick={() => handleDelete(p)}>Delete</button>
+                  <button className="danger-btn" disabled={busy} onClick={() => handleDelete(p)}>{t('ui.delete')}</button>
                 </div>
               </div>
             )}

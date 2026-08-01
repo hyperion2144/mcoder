@@ -6,6 +6,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { TUI_COLORS, PREFIX } from '../theme.js';
+import { t } from '../i18n.js';
 import type { WsClient } from '../rpc/client.js';
 
 interface ChildSession {
@@ -112,10 +113,10 @@ export function SubagentBar({ client, currentSessionId, onSwitchSession, pending
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={focused ? TUI_COLORS.accent : TUI_COLORS.textMuted} paddingX={1} flexShrink={0}>
       <Box>
-        <Text color={TUI_COLORS.accent} bold>{PREFIX.running} Subagents</Text>
-        <Text color={TUI_COLORS.textMuted}> {PREFIX.sep} {children.filter(c => c.loop_state === 'running').length} active {PREFIX.sep} {children.length} total</Text>
+        <Text color={TUI_COLORS.accent} bold>{PREFIX.running} {t('ui.subagents')}</Text>
+        <Text color={TUI_COLORS.textMuted}> {PREFIX.sep} {children.filter(c => c.loop_state === 'running').length} {t('ui.active')} {PREFIX.sep} {children.length} {t('ui.total')}</Text>
       </Box>
-      {focused && <Text color={TUI_COLORS.textMuted}>↑↓ navigate {PREFIX.sep} Enter switch {PREFIX.sep} Esc back</Text>}
+      {focused && <Text color={TUI_COLORS.textMuted}>↑↓ {t('ui.navigate')} {PREFIX.sep} Enter {t('ui.switch')} {PREFIX.sep} Esc {t('ui.back')}</Text>}
       {children.map((c, i) => (
         <Box key={c.session_id}>
           <Text color={i === safeCursor && focused ? TUI_COLORS.accent : TUI_COLORS.textMuted}>
@@ -126,9 +127,9 @@ export function SubagentBar({ client, currentSessionId, onSwitchSession, pending
             {c.title.length > 40 ? c.title.slice(0, 37) + '...' : c.title}
           </Text>
           <Text color={c.loop_state === 'running' ? TUI_COLORS.accent : TUI_COLORS.textMuted}>
-            {' '}{c.loop_state === 'running' ? 'running' : 'idle'}{' '}
+            {' '}{c.loop_state === 'running' ? t('ui.running') : t('ui.idle')}{' '}
           </Text>
-          <Text color={TUI_COLORS.textMuted}>{c.message_count} msg</Text>
+          <Text color={TUI_COLORS.textMuted}>{c.message_count} {t('ui.msg')}</Text>
         </Box>
       ))}
     </Box>

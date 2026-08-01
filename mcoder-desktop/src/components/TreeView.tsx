@@ -9,6 +9,7 @@ import type { MessageTree, MessageTreeNode } from '@mcoder/shared/rpc/types.js';
 import { hydrateSnapshot, type SessionSnapshot } from '@mcoder/shared/rpc/sessionSnapshot.js';
 import { useSessionStore, useMessagesStore } from '@mcoder/shared/store/index.js';
 import { useAskStore } from '@mcoder/shared/ask/index.js';
+import { t } from '../i18n.js';
 
 interface Props {
   client: WsClient;
@@ -100,16 +101,16 @@ export function TreeView({ client }: Props) {
   };
 
   if (!currentSessionId) {
-    return <div className="tree-view-empty">No active session</div>;
+    return <div className="tree-view-empty">{t('ui.no_active_session')}</div>;
   }
   if (loading && !tree) {
-    return <div className="tree-view-empty">Loading...</div>;
+    return <div className="tree-view-empty">{t('ui.loading')}</div>;
   }
   if (error) {
     return <div className="tree-view-error">{error}</div>;
   }
   if (!tree || tree.nodes.length === 0) {
-    return <div className="tree-view-empty">No messages in this session</div>;
+    return <div className="tree-view-empty">{t('ui.no_messages_session')}</div>;
   }
 
   const indented = withDepth(tree.nodes);
@@ -117,8 +118,8 @@ export function TreeView({ client }: Props) {
   return (
     <div className="tree-view">
       <div className="tree-view-header">
-        <span>Message Tree</span>
-        <button className="tree-view-refresh" onClick={loadTree} title="Refresh">↻</button>
+        <span>{t('ui.message_tree')}</span>
+        <button className="tree-view-refresh" onClick={loadTree} title={t('ui.refresh')}>↻</button>
       </div>
       <div className="tree-view-list">
         {indented.map(({ node, depth }) => (

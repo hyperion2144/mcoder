@@ -13,6 +13,13 @@
 
 import type { PermissionLevel } from './store.js';
 
+/// i18n key 映射：决议状态的文本通过 t() 在使用处动态解析
+export const DECISION_I18N_KEYS: Record<'allow' | 'deny' | 'always_allow', string> = {
+  allow: 'ui.approved',
+  deny: 'ui.denied',
+  always_allow: 'ui.always_approved',
+};
+
 /// TUI ink 端颜色名（ink 调色板；与 catppuccin 对应）
 export const TUI_COLORS = {
   warning: 'yellow',        // ask_user 标题 / pending border
@@ -54,9 +61,9 @@ export const LEVEL_BADGE: Record<PermissionLevel, { text: string; tui: string; c
   strict:   { text: 'STRICT',   tui: 'cyan',   css: CSS_COLORS.accent },
 };
 
-/// 决议状态的视觉标识
+/// 决议状态的视觉标识（text 字段为 i18n key，使用时通过 t() 解析）
 export const DECISION_BADGE: Record<'allow' | 'deny' | 'always_allow', { text: string; tui: string; css: string }> = {
-  allow:       { text: '已通过',   tui: 'green',  css: CSS_COLORS.success },
-  deny:        { text: '已拒绝',   tui: 'red',    css: CSS_COLORS.error },
-  always_allow:{ text: '永久通过', tui: 'green',  css: CSS_COLORS.success },
+  allow:       { text: 'ui.approved',       tui: 'green',  css: CSS_COLORS.success },
+  deny:        { text: 'ui.denied',         tui: 'red',    css: CSS_COLORS.error },
+  always_allow:{ text: 'ui.always_approved', tui: 'green',  css: CSS_COLORS.success },
 };

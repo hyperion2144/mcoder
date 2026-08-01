@@ -6,6 +6,7 @@ import { Box, Text } from 'ink';
 import { TUI_COLORS, ROLE_COLOR, PREFIX } from '../theme.js';
 import { formatAskFullSummary } from '../ask/summary.js';
 import type { AskRequest } from '../ask/types.js';
+import { t } from '../i18n.js';
 
 interface Props {
   ask_id: string;
@@ -24,7 +25,7 @@ export function AskUserCard({ request, selections, focusIndex }: Props) {
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={ROLE_COLOR.interaction} paddingX={1} marginY={1}>
       <Text color={ROLE_COLOR.interaction} bold>
-        {`${PREFIX.pending} ask_user ${PREFIX.sep} 等待输入`}
+        {`${PREFIX.pending} ask_user ${PREFIX.sep} ${t('ui.waiting_input')}`}
       </Text>
       {request.questions.map((q, i) => {
         const sel = selections?.[i] || [];
@@ -65,7 +66,7 @@ export function AskUserSummary({
   const text = formatAskFullSummary(request, submission as any);
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={ROLE_COLOR.done} paddingX={1} marginY={1}>
-      <Text color={TUI_COLORS.textMuted} bold>{`ask_user ${PREFIX.sep} 已回答`}</Text>
+      <Text color={TUI_COLORS.textMuted} bold>{`ask_user ${PREFIX.sep} ${t('ui.answered')}`}</Text>
       {text.split('\n').map((line, k) => (
         <Text key={k} color={TUI_COLORS.textPrimary}>{'  '}{line}</Text>
       ))}

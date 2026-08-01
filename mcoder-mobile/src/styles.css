@@ -2502,3 +2502,66 @@ html, body, #root {
   align-items: center;
 }
 .status-thinking:active { opacity: 0.6; }
+
+/* ===== Command Picker (输入 / 触发的底部 sheet) ===== */
+.command-picker-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 200;
+  display: flex;
+  align-items: flex-end;
+}
+.command-picker {
+  background: var(--bg-elevated, #313244);
+  border-radius: 16px 16px 0 0;
+  width: 100%;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding-bottom: 8px;
+}
+.command-picker-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border, #45475a);
+  font-weight: 600;
+  font-size: 15px;
+}
+.command-picker-header button {
+  background: none;
+  border: none;
+  color: var(--text-muted, #6c7086);
+  font-size: 20px;
+  cursor: pointer;
+}
+.command-picker-list {
+  padding: 4px 0;
+}
+.command-picker-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 16px;
+  min-height: 44px;
+  background: none;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font-size: 14px;
+}
+.command-picker-item:active {
+  background: var(--bg-hover, #45475a);
+}
+.command-picker-name {
+  color: var(--accent, #89b4fa);
+  font-weight: 600;
+  font-size: 14px;
+}
+.command-picker-desc {
+  color: var(--text-muted, #6c7086);
+  font-size: 12px;
+}

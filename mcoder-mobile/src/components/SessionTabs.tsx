@@ -5,6 +5,7 @@
 import React, { useRef, useEffect } from 'react';
 import type { SessionMeta } from '@mcoder/shared/rpc/types.js';
 import { X } from './icons.js';
+import { t } from '../i18n.js';
 
 interface Props {
   sessions: SessionMeta[];
@@ -57,7 +58,7 @@ export function SessionTabs({
                 e.stopPropagation();
                 onCloseSession(s.session_id);
               }}
-              aria-label="close tab"
+              aria-label={t('ui.close_tab')}
             >
               <X size={14} />
             </button>
@@ -67,7 +68,7 @@ export function SessionTabs({
       <button
         className="session-tab session-tab-new"
         onClick={onNewSession}
-        aria-label="new session"
+        aria-label={t('ui.new_session')}
       >
         +
       </button>

@@ -2545,3 +2545,45 @@ button > svg {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
 }
+
+/* 命令选择面板（输入 / 时在输入框上方弹出） */
+.input-wrap {
+  position: relative;
+}
+.command-picker {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  background: var(--bg-elevated, #313244);
+  border: 1px solid var(--border, #45475a);
+  border-radius: var(--radius-md, 6px);
+  box-shadow: 0 -4px 16px rgba(0,0,0,0.3);
+  max-height: 240px;
+  overflow-y: auto;
+  z-index: 50;
+  margin-bottom: 4px;
+}
+.command-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.command-picker-item:hover, .command-picker-item.active {
+  background: var(--bg-hover, #45475a);
+}
+.command-picker-name {
+  color: var(--accent, #89b4fa);
+  font-weight: 600;
+  min-width: 140px;
+}
+.command-picker-desc {
+  color: var(--text-muted, #6c7086);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

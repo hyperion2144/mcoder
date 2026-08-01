@@ -20,6 +20,7 @@ pub mod plugin;
 pub mod session_manager;
 
 pub mod generation_fence;
+pub mod i18n;
 pub mod resume_policy;
 pub mod skills;
 pub mod todo_gate;

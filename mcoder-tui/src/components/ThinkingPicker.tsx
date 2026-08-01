@@ -5,6 +5,7 @@
 import { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { TUI_COLORS, PREFIX } from '../theme.js';
+import { t } from '../i18n.js';
 import type { WsClient } from '../rpc/client.js';
 
 interface Props {
@@ -19,11 +20,11 @@ interface Props {
 }
 
 const DEPTHS = [
-  { value: 'none', label: 'None', desc: '不启用思考' },
-  { value: 'low', label: 'Low', desc: '浅度思考' },
-  { value: 'medium', label: 'Medium', desc: '中度思考' },
-  { value: 'high', label: 'High', desc: '深度思考' },
-  { value: 'max', label: 'Max', desc: '最大思考' },
+  { value: 'none', label: 'None', descKey: 'thinking.none.desc' },
+  { value: 'low', label: 'Low', descKey: 'thinking.low.desc' },
+  { value: 'medium', label: 'Medium', descKey: 'thinking.medium.desc' },
+  { value: 'high', label: 'High', descKey: 'thinking.high.desc' },
+  { value: 'max', label: 'Max', descKey: 'thinking.max.desc' },
 ];
 
 export function ThinkingPicker({ client, sessionId, currentDepth, onClose, onApplied, pendingPermission }: Props) {
@@ -59,20 +60,20 @@ export function ThinkingPicker({ client, sessionId, currentDepth, onClose, onApp
 
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={TUI_COLORS.textMuted} paddingX={1}>
-      <Text color={TUI_COLORS.accent} bold>{PREFIX.setting} Thinking Depth</Text>
-      <Text color={TUI_COLORS.textMuted}>↑↓ navigate {PREFIX.sep} Enter select {PREFIX.sep} Esc close</Text>
+      <Text color={TUI_COLORS.accent} bold>{PREFIX.setting} {t('ui.thinking_depth')}</Text>
+      <Text color={TUI_COLORS.textMuted}>↑↓ {t('ui.navigate')} {PREFIX.sep} Enter {t('ui.select')} {PREFIX.sep} Esc {t('ui.close')}</Text>
       <Text color={TUI_COLORS.textMuted}>{'─'.repeat(40)}</Text>
       {DEPTHS.map((d, i) => (
         <Box key={d.value}>
           <Text color={i === selected ? TUI_COLORS.accent : TUI_COLORS.textMuted} bold={i === selected}>
             {i === selected ? `${PREFIX.running} ` : '  '}
             {d.value === currentDepth ? `${PREFIX.done} ` : '  '}
-            {d.label.padEnd(10)} {d.desc}
+            {d.label.padEnd(10)} {t(d.descKey)}
           </Text>
         </Box>
       ))}
       {error && <Text color={TUI_COLORS.error}>{PREFIX.error} {error}</Text>}
-      {busy && <Text color={TUI_COLORS.accent}>{PREFIX.loading} 切换中...</Text>}
+      {busy && <Text color={TUI_COLORS.accent}>{PREFIX.loading} {t('ui.switching')}</Text>}
     </Box>
   );
 }

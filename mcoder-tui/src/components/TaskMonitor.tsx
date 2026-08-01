@@ -6,6 +6,7 @@
 import { Box, Text } from 'ink';
 import { useSessionStore } from '../store/index.js';
 import { TUI_COLORS, PREFIX } from '../theme.js';
+import { t } from '../i18n.js';
 
 export function TaskMonitor() {
   const { backgroundTasks } = useSessionStore();
@@ -14,11 +15,11 @@ export function TaskMonitor() {
   return (
     <Box flexDirection="column" paddingX={1} borderStyle="single" borderColor={TUI_COLORS.textMuted}>
       <Box>
-        <Text bold color={TUI_COLORS.accent}>Background Tasks</Text>
-        <Text color={TUI_COLORS.textMuted}>{` ${PREFIX.sep} ${tasks.length}${interruptedCount > 0 ? ` ${PREFIX.sep} ${interruptedCount} interrupted` : ''}`}</Text>
+        <Text bold color={TUI_COLORS.accent}>{t('ui.background_tasks')}</Text>
+        <Text color={TUI_COLORS.textMuted}>{` ${PREFIX.sep} ${tasks.length}${interruptedCount > 0 ? ` ${PREFIX.sep} ${interruptedCount} ${t('ui.interrupted')}` : ''}`}</Text>
       </Box>
       {tasks.length === 0 ? (
-        <Text color={TUI_COLORS.textMuted}>empty</Text>
+        <Text color={TUI_COLORS.textMuted}>{t('ui.empty')}</Text>
       ) : (
         tasks.map((task: any, i: number) => {
           const status = (task.status || '').toString();
@@ -44,8 +45,8 @@ export function TaskMonitor() {
               </Box>
               {isInterrupted && task.args_json != null && (
                 <Text color={TUI_COLORS.textMuted} wrap="truncate-end">
-                  {'  '}args: {JSON.stringify(task.args_json).slice(0, 80)}
-                  {task.error ? ` ${PREFIX.sep} error: ${task.error}` : ''}
+                  {'  '}{t('ui.args')}: {JSON.stringify(task.args_json).slice(0, 80)}
+                  {task.error ? ` ${PREFIX.sep} ${t('ui.error_label')}: ${task.error}` : ''}
                 </Text>
               )}
             </Box>

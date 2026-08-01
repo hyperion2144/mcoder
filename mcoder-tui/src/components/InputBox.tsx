@@ -14,9 +14,11 @@ interface Props {
   onChange: (v: string) => void;
   onSubmit: (v: string) => void;
   placeholder?: string;
+  /** 当命令选择面板打开时停用 ↑↓/Enter 历史快捷键，避免与面板冲突 */
+  isActive?: boolean;
 }
 
-export function InputBox({ value, onChange, onSubmit, placeholder }: Props) {
+export function InputBox({ value, onChange, onSubmit, placeholder, isActive = true }: Props) {
   const { navigateHistory, addInputHistory } = useMessagesStore();
   const { setFileCompletions, fileCompletions, fileCompletionIndex } = useUiStore();
   const askStore = useAskStore();
@@ -46,7 +48,7 @@ export function InputBox({ value, onChange, onSubmit, placeholder }: Props) {
         addInputHistory(value);
       }
     }
-  });
+  }, { isActive });
 
   return (
     <Box flexDirection="column">

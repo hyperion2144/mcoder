@@ -6,6 +6,7 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import type { PermissionRequest, PermissionLevel } from './store.js';
 import { TUI_COLORS, ROLE_COLOR, PREFIX } from '../theme.js';
+import { t } from '../i18n.js';
 
 interface Props {
   request: PermissionRequest;
@@ -43,7 +44,7 @@ export function PermissionCard({ request }: Props) {
     <Box flexDirection="column" borderStyle="round" borderColor={ROLE_COLOR.interaction} paddingX={1} marginY={1}>
       <Box>
         <Text color={ROLE_COLOR.interaction} bold>{PREFIX.approval} permission</Text>
-        <Text color={badge.color} bold>{` ${PREFIX.sep} [${badge.text}] ${PREFIX.sep} 等待确认`}</Text>
+        <Text color={badge.color} bold>{` ${PREFIX.sep} [${badge.text}] ${PREFIX.sep} ${t('ui.waiting_confirm')}`}</Text>
       </Box>
       <Box marginTop={1} flexDirection="column">
         <Text color={TUI_COLORS.textPrimary}>{'  '}tool: <Text color={TUI_COLORS.accent} bold>{request.tool_name}</Text></Text>
@@ -65,9 +66,9 @@ export function PermissionSummary({
   request: PermissionRequest;
   decision: 'allow' | 'deny' | 'always_allow';
 }) {
-  const label = decision === 'allow' ? '已通过'
-    : decision === 'always_allow' ? '永久通过'
-    : '已拒绝';
+  const label = decision === 'allow' ? t('ui.approved')
+    : decision === 'always_allow' ? t('ui.always_approved')
+    : t('ui.denied');
   const color = decision === 'deny' ? TUI_COLORS.error : TUI_COLORS.success;
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={ROLE_COLOR.done} paddingX={1} marginY={1}>

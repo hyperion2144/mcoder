@@ -82,12 +82,15 @@ pub enum MetaCommandResult {
     Setting,
     /// 远程连接（切换到另一台 mcoder 服务器）
     Remote { args: Vec<String> },
+    /// 切换界面语言（en|zh）；空字符串表示查询当前语言
+    Lang { lang: String },
 }
 
 /// 内置元命令名
 pub const META_COMMANDS: &[&str] = &[
     "help", "mode", "model", "sessions", "undo", "diff", "cancel",
     "task", "config", "pair", "exit", "quit", "workflow", "tree", "setting", "remote",
+    "lang",
 ];
 
 /// 判断是否为元命令
@@ -211,6 +214,25 @@ pub fn parse_meta_command(name: &str, args: &[&str]) -> Result<MetaCommandResult
             Ok(MetaCommandResult::Remote {
                 args: args.iter().map(|s| s.to_string()).collect(),
             })
+        }
+        "lang" => {
+            // /lang            -> 查询当前语言（lang 为空）
+            // /lang en | /lang zh -> 设置语言
+            match args.first().copied() {
+                None => Ok(MetaCommandResult::Lang {
+                    lang: String::new(),
+                }),
+                Some("en") => Ok(MetaCommandResult::Lang {
+                    lang: "en".to_string(),
+                }),
+                Some("zh") => Ok(MetaCommandResult::Lang {
+                    lang: "zh".to_string(),
+                }),
+                Some(other) => anyhow::bail!(
+                    "unsupported language '{}'; use 'en' or 'zh'",
+                    other
+                ),
+            }
         }
         "workflow" => {
             let action = args.first().copied().unwrap_or("list");
@@ -500,22 +522,24 @@ impl CommandDispatcher {
 }
 
 fn meta_command_description(name: &str) -> &'static str {
+    let lang = crate::i18n::current_lang();
     match name {
-        "help" => "show available commands",
-        "mode" => "switch role (normal|plan|goal|loop|execute|review)",
-        "model" => "switch model (interactive picker; list|set <name>)",
-        "sessions" => "session management (list|new|open|delete)",
-        "undo" => "undo file changes",
-        "diff" => "view git diff",
-        "cancel" => "cancel current agent loop",
-        "task" => "background task management",
-        "config" => "config management (get|set)",
-        "pair" => "show pairing info",
-        "exit" | "quit" => "exit",
-        "workflow" => "spec-driven workflow orchestration (init|roadmap|propose|plan|apply|review|archive|continue|ff|loop|list) - returns orchestration prompt injected into the agent loop",
-        "tree" => "view message tree (fork/switch branches)",
-        "setting" => "open settings panel",
-        "remote" => "switch to a remote server connection",
+        "help" => crate::i18n::t("cmd.help", &lang),
+        "mode" => crate::i18n::t("cmd.mode", &lang),
+        "model" => crate::i18n::t("cmd.model", &lang),
+        "sessions" => crate::i18n::t("cmd.sessions", &lang),
+        "undo" => crate::i18n::t("cmd.undo", &lang),
+        "diff" => crate::i18n::t("cmd.diff", &lang),
+        "cancel" => crate::i18n::t("cmd.cancel", &lang),
+        "task" => crate::i18n::t("cmd.task", &lang),
+        "config" => crate::i18n::t("cmd.config", &lang),
+        "pair" => crate::i18n::t("cmd.pair", &lang),
+        "exit" | "quit" => crate::i18n::t("cmd.exit", &lang),
+        "workflow" => crate::i18n::t("cmd.workflow", &lang),
+        "tree" => crate::i18n::t("cmd.tree", &lang),
+        "setting" => crate::i18n::t("cmd.setting", &lang),
+        "remote" => crate::i18n::t("cmd.remote", &lang),
+        "lang" => crate::i18n::t("cmd.lang", &lang),
         _ => "",
     }
 }

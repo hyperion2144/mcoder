@@ -4,6 +4,7 @@
 import React from 'react';
 import type { WsClient } from '@mcoder/shared/rpc/client.js';
 import { X } from './icons.js';
+import { t } from '../i18n.js';
 
 interface Props {
   plan: any;
@@ -40,7 +41,7 @@ export function PlanPanel({ plan, client, sessionId, onDismiss }: Props) {
   return (
     <div className="plan-panel">
       <div className="plan-panel-header">
-        <span className="plan-panel-title">Plan pending approval</span>
+        <span className="plan-panel-title">{t('ui.plan_pending')}</span>
         <button className="plan-panel-close" onClick={onDismiss} aria-label="close">
           <X size={14} />
         </button>
@@ -64,10 +65,10 @@ export function PlanPanel({ plan, client, sessionId, onDismiss }: Props) {
       </div>
       <div className="plan-panel-actions">
         <button className="plan-btn plan-btn-approve" onClick={handleApprove}>
-          Approve
+          {t('ui.approve')}
         </button>
         <button className="plan-btn plan-btn-reject" onClick={handleReject}>
-          Reject
+          {t('ui.reject')}
         </button>
       </div>
     </div>

@@ -1097,6 +1097,27 @@ async fn handle_request(
             }
         }
 
+        "config.set_language" => {
+            let p = req.params.unwrap_or_default();
+            let lang = p["language"].as_str().unwrap_or("en").to_string();
+            if lang != "en" && lang != "zh" {
+                return JsonRpcResponse::err(
+                    req.id,
+                    -1,
+                    "unsupported language, use 'en' or 'zh'".to_string(),
+                );
+            }
+            match mgr.set_language(&lang).await {
+                Ok(_) => JsonRpcResponse::ok(req.id, serde_json::json!({"language": lang})),
+                Err(e) => JsonRpcResponse::err(req.id, -1, e.to_string()),
+            }
+        }
+
+        "config.get_language" => {
+            let cfg = mgr.current_config();
+            JsonRpcResponse::ok(req.id, serde_json::json!({"language": cfg.language}))
+        }
+
         // ===== Subagent / Handoff (P1/P4) =====
         "session.list_children" => {
             let p = req.params.unwrap_or_default();

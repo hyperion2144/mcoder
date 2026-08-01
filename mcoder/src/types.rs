@@ -515,6 +515,13 @@ pub struct AppConfig {
     /// 设计文档 §8.8: 权限级别（yolo / standard / strict）
     #[serde(default)]
     pub permission: PermissionConfig,
+    /// 界面语言: "en" (默认) | "zh"
+    #[serde(default = "default_language")]
+    pub language: String,
+}
+
+fn default_language() -> String {
+    "en".into()
 }
 
 impl Default for AppConfig {
@@ -537,6 +544,7 @@ impl Default for AppConfig {
             web_search: WebSearchConfig::default(),
             launch: LaunchConfig::default(),
             permission: PermissionConfig::default(),
+            language: default_language(),
         }
     }
 }

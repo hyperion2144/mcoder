@@ -28,6 +28,8 @@ import { ResumeBar } from './components/ResumeBar.js';
 import { SubagentBar } from './components/SubagentBar.js';
 import { TreeView } from './components/TreeView.js';
 import { ProviderScreen } from './components/ProviderScreen.js';
+import { CommandPicker } from './components/CommandPicker.js';
+import { t, setLang, getLang, loadLang } from './i18n.js';
 import {
   Brain, X, Check, ChevronDown, ChevronRight, ChevronUp, ArrowLeft, Settings,
   Plus, Trash2, Star, Play, Square, CircleDot, Circle, AlertCircle, CornerDownRight,
@@ -61,8 +63,8 @@ function MobilePlanPanel({
   return (
     <div className="plan-panel">
       <div className="plan-panel-header">
-        <span className="plan-panel-title">Plan pending approval</span>
-        <button className="plan-panel-close" onClick={onDismiss} aria-label="close"><X size={18} /></button>
+        <span className="plan-panel-title">{t('ui.plan_pending')}</span>
+        <button className="plan-panel-close" onClick={onDismiss} aria-label={t('ui.close')}><X size={18} /></button>
       </div>
       {plan.title && <div className="plan-panel-name">{plan.title}</div>}
       <ol className="plan-steps">
@@ -74,8 +76,8 @@ function MobilePlanPanel({
         ))}
       </ol>
       <div className="plan-panel-actions">
-        <button className="plan-btn plan-btn-approve" onClick={handleApprove}>Approve</button>
-        <button className="plan-btn plan-btn-reject" onClick={handleReject}>Reject</button>
+        <button className="plan-btn plan-btn-approve" onClick={handleApprove}>{t('ui.approve')}</button>
+        <button className="plan-btn plan-btn-reject" onClick={handleReject}>{t('ui.reject')}</button>
       </div>
     </div>
   );
@@ -88,7 +90,7 @@ function MobileTodoPanel({ todos }: { todos: any[] }) {
   return (
     <div className="todo-panel">
       <div className="todo-panel-header">
-        <span className="todo-panel-title">Todos</span>
+        <span className="todo-panel-title">{t('ui.todos')}</span>
         <span className="todo-panel-progress">{done}/{total} · {pct}%</span>
       </div>
       <div className="todo-progress-bar">
@@ -196,6 +198,11 @@ export function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'general' | 'providers'>('general');
   const [configValues, setConfigValues] = useState<Record<string, any>>({});
+  // 命令选择面板
+  const [input, setInput] = useState('');
+  const [showCommandPicker, setShowCommandPicker] = useState(false);
+  // 语言版本号：语言变更时递增以触发重渲染
+  const [, setLangVersion] = useState(0);
   const sessionStore = useSessionStore();
   const msgStore = useMessagesStore();
   const networkMonitor = useRef<NetworkMonitor | null>(null);
@@ -275,6 +282,8 @@ export function App() {
         const cmds = await c.request('command.list');
         setCommands(cmds);
       } catch {}
+      // 从后端加载语言设置
+      loadLang(c).catch(() => {});
     } catch (e: any) {
       msgStore.setError(`Connection failed: ${e.message}`);
     }
@@ -395,6 +404,11 @@ export function App() {
           msgStore.setError(notif.params.message);
           msgStore.setStreaming(false);
           break;
+        case 'config_updated': {
+          // 重新加载语言设置（后端 config.set_language 会广播此通知）
+          loadLang(c).then(() => setLangVersion(v => v + 1)).catch(() => {});
+          break;
+        }
       }
     };
     c.onNotification(notifHandler);
@@ -678,7 +692,7 @@ export function App() {
           session_id: sessionStore.currentSessionId,
           task_prompt: taskPrompt,
         });
-        msgStore.addMessage({ role: 'system', content: [{ type: 'text', text: `Handoff -> ${result.new_session_id}\n\n${result.handoff_doc}` }] });
+        msgStore.addMessage({ role: 'system', content: [{ type: 'text', text: `${t('ui.handoff_to')} ${result.new_session_id}\n\n${result.handoff_doc}` }] });
       } catch (e: any) { msgStore.setError(e.message); }
       return;
     }
@@ -689,8 +703,28 @@ export function App() {
         const result = await client.request('session.handoff_back', {
           from_session_id: sessionStore.currentSessionId,
         });
-        msgStore.addMessage({ role: 'system', content: [{ type: 'text', text: `Handoff back to ${result.to_session_id}:\n\n${result.back_doc}` }] });
+        msgStore.addMessage({ role: 'system', content: [{ type: 'text', text: `${t('ui.handoff_back_to')} ${result.to_session_id}:\n\n${result.back_doc}` }] });
       } catch (e: any) { msgStore.setError(e.message); }
+      return;
+    }
+    // /lang <en|zh>: 设置语言（Mobile 本地拦截，确保 mobile i18n 模块同步）
+    if (cmd === '/lang' || cmd.startsWith('/lang ')) {
+      const lang = cmd.slice('/lang'.length).trim();
+      if (lang === 'en' || lang === 'zh') {
+        try {
+          await client.request('config.set_language', { language: lang });
+          setLang(lang);
+          setLangVersion(v => v + 1);
+          msgStore.addMessage({ role: 'system', content: [{ type: 'text', text: `${t('cmd.lang_set')} ${lang}` }] });
+        } catch (e: any) { msgStore.setError(e.message); }
+      } else if (!lang) {
+        try {
+          const result = await client.request('config.get_language');
+          msgStore.addMessage({ role: 'system', content: [{ type: 'text', text: `${t('cmd.lang_current')} ${result.language}` }] });
+        } catch (e: any) { msgStore.setError(e.message); }
+      } else {
+        msgStore.setError(t('cmd.lang_usage'));
+      }
       return;
     }
     // 所有 slash command 转发到服务端分发（commands/mod.rs::CommandDispatcher）
@@ -709,7 +743,13 @@ export function App() {
     }
   }, [client, sessionStore, msgStore]);
 
+  const handleInputChange = useCallback((val: string) => {
+    setInput(val);
+    setShowCommandPicker(val.startsWith('/') && !val.includes(' '));
+  }, []);
+
   const onSubmit = useCallback((value: string, images: PendingImage[] = []) => {
+    setShowCommandPicker(false);
     if (value.startsWith('/')) {
       handleSlash(value);
     } else {
@@ -948,11 +988,28 @@ export function App() {
       </div>
 
       <InputBar
+        value={input}
+        onValueChange={setInput}
         onSubmit={onSubmit}
         onCancel={cancelStreaming}
+        onChange={handleInputChange}
         streaming={msgStore.streaming}
         disabled={networkStatus === 'offline'}
       />
+
+      {/* 命令选择面板：输入 / 时弹出 */}
+      {showCommandPicker && client && (
+        <CommandPicker
+          client={client}
+          filter={input}
+          onSelect={(cmd) => {
+            // 选中后把命令加一个空格写到输入框，handleInputChange 看到空格会自动关闭面板
+            setInput(cmd + ' ');
+            setShowCommandPicker(false);
+          }}
+          onClose={() => setShowCommandPicker(false)}
+        />
+      )}
 
       {/* 模型选择 sheet */}
       {showModelSheet && (
@@ -1042,6 +1099,20 @@ export function App() {
             </div>
           </div>
           <div className="settings-body">
+            <div className="form-row">
+              <label>{t('ui.language')}</label>
+              <select value={getLang()} onChange={async (e) => {
+                const lang = e.target.value === 'zh' ? 'zh' : 'en';
+                if (client) {
+                  try { await client.request('config.set_language', { language: lang }); } catch {}
+                }
+                setLang(lang);
+                setLangVersion(v => v + 1);
+              }}>
+                <option value="en">English</option>
+                <option value="zh">中文</option>
+              </select>
+            </div>
             {settingsTab === 'providers' && client && (
               <ProviderScreen
                 req={client.request.bind(client)}

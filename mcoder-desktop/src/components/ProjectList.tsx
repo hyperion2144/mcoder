@@ -3,6 +3,7 @@
 
 import React, { useState, useMemo } from 'react';
 import type { SessionMeta } from '@mcoder/shared/rpc/types.js';
+import { t } from '../i18n.js';
 
 interface ProjectListProps {
   sessions: SessionMeta[];
@@ -77,7 +78,7 @@ export function ProjectList({ sessions, onSelectProject, onCreateSession }: Proj
   return (
     <div className="project-list">
       <div className="project-list-header">
-        <span className="project-list-title">Projects</span>
+        <span className="project-list-title">{t('ui.projects')}</span>
         <span className="project-list-sub">{groups.length} project(s)</span>
       </div>
 
@@ -97,13 +98,13 @@ export function ProjectList({ sessions, onSelectProject, onCreateSession }: Proj
           onClick={handleCreate}
           disabled={!newProject.trim()}
         >
-          + New Session
+          {t('ui.new_session_btn')}
         </button>
       </div>
 
       <div className="project-cards">
         {groups.length === 0 && (
-          <div className="project-empty">No sessions yet. Create one above.</div>
+          <div className="project-empty">{t('ui.no_sessions_yet')}</div>
         )}
         {groups.map((g) => (
           <div

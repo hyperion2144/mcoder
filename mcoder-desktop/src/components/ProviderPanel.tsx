@@ -10,6 +10,7 @@ import {
   type ProviderInfo, type ModelInfo, type ProtocolInfo,
 } from '../rpc/config.js';
 import { X, Check, Star, Plus } from './icons.js';
+import { t } from '../i18n.js';
 
 interface Props {
   /** WS client request 函数 */
@@ -159,8 +160,8 @@ export function ProviderPanel({ req, onConfigUpdated, onClose }: Props) {
   return (
     <div className="provider-panel">
       <div className="provider-header">
-        <h2>Providers</h2>
-        {onClose && <button className="icon-btn" onClick={onClose} title="Close"><X size={14} /></button>}
+        <h2>{t('ui.providers')}</h2>
+        {onClose && <button className="icon-btn" onClick={onClose} title={t('ui.close')}><X size={14} /></button>}
       </div>
       {error && <div className="error-banner">{error}</div>}
 
@@ -172,14 +173,14 @@ export function ProviderPanel({ req, onConfigUpdated, onClose }: Props) {
               {' · '}{models.length} model{models.length === 1 ? '' : 's'}
             </span>
             <button className="primary-btn" disabled={busy} onClick={() => setMode('add')}>
-              <Plus size={14} /> Add Provider
+              <Plus size={14} /> {t('ui.add_provider')}
             </button>
           </div>
 
           {providers.length === 0 && (
             <div className="empty-state">
-              <p>No providers configured.</p>
-              <p>Click "Add Provider" to set up OpenAI / Anthropic / Ollama / etc.</p>
+              <p>{t('ui.no_providers')}</p>
+              <p>{t('ui.no_providers_hint')}</p>
             </div>
           )}
 
@@ -192,22 +193,22 @@ export function ProviderPanel({ req, onConfigUpdated, onClose }: Props) {
                     <span className="provider-protocol">{p.protocol}</span>
                   </div>
                   <div className="provider-status">
-                    {!p.enabled && <span className="badge disabled">disabled</span>}
-                    {p.has_api_key ? <span className="badge ok">key set</span> : <span className="badge warn">no key</span>}
+                    {!p.enabled && <span className="badge disabled">{t('ui.disabled')}</span>}
+                    {p.has_api_key ? <span className="badge ok">{t('ui.key_set')}</span> : <span className="badge warn">{t('ui.no_key')}</span>}
                   </div>
                 </div>
                 <div className="provider-card-body">
                   <div className="provider-row"><span>URL:</span><code>{p.base_url}</code></div>
                   <div className="provider-row">
-                    <span>Models:</span>
+                    <span>{t('ui.models')}:</span>
                     <ul className="provider-models">
                       {p.models.map((m) => (
                         <li key={m}>
                           <code>{m}</code>
-                          <button className="link-btn" disabled={busy} onClick={() => handleSetDefault(m, p.name)} title="Set as default">
+                          <button className="link-btn" disabled={busy} onClick={() => handleSetDefault(m, p.name)} title={t('ui.set_default')}>
                             <Star size={14} />
                           </button>
-                          <button className="link-btn" disabled={busy} onClick={() => handleEditParams(p.name, m, p.protocol)}>Params</button>
+                          <button className="link-btn" disabled={busy} onClick={() => handleEditParams(p.name, m, p.protocol)}>{t('ui.params')}</button>
                         </li>
                       ))}
                     </ul>
@@ -222,11 +223,11 @@ export function ProviderPanel({ req, onConfigUpdated, onClose }: Props) {
                   )}
                 </div>
                 <div className="provider-card-actions">
-                  <button className="secondary-btn" disabled={busy} onClick={() => handleTest(p)}>Test</button>
+                  <button className="secondary-btn" disabled={busy} onClick={() => handleTest(p)}>{t('ui.test')}</button>
                   <button className="secondary-btn" disabled={busy} onClick={() => handleToggle(p)}>
-                    {p.enabled ? 'Disable' : 'Enable'}
+                    {p.enabled ? t('ui.disable') : t('ui.enable')}
                   </button>
-                  <button className="danger-btn" disabled={busy} onClick={() => handleDelete(p)}>Delete</button>
+                  <button className="danger-btn" disabled={busy} onClick={() => handleDelete(p)}>{t('ui.delete')}</button>
                 </div>
               </div>
             ))}
@@ -236,14 +237,14 @@ export function ProviderPanel({ req, onConfigUpdated, onClose }: Props) {
 
       {mode === 'add' && (
         <form className="provider-form" onSubmit={submitAdd}>
-          <h3>Add Provider</h3>
+          <h3>{t('ui.add_provider')}</h3>
           <div className="form-row">
-            <label>Name</label>
+            <label>{t('ui.name')}</label>
             <input type="text" value={name} onChange={(e) => setName(e.target.value)} required
               placeholder="e.g. openai-official" />
           </div>
           <div className="form-row">
-            <label>Protocol</label>
+            <label>{t('ui.protocol')}</label>
             <select value={protocol} onChange={(e) => {
               const v = e.target.value;
               setProtocol(v);
@@ -257,25 +258,25 @@ export function ProviderPanel({ req, onConfigUpdated, onClose }: Props) {
             </select>
           </div>
           <div className="form-row">
-            <label>Base URL</label>
+            <label>{t('ui.base_url')}</label>
             <input type="text" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}
               placeholder="https://api.openai.com/v1" required />
           </div>
           <div className="form-row">
-            <label>API Key</label>
+            <label>{t('ui.api_key')}</label>
             <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
               placeholder="sk-..." />
-            <span className="form-hint">支持 {'${ENV_VAR}'} 环境变量语法</span>
+            <span className="form-hint">{t('ui.env_var_hint')}</span>
           </div>
           <div className="form-row">
-            <label>Models</label>
+            <label>{t('ui.models')}</label>
             <input type="text" value={modelsInput} onChange={(e) => setModelsInput(e.target.value)}
-              placeholder="gpt-4o, gpt-4o-mini (逗号分隔)" />
+              placeholder={'gpt-4o, gpt-4o-mini (' + t('ui.comma_separated') + ')'} />
           </div>
           <div className="form-actions">
-            <button type="button" className="secondary-btn" onClick={() => setMode('list')}>Cancel</button>
+            <button type="button" className="secondary-btn" onClick={() => setMode('list')}>{t('ui.cancel')}</button>
             <button type="submit" className="primary-btn" disabled={busy || !name.trim() || !baseUrl.trim()}>
-              {busy ? 'Adding...' : 'Add'}
+              {busy ? t('ui.adding') : t('ui.add')}
             </button>
           </div>
         </form>
@@ -317,15 +318,14 @@ export function ProviderPanel({ req, onConfigUpdated, onClose }: Props) {
                 </div>
               ))}
               <div className="form-actions" style={{ marginTop: '12px' }}>
-                <button className="secondary-btn" onClick={() => setEditingParams(null)}>Cancel</button>
-                <button className="primary-btn" onClick={handleSaveParams} disabled={busy}>Save</button>
+                <button className="secondary-btn" onClick={() => setEditingParams(null)}>{t('ui.cancel')}</button>
+                <button className="primary-btn" onClick={handleSaveParams} disabled={busy}>{t('ui.save')}</button>
               </div>
             </div>
           </div>
         </div>
       )}
-
-      {busy && <div className="overlay-loading">working...</div>}
+      {busy && <div className="overlay-loading">{t('ui.working')}</div>}
     </div>
   );
 }

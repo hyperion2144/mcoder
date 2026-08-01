@@ -17,3 +17,4 @@ export { SettingView } from './SettingView.js';
 export { ProviderView } from './ProviderView.js';
 export { ThinkingPicker } from './ThinkingPicker.js';
 export { SubagentBar } from './SubagentBar.js';
+export { CommandPicker } from './CommandPicker.js';

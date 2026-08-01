@@ -23,6 +23,7 @@ import type { SessionMeta } from '@mcoder/shared/rpc/types.js';
 import { hydrateSnapshot, type SessionSnapshot } from '@mcoder/shared/rpc/sessionSnapshot.js';
 import { clearSessionUiState } from '@mcoder/shared/store/clearSessionUiState.js';
 import { useDesktopStore } from './store/index.js';
+import { t, setLang, getLang, loadLang } from './i18n.js';
 import { FileTree } from './components/FileTree.js';
 import { GraphView } from './components/GraphView.js';
 import { DiffViewer } from './components/DiffViewer.js';
@@ -35,6 +36,7 @@ import { ResumeBar } from './components/ResumeBar.js';
 import { SubagentBar } from './components/SubagentBar.js';
 import { TreeView } from './components/TreeView.js';
 import { ProviderPanel } from './components/ProviderPanel.js';
+import { CommandPicker, type CommandPickerHandle } from './components/CommandPicker.js';
 import { ToolCard } from '@mcoder/shared/toolCard/ToolCardHtml.js';
 import { formatUsageDelta } from '@mcoder/shared/utils/format.js';
 
@@ -217,7 +219,10 @@ export function App() {
   const [settingsTab, setSettingsTab] = useState<'general' | 'providers'>('general');
   const [remoteInput, setRemoteInput] = useState('');
   const [configValues, setConfigValues] = useState<Record<string, any>>({});
+  const [showCommandPicker, setShowCommandPicker] = useState(false);
+  const [, setLangVersion] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const commandPickerRef = useRef<CommandPickerHandle>(null);
   const sessionStore = useSessionStore();
   const msgStore = useMessagesStore();
   const desktop = useDesktopStore();
@@ -367,6 +372,8 @@ export function App() {
           const allSessions: SessionMeta[] = await c.request('sessions.list');
           sessionStore.setSessions(allSessions);
           desktop.setView('projects');
+          await loadLang(c);
+          setLangVersion(v => v + 1);
         } catch {}
       }).catch(e => {
         msgStore.setError(`Connection failed: ${e.message}`);
@@ -495,6 +502,9 @@ export function App() {
             }
             break;
           }
+          case 'config_updated':
+            loadLang(c).then(() => setLangVersion(v => v + 1));
+            break;
           case 'error':
             msgStore.setError(notif.params.message);
             msgStore.setStreaming(false);
@@ -708,6 +718,23 @@ export function App() {
   const handleSlash = async (cmd: string) => {
     if (!client) return;
 
+    // /lang <en|zh>: 切换界面语言
+    if (cmd.startsWith('/lang ')) {
+      const lang = cmd.slice('/lang '.length).trim();
+      if (lang === 'en' || lang === 'zh') {
+        try { await client.request('config.set_language', { language: lang }); } catch {}
+        setLang(lang as 'en' | 'zh');
+        setLangVersion(v => v + 1);
+      } else {
+        msgStore.setError(t('cmd.lang_usage'));
+      }
+      return;
+    }
+    if (cmd === '/lang') {
+      msgStore.addMessage({ role: 'system', content: [{ type: 'text', text: `${t('cmd.lang_current')} ${getLang()}` }] });
+      return;
+    }
+
     // /handoff <desc>: 把当前会话 handoff 给新子代理
     if (cmd.startsWith('/handoff ')) {
       const taskPrompt = cmd.slice('/handoff '.length).trim();
@@ -884,6 +911,28 @@ export function App() {
   };
 
   const onInputKeyDown = (e: React.KeyboardEvent) => {
+    if (showCommandPicker && commandPickerRef.current) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        commandPickerRef.current.moveCursor(1);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        commandPickerRef.current.moveCursor(-1);
+        return;
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        commandPickerRef.current.selectCurrent();
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowCommandPicker(false);
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       if (input.startsWith('/')) {
@@ -923,7 +972,7 @@ export function App() {
             ? <CircleDot size={14} color="var(--success)" />
             : <Circle size={14} color="var(--error)" />}
         </span>
-        <button className="header-settings" onClick={() => setShowSettings(true)} title="Settings">
+        <button className="header-settings" onClick={() => setShowSettings(true)} title={t('ui.settings')}>
           <Settings size={16} />
         </button>
         {view === 'sessions' && currentProject && (
@@ -983,7 +1032,7 @@ export function App() {
               <div className="messages">
                 {messages.length === 0 && !streaming && (
                   <div className="messages-empty">
-                    <div className="messages-empty-text">No messages yet</div>
+                    <div className="messages-empty-text">{t('ui.no_messages')}</div>
                   </div>
                 )}
                 {messages.map((msg, i) => (
@@ -1003,7 +1052,7 @@ export function App() {
                   </div>
                 )}
                 {!currentSessionId && !streaming && (
-                  <div className="streaming">No session selected. Press + to create one.</div>
+                  <div className="streaming">{t('ui.no_session_hint')}</div>
                 )}
               </div>
 
@@ -1032,15 +1081,30 @@ export function App() {
                     ))}
                   </div>
                 )}
-                <textarea
-                  value={input}
-                  onChange={e => setInput(e.target.value)}
-                  onKeyDown={onInputKeyDown}
-                  placeholder="type a message or /help for commands (Shift+Enter for newline)"
-                  rows={3}
-                />
+                <div className="input-wrap">
+                  {showCommandPicker && client && (
+                    <CommandPicker
+                      ref={commandPickerRef}
+                      client={client}
+                      filter={input}
+                      onSelect={(cmd) => { setInput(cmd + ' '); setShowCommandPicker(false); }}
+                      onClose={() => setShowCommandPicker(false)}
+                    />
+                  )}
+                  <textarea
+                    value={input}
+                    onChange={e => {
+                      const val = e.target.value;
+                      setInput(val);
+                      setShowCommandPicker(val.startsWith('/') && !val.includes(' '));
+                    }}
+                    onKeyDown={onInputKeyDown}
+                    placeholder={t('ui.send_message_shift')}
+                    rows={3}
+                  />
+                </div>
                 <div className="input-toolbar">
-                  <span className="input-hint">Enter to send · Shift+Enter for newline</span>
+                  <span className="input-hint">{t('ui.enter_to_send')} · {t('ui.shift_newline')}</span>
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -1052,10 +1116,10 @@ export function App() {
                   <button
                     className="attach-btn"
                     onClick={() => fileInputRef.current?.click()}
-                    title="Attach image"
-                  >Image</button>
+                    title={t('ui.attach_image')}
+                  >{t('ui.image')}</button>
                   {streaming && (
-                    <button className="cancel-btn" onClick={cancelStreaming}>Cancel</button>
+                    <button className="cancel-btn" onClick={cancelStreaming}>{t('ui.cancel')}</button>
                   )}
                 </div>
               </div>
@@ -1121,7 +1185,7 @@ export function App() {
                   {contextUsed > 1000 ? `${(contextUsed / 1000).toFixed(1)}k` : contextUsed}/{contextWindow > 1000 ? `${(contextWindow / 1000).toFixed(0)}k` : contextWindow}
                 </span>
                 {sessionCost > 0 && <span className="status-cost">${sessionCost.toFixed(3)}</span>}
-                {streaming && <span className="status-running">running</span>}
+                {streaming && <span className="status-running">{t('ui.running')}</span>}
               </div>
             </div>
 
@@ -1131,15 +1195,15 @@ export function App() {
                 <button
                   className={rightPanel === 'graph' ? 'active' : ''}
                   onClick={() => setRightPanel(rightPanel === 'graph' ? 'none' : 'graph')}
-                >Graph</button>
+                >{t('ui.graph')}</button>
                 <button
                   className={rightPanel === 'diff' ? 'active' : ''}
                   onClick={() => setRightPanel(rightPanel === 'diff' ? 'none' : 'diff')}
-                >Diff</button>
+                >{t('ui.diff')}</button>
                 <button
                   className={rightPanel === 'tree' ? 'active' : ''}
                   onClick={() => setRightPanel(rightPanel === 'tree' ? 'none' : 'tree')}
-                >Tree</button>
+                >{t('ui.tree')}</button>
                 {previewFile && (
                   <button
                     className={rightPanel === 'file' ? 'active' : ''}
@@ -1167,7 +1231,7 @@ export function App() {
                 )}
                 {rightPanel === 'none' && (
                   <div className="right-panel-empty">
-                    <div>Select Graph, Diff, or click a file</div>
+                    <div>{t('ui.select_graph_hint')}</div>
                   </div>
                 )}
               </div>
@@ -1179,10 +1243,10 @@ export function App() {
         <div className="settings-overlay" onClick={(e) => { if (e.target === e.currentTarget) setShowSettings(false); }}>
           <div className="settings-panel">
             <div className="settings-header">
-              <span>Settings</span>
+              <span>{t('ui.settings')}</span>
               <div className="settings-tabs">
-                <button className={settingsTab === 'general' ? 'tab active' : 'tab'} onClick={() => setSettingsTab('general')}>General</button>
-                <button className={settingsTab === 'providers' ? 'tab active' : 'tab'} onClick={() => setSettingsTab('providers')}>Providers</button>
+                <button className={settingsTab === 'general' ? 'tab active' : 'tab'} onClick={() => setSettingsTab('general')}>{t('ui.general')}</button>
+                <button className={settingsTab === 'providers' ? 'tab active' : 'tab'} onClick={() => setSettingsTab('providers')}>{t('ui.providers')}</button>
               </div>
               <button onClick={() => setShowSettings(false)}>
                 <X size={16} />
@@ -1200,12 +1264,31 @@ export function App() {
                 />
               )}
               {settingsTab === 'general' && (<>
-              {/* Server Connection section */}
-              <div className="setting-section-title">Server Connection</div>
+              {/* Language section */}
               <div className="setting-row">
                 <div className="setting-label">
-                  <span className="setting-name">Remote Server</span>
-                  <span className="setting-desc">Connect to a remote mcoder server</span>
+                  <span className="setting-name">{t('ui.language')}</span>
+                </div>
+                <div className="setting-control">
+                  <select value={getLang()} onChange={async (e) => {
+                    const lang = (e.target.value === 'zh' ? 'zh' : 'en') as 'en' | 'zh';
+                    if (client) {
+                      try { await client.request('config.set_language', { language: lang }); } catch {}
+                    }
+                    setLang(lang);
+                    setLangVersion(v => v + 1);
+                  }}>
+                    <option value="en">English</option>
+                    <option value="zh">中文</option>
+                  </select>
+                </div>
+              </div>
+              {/* Server Connection section */}
+              <div className="setting-section-title">{t('ui.server_connection')}</div>
+              <div className="setting-row">
+                <div className="setting-label">
+                  <span className="setting-name">{t('ui.remote_server')}</span>
+                  <span className="setting-desc">{t('ui.remote_server_desc')}</span>
                 </div>
                 <div className="setting-control">
                   <input
@@ -1219,25 +1302,25 @@ export function App() {
                     className="setting-connect-btn"
                     onClick={() => handleRemoteConnect(remoteInput)}
                   >
-                    Connect
+                    {t('ui.connect')}
                   </button>
                 </div>
               </div>
               <div className="setting-row">
                 <div className="setting-label">
-                  <span className="setting-name">Model</span>
-                  <span className="setting-desc">LLM model for this session</span>
+                  <span className="setting-name">{t('ui.model')}</span>
+                  <span className="setting-desc">{t('ui.model_desc')}</span>
                 </div>
                 <div className="setting-control">
                   <button className="setting-model-btn" onClick={() => { setShowSettings(false); handleModelClick(); }}>
-                    {currentModel || '(not set)'} <ChevronDown size={12} />
+                    {currentModel || t('ui.not_set')} <ChevronDown size={12} />
                   </button>
                 </div>
               </div>
               <div className="setting-row">
                 <div className="setting-label">
-                  <span className="setting-name">Role</span>
-                  <span className="setting-desc">Agent role / mode</span>
+                  <span className="setting-name">{t('ui.role')}</span>
+                  <span className="setting-desc">{t('ui.role_desc')}</span>
                 </div>
                 <div className="setting-control">
                   <select value={currentRole} onChange={(e) => handleRoleChange(e.target.value)}>
@@ -1251,8 +1334,8 @@ export function App() {
               </div>
               <div className="setting-row">
                 <div className="setting-label">
-                  <span className="setting-name">Max Iterations</span>
-                  <span className="setting-desc">Max agent loop iterations</span>
+                  <span className="setting-name">{t('ui.max_iterations')}</span>
+                  <span className="setting-desc">{t('ui.max_iterations_desc')}</span>
                 </div>
                 <div className="setting-control">
                   <input type="number" min={1} key={`iters-${configValues.loop_max_iters}`} defaultValue={configValues.loop_max_iters ?? ''} onBlur={(e) => { const v = e.target.value; if (v !== '') handleConfigSet('loop_max_iters', Number(v)); }} />
@@ -1260,8 +1343,8 @@ export function App() {
               </div>
               <div className="setting-row">
                 <div className="setting-label">
-                  <span className="setting-name">Compact Threshold</span>
-                  <span className="setting-desc">Context fill ratio (0-1) to trigger compaction</span>
+                  <span className="setting-name">{t('ui.compact_threshold')}</span>
+                  <span className="setting-desc">{t('ui.compact_threshold_desc')}</span>
                 </div>
                 <div className="setting-control">
                   <input type="number" min={0} max={1} step={0.1} key={`threshold-${configValues.compact?.threshold}`} defaultValue={configValues.compact?.threshold ?? ''} onBlur={(e) => { const v = e.target.value; if (v !== '') handleConfigSet('compact.threshold', Number(v)); }} />
@@ -1269,8 +1352,8 @@ export function App() {
               </div>
               <div className="setting-row">
                 <div className="setting-label">
-                  <span className="setting-name">Compact Keep Recent</span>
-                  <span className="setting-desc">Messages to keep after compaction</span>
+                  <span className="setting-name">{t('ui.compact_keep_recent')}</span>
+                  <span className="setting-desc">{t('ui.compact_keep_recent_desc')}</span>
                 </div>
                 <div className="setting-control">
                   <input type="number" min={0} key={`keeprecent-${configValues.compact?.keep_recent}`} defaultValue={configValues.compact?.keep_recent ?? ''} onBlur={(e) => { const v = e.target.value; if (v !== '') handleConfigSet('compact.keep_recent', Number(v)); }} />
@@ -1278,8 +1361,8 @@ export function App() {
               </div>
               <div className="setting-row">
                 <div className="setting-label">
-                  <span className="setting-name">Memory Auto Recall</span>
-                  <span className="setting-desc">Automatically recall relevant memories</span>
+                  <span className="setting-name">{t('ui.memory_auto_recall')}</span>
+                  <span className="setting-desc">{t('ui.memory_auto_recall_desc')}</span>
                 </div>
                 <div className="setting-control">
                   <button className={`setting-toggle ${configValues.memory?.auto_recall ? 'on' : 'off'}`} onClick={() => handleConfigSet('memory.auto_recall', !configValues.memory?.auto_recall)} />
@@ -1287,8 +1370,8 @@ export function App() {
               </div>
               <div className="setting-row">
                 <div className="setting-label">
-                  <span className="setting-name">Memory Auto Capture</span>
-                  <span className="setting-desc">Automatically capture memories from conversations</span>
+                  <span className="setting-name">{t('ui.memory_auto_capture')}</span>
+                  <span className="setting-desc">{t('ui.memory_auto_capture_desc')}</span>
                 </div>
                 <div className="setting-control">
                   <button className={`setting-toggle ${configValues.memory?.auto_capture ? 'on' : 'off'}`} onClick={() => handleConfigSet('memory.auto_capture', !configValues.memory?.auto_capture)} />
@@ -1297,19 +1380,19 @@ export function App() {
               <div className="setting-section-title">Info</div>
               <div className="setting-row setting-row-info">
                 <div className="setting-label">
-                  <span className="setting-name">Version</span>
+                  <span className="setting-name">{t('ui.version')}</span>
                 </div>
                 <div className="setting-control setting-control-text">{version || '-'}</div>
               </div>
               <div className="setting-row setting-row-info">
                 <div className="setting-label">
-                  <span className="setting-name">Project Path</span>
+                  <span className="setting-name">{t('ui.project_path')}</span>
                 </div>
                 <div className="setting-control setting-control-text" title={projectPath}>{projectPath || '-'}</div>
               </div>
               <div className="setting-row setting-row-info">
                 <div className="setting-label">
-                  <span className="setting-name">LSP Servers</span>
+                  <span className="setting-name">{t('ui.lsp_servers')}</span>
                 </div>
                 <div className="setting-control setting-control-text">{lspServers.length > 0 ? lspServers.join(', ') : '-'}</div>
               </div>

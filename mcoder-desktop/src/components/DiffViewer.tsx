@@ -3,6 +3,7 @@
 
 import React, { useState, useEffect } from 'react';
 import type { WsClient } from '@mcoder/shared/rpc/client.js';
+import { t } from '../i18n.js';
 
 export function DiffViewer({ client }: { client: WsClient }) {
   const [diff, setDiff] = useState<string>('');
@@ -41,14 +42,14 @@ export function DiffViewer({ client }: { client: WsClient }) {
   return (
     <div className="diff-viewer">
       <div className="diff-viewer-header">
-        <span>Git Diff</span>
+        <span>{t('ui.git_diff')}</span>
         <button onClick={loadDiff} disabled={loading}>
-          {loading ? 'Loading...' : 'Refresh'}
+          {loading ? t('ui.loading') : t('ui.refresh')}
         </button>
       </div>
       <div className="diff-content">
         {diff ? diff.split('\n').map(renderLine) : (
-          <div className="diff-empty">No changes</div>
+          <div className="diff-empty">{t('ui.no_changes')}</div>
         )}
       </div>
     </div>

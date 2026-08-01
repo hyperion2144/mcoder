@@ -3,6 +3,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import type { WsClient } from '@mcoder/shared/rpc/client.js';
+import { t } from '../i18n.js';
 
 interface GraphNode {
   id: string;
@@ -69,9 +70,9 @@ export function GraphView({ client }: { client: WsClient }) {
   return (
     <div className="graph-view">
       <div className="graph-view-header">
-        <span>Code Graph</span>
+        <span>{t('ui.code_graph')}</span>
         <button onClick={loadGraph} disabled={loading}>
-          {loading ? 'Loading...' : 'Refresh'}
+          {loading ? t('ui.loading') : t('ui.refresh')}
         </button>
       </div>
       <svg ref={svgRef} className="graph-svg" width="100%" height="600">
@@ -114,7 +115,7 @@ export function GraphView({ client }: { client: WsClient }) {
         ))}
       </svg>
       {nodes.length === 0 && !loading && (
-        <div className="graph-empty">No graph data. Run graph_index first.</div>
+        <div className="graph-empty">{t('ui.no_graph_data')}</div>
       )}
     </div>
   );
