@@ -696,89 +696,94 @@ export function App({ client: initialClient }: Props) {
 
   return (
     <Box flexDirection="column" height="100%">
-      {/* 消息区（可滚动）。header card + messages + tool cards 内联渲染 */}
-      <MessageList
-        askRenderState={
-          pendingAsk
-            ? { kind: 'pending', ask_id: pendingAsk.ask_id, tool_call_id: pendingAsk.tool_call_id, request: pendingAsk.request, selections: selMap, focusIndex: focusIdx, notes: noteMap }
-            : lastSub
-              ? { kind: 'submitted', ask_id: lastSub.ask_id, tool_call_id: lastSub.tool_call_id, submission: lastSub.submission }
-              : null
-        }
-        sessionId={sid}
-        version={sessionStore.version}
-        lspServers={sessionStore.lspServers}
-      />
-
-      {/* Plan 审批（独立保留；ask 是另一套） */}
-      <PlanApproval client={client} />
-
-      {/* 覆盖层视图 */}
-      {currentView === 'sessions' && <SessionList />}
-      {currentView === 'todos' && <TodoView />}
-      {currentView === 'tasks' && <TaskMonitor />}
-      {currentView === 'config' && <ConfigView />}
-      {currentView === 'help' && <HelpView client={client} />}
-      {currentView === 'tree' && <TreeView client={client} />}
-      {currentView === 'model' && <ModelView client={client} />}
-      {currentView === 'setting' && <SettingView client={client} />}
-      {currentView === 'provider' && <ProviderView client={client} onClose={() => uiStore.setView('chat')} pendingPermission={!!(sid && permissionStore.pending[sid])} />}
-      {currentView === 'thinking' && (
-        <ThinkingPicker
-          client={client}
-          sessionId={sid}
-          currentDepth={getThinkingFor(sid)}
-          onApplied={(depth) => setThinkingFor(sid, depth)}
-          onClose={() => {
-            uiStore.setView('chat');
-            setShowCommandPicker(false);
-          }}
-          pendingPermission={!!(sid && permissionStore.pending[sid])}
-        />
+      {/* ===== Transcript (flex:1, scrollable) ===== */}
+      {/* Full-screen views replace the transcript content entirely */}
+      {currentView === 'setting' ? (
+        <SettingView client={client} />
+      ) : currentView === 'provider' ? (
+        <ProviderView client={client} onClose={() => uiStore.setView('chat')} pendingPermission={!!(sid && permissionStore.pending[sid])} />
+      ) : sessionStore.pendingPlan ? (
+        <PlanApproval client={client} />
+      ) : (
+        <Box flexGrow={1} overflow="hidden" flexDirection="column">
+          <MessageList
+            askRenderState={
+              pendingAsk
+                ? { kind: 'pending', ask_id: pendingAsk.ask_id, tool_call_id: pendingAsk.tool_call_id, request: pendingAsk.request, selections: selMap, focusIndex: focusIdx, notes: noteMap }
+                : lastSub
+                  ? { kind: 'submitted', ask_id: lastSub.ask_id, tool_call_id: lastSub.tool_call_id, submission: lastSub.submission }
+                  : null
+            }
+            sessionId={sid}
+            version={sessionStore.version}
+            lspServers={sessionStore.lspServers}
+          />
+          {/* Overlay views (rendered on top of MessageList) */}
+          {currentView === 'sessions' && <SessionList />}
+          {currentView === 'todos' && <TodoView />}
+          {currentView === 'tasks' && <TaskMonitor />}
+          {currentView === 'config' && <ConfigView />}
+          {currentView === 'help' && <HelpView client={client} />}
+          {currentView === 'tree' && <TreeView client={client} />}
+          {currentView === 'thinking' && (
+            <ThinkingPicker
+              client={client}
+              sessionId={sid}
+              currentDepth={getThinkingFor(sid)}
+              onApplied={(depth) => setThinkingFor(sid, depth)}
+              onClose={() => {
+                uiStore.setView('chat');
+                setShowCommandPicker(false);
+              }}
+              pendingPermission={!!(sid && permissionStore.pending[sid])}
+            />
+          )}
+        </Box>
       )}
 
-      {/* Todo 摘要条（消息区下方、输入框上方）；全部完成时隐藏 */}
-      <TodoSummaryBar />
+      {/* Model switcher: bottom sheet overlay (not a full-screen replacement) */}
+      {currentView === 'model' && <ModelView client={client} />}
 
-      {/* 子代理实时面板（无子代理时隐藏；Ctrl+A 切换焦点） */}
-      <SubagentBar
-        client={client}
-        currentSessionId={sid}
-        onSwitchSession={(targetSid) => {
-          // 切换 session（复用 /sessions open 的逻辑）
-          (async () => {
-            try {
-              // 清理旧 session UI 状态
-              const oldSid = sessionStore.currentSessionId;
-              if (oldSid && oldSid !== targetSid) {
-                clearSessionUiState({ sessionId: oldSid });
-              }
-              const snapshot = await client.request('session.attach', { session_id: targetSid }) as SessionSnapshot;
-              client.setReconnectSession(targetSid);
-              hydrateSnapshot({
-                sessionId: targetSid,
-                snapshot,
-                currentMessageCount: 0,
-                store: buildHydrateStore(0),
-              });
-              // 补全 hydrateSnapshot 不覆盖的状态
-              sessionStore.setLoopState(snapshot.session.loop_state, snapshot.session.stop_reason);
-              sessionStore.setCanResume(snapshot.can_resume);
-              sessionStore.setVersion(snapshot.session.version);
-              sessionStore.setLspServers(snapshot.session.lsp_servers);
-            } catch (e: any) {
-              msgStore.setError(`switch session failed: ${e.message}`);
-            }
-          })();
-        }}
-        pendingPermission={!!(sid && permissionStore.pending[sid])}
-        isActive={!showCommandPicker}
-      />
+      {/* ===== Bottom dock (flex:0 0 auto, fixed) ===== */}
+      {/* Inline sections: todos + sub-agents (only in chat view) */}
+      {currentView === 'chat' && !sessionStore.pendingPlan && (
+        <>
+          <TodoSummaryBar />
+          <SubagentBar
+            client={client}
+            currentSessionId={sid}
+            onSwitchSession={(targetSid) => {
+              (async () => {
+                try {
+                  const oldSid = sessionStore.currentSessionId;
+                  if (oldSid && oldSid !== targetSid) {
+                    clearSessionUiState({ sessionId: oldSid });
+                  }
+                  const snapshot = await client.request('session.attach', { session_id: targetSid }) as SessionSnapshot;
+                  client.setReconnectSession(targetSid);
+                  hydrateSnapshot({
+                    sessionId: targetSid,
+                    snapshot,
+                    currentMessageCount: 0,
+                    store: buildHydrateStore(0),
+                  });
+                  sessionStore.setLoopState(snapshot.session.loop_state, snapshot.session.stop_reason);
+                  sessionStore.setCanResume(snapshot.can_resume);
+                  sessionStore.setVersion(snapshot.session.version);
+                  sessionStore.setLspServers(snapshot.session.lsp_servers);
+                } catch (e: any) {
+                  msgStore.setError(`switch session failed: ${e.message}`);
+                }
+              })();
+            }}
+            pendingPermission={!!(sid && permissionStore.pending[sid])}
+            isActive={!showCommandPicker}
+          />
+          <ResumeBar sessionId={sid} />
+        </>
+      )}
 
-      {/* Phase 3: Resume 入口（固定状态提示附近；非模态） */}
-      <ResumeBar sessionId={sid} />
-
-      {/* 命令选择面板（输入 / 时弹出，显示在输入框上方） */}
+      {/* Command picker (above input box) */}
       {showCommandPicker && (
         <CommandPicker
           client={client}
@@ -793,16 +798,18 @@ export function App({ client: initialClient }: Props) {
         />
       )}
 
-      {/* 输入框。ask 模式下显示 ask 提示 */}
-      <InputBox
-        value={input}
-        onChange={handleInputChange}
-        onSubmit={onSubmit}
-        isActive={!showCommandPicker}
-        placeholder={askInputMode && pendingAsk
-          ? `ask Q${focusIdx + 1} ${PREFIX.sep} 1-${pendingAsk.request.questions[focusIdx]?.options.length || 0}`
-          : undefined}
-      />
+      {/* Input box (always visible in chat/plan views; hidden in full-screen views) */}
+      {(currentView === 'chat' || currentView === 'model' || sessionStore.pendingPlan) && !showCommandPicker && (
+        <InputBox
+          value={input}
+          onChange={handleInputChange}
+          onSubmit={onSubmit}
+          isActive={!showCommandPicker}
+          placeholder={askInputMode && pendingAsk
+            ? `ask Q${focusIdx + 1} ${PREFIX.sep} 1-${pendingAsk.request.questions[focusIdx]?.options.length || 0}`
+            : undefined}
+        />
+      )}
     </Box>
   );
 }

@@ -1,14 +1,15 @@
-// 设计文档 §provider: TUI ProviderView
-// - 列出现有供应商 + 协议下拉 + 模型列表
-// - 添加/删除/测试/toggle/set-default 操作；通过 RPC 调服务端
-// - S4 修复: 通过 pendingPermission prop 避免与权限审批快捷键冲突
+// 设计文档 §provider: TUI ProviderView — prototype-matched full-screen layout
+// - Full-screen view: topbar + 3 tool-cards (Active Providers, Routing Rules, Health) + bottom dock
+// - Preserves all RPC logic: provider CRUD, test, params, set-default, config_updated listener
+// - S4 修复: pendingPermission prop 避免与权限审批快捷键冲突
 // - S5 修复: busy 不阻塞 Esc
-// - M12 修复: config_updated 通知在 add 模式时不触发 refresh（不打断表单）
+// - M12 修复: config_updated 通知在 add 模式时不触发 refresh
 
 import { useEffect, useState, useRef } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { TUI_COLORS, PREFIX } from '../theme.js';
 import { t } from '../i18n.js';
+import { useSessionStore } from '../store/index.js';
 import type { WsClient } from '../rpc/client.js';
 import {
   listProviders, listModels, listProtocols, addProvider, deleteProvider,
@@ -31,8 +32,6 @@ interface ParamField {
 }
 
 /// 从 protocol schema JSON 解析出可编辑字段列表
-/// M2 修复: 后端统一返回 { fields: [{ name, type, options, default, ... }] } 格式
-/// 不再 fallback 到 DEFAULT_PARAM_FIELDS 或 JSON Schema properties
 function parseSchemaFields(schema: any): ParamField[] | null {
   if (!schema) return null;
   if (Array.isArray(schema.fields)) {
@@ -62,10 +61,19 @@ function convertParamValue(field: ParamField, strVal: string): any {
   return strVal;
 }
 
-// L3 修复: 移除未使用的 'edit' mode
+// Static routing rules (prototype visual — no backend RPC for rules CRUD)
+const ROUTING_RULES = [
+  { id: 1, condition: 'tag "complex reasoning"', model: 'claude-opus-4' },
+  { id: 2, condition: 'tag "code generation"', model: 'claude-sonnet-4' },
+  { id: 3, condition: 'tag "fast iteration"', model: 'deepseek-chat' },
+  { id: 4, condition: 'tag "default"', model: 'gpt-4o' },
+];
+
 type Mode = 'list' | 'add' | 'confirm-delete' | 'params';
 
 export function ProviderView({ client, onClose, pendingPermission }: Props) {
+  const sessionStore = useSessionStore();
+
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [protocols, setProtocols] = useState<ProtocolInfo[]>([]);
@@ -83,8 +91,9 @@ export function ProviderView({ client, onClose, pendingPermission }: Props) {
   const [formField, setFormField] = useState<0 | 1 | 2 | 3 | 4>(0);
   const [protocolIdx, setProtocolIdx] = useState(0);
   // L5 修复: per-provider testResult map
-  // 测试结果状态（结构化：ok 标志 + text 文本）；UI 渲染时根据 ok 选择 PREFIX.done / PREFIX.failed
   const [testResults, setTestResults] = useState<Record<string, { ok: boolean; text: string }>>({});
+  // Health card: track last test timestamp
+  const [lastTestTime, setLastTestTime] = useState<string>('');
 
   // per-model 参数编辑状态
   const [paramsProvider, setParamsProvider] = useState<ProviderInfo | null>(null);
@@ -97,6 +106,9 @@ export function ProviderView({ client, onClose, pendingPermission }: Props) {
   // M12 修复: refresh 不在 add 模式时触发（避免打断表单编辑）
   const modeRef = useRef(mode);
   modeRef.current = mode;
+
+  // Determine default provider from current model
+  const defaultProviderName = models.find(m => m.name === sessionStore.currentModel)?.provider || '';
 
   const refresh = async () => {
     // M12: add 模式时不 refresh（避免 setBusy 打断输入）
@@ -128,6 +140,10 @@ export function ProviderView({ client, onClose, pendingPermission }: Props) {
     return () => client.offNotification(handler);
   }, []);
 
+  // ===== Helpers =====
+  const isLocalProvider = (p: ProviderInfo) =>
+    p.base_url.includes('localhost') || p.base_url.includes('127.0.0.1') || p.base_url.includes('0.0.0.0');
+
   // S4 修复: 有 pending permission 时不激活 useInput，避免快捷键冲突
   useInput((input, key) => {
     // S5 修复: Esc 始终可用，不被 busy 阻塞
@@ -142,13 +158,14 @@ export function ProviderView({ client, onClose, pendingPermission }: Props) {
     if (mode === 'list') {
       if (key.upArrow) setCursor((c) => Math.max(0, c - 1));
       else if (key.downArrow) setCursor((c) => Math.min(Math.max(0, providers.length - 1), c + 1));
-      else if (input === 'a') {
+      else if (input === 'a' || input === '+') {
         setMode('add'); setFormField(0); setName(''); setProtocol('openai');
         setBaseUrl(''); setApiKey(''); setModelsInput(''); setProtocolIdx(0);
       }
       else if (input === 't' && providers[cursor]) {
         const pname = providers[cursor].name;
         setTestResults((m) => ({ ...m, [pname]: { ok: false, text: '...' } }));
+        setLastTestTime(new Date().toISOString().replace('T', ' ').slice(0, 19));
         (async () => {
           setBusy(true);
           try {
@@ -189,14 +206,13 @@ export function ProviderView({ client, onClose, pendingPermission }: Props) {
               client.request('config.get_model_params', { provider: p.name, model: p.models[0] }).catch(() => ({})),
             ]);
             const fields = parseSchemaFields(schema);
-            // M2 修复: schema 缺失 fields 数组时显式提示用户（不再 fallback）
+            // M2 修复: schema 缺失 fields 数组时显式提示用户
             if (!fields) {
               setParamsLoadError(t('ui.cannot_get_schema'));
               return;
             }
             setParamsLoadError(null);
             setParamsFields(fields);
-            // 把 params 值转为字符串存入编辑缓冲区
             const buf: Record<string, string> = {};
             for (const f of fields) {
               const v = (params as any)?.[f.name];
@@ -215,7 +231,6 @@ export function ProviderView({ client, onClose, pendingPermission }: Props) {
         (async () => {
           setBusy(true);
           try {
-            // L9 修复: set-default 成功后给反馈
             await setDefault(client.request.bind(client), p.models[0], p.name);
             setError(null);
           } catch (e: any) { setError(e.message); }
@@ -283,7 +298,7 @@ export function ProviderView({ client, onClose, pendingPermission }: Props) {
         else if (formField === 4) setModelsInput((s) => s + input);
       }
     } else if (mode === 'params') {
-      // per-model 参数编辑：↑↓/Tab 导航字段，←/→ 切换枚举，Enter 保存，m 切换模型
+      // per-model 参数编辑：↑↓/Tab 导航字段，←/-> 切换枚举，Enter 保存，m 切换模型
       if (key.upArrow) {
         setParamsFieldIdx((i) => Math.max(0, i - 1));
       } else if (key.downArrow) {
@@ -360,101 +375,254 @@ export function ProviderView({ client, onClose, pendingPermission }: Props) {
     }
   }, { isActive: !pendingPermission }); // S4: 有 pending permission 时停用
 
+  // ===== Add mode render =====
   if (mode === 'add') {
     const labels = ['name', t('ui.protocol_field'), 'base_url', 'api_key', `models (${t('ui.comma_separated')})`];
     const vals = [name, protocol, baseUrl, apiKey, modelsInput];
     return (
-      <Box flexDirection="column" borderStyle="single" borderColor={TUI_COLORS.accent} paddingX={1}>
-        <Text color={TUI_COLORS.textPrimary}>{PREFIX.setting} {t('ui.add_provider')}</Text>
-        {labels.map((label, i) => (
-          <Box key={label}>
-            <Text color={i === formField ? TUI_COLORS.accent : TUI_COLORS.textMuted}>{i === formField ? `${PREFIX.selected} ` : '  '}{label.padEnd(20)}</Text>
-            <Text color={TUI_COLORS.textPrimary}>{vals[i] || (i === formField ? '▏' : '')}</Text>
+      <Box flexDirection="column" paddingX={1}>
+        <Box flexDirection="column" borderStyle="round" borderColor={TUI_COLORS.accent} paddingX={2} paddingY={1}>
+          <Box marginBottom={1}>
+            <Text bold color={TUI_COLORS.accent}>Add Provider</Text>
+            <Text color={TUI_COLORS.textMuted}> {PREFIX.sep} Tab: next {PREFIX.sep} ↑↓: protocol {PREFIX.sep} Enter: submit {PREFIX.sep} Esc: cancel</Text>
           </Box>
-        ))}
-        <Text color={TUI_COLORS.textMuted}>{t('hint.provider_add_form')}</Text>
-        {/* L1 修复: 用 PREFIX.error */}
-        {error && <Text color={TUI_COLORS.error}>{PREFIX.error} {error}</Text>}
-        {/* L2 修复: 用 PREFIX.loading */}
-        {busy && <Text color={TUI_COLORS.accent}>{PREFIX.loading} {t('ui.submitting')}</Text>}
+          {labels.map((label, i) => (
+            <Box key={label}>
+              <Text color={i === formField ? TUI_COLORS.accent : TUI_COLORS.textMuted}>{i === formField ? `${PREFIX.selected} ` : '  '}{label.padEnd(20)}</Text>
+              <Text color={TUI_COLORS.textPrimary}>{vals[i] || (i === formField ? '▏' : '')}</Text>
+            </Box>
+          ))}
+          {error && <Text color={TUI_COLORS.error}>{PREFIX.error} {error}</Text>}
+          {busy && <Text color={TUI_COLORS.accent}>{PREFIX.loading} {t('ui.submitting')}</Text>}
+        </Box>
       </Box>
     );
   }
 
+  // ===== Params mode render =====
   if (mode === 'params' && paramsProvider) {
     const model = paramsProvider.models[paramsModelIdx];
     if (paramsLoadError) {
       return (
-        <Box flexDirection="column" borderStyle="single" borderColor={TUI_COLORS.error} paddingX={1}>
-          <Text color={TUI_COLORS.textPrimary}>{PREFIX.setting} {t('ui.params')}: {paramsProvider.name} / {model}</Text>
-          <Text color={TUI_COLORS.error}>{PREFIX.error} {paramsLoadError}</Text>
-          <Text color={TUI_COLORS.textMuted}>{PREFIX.sep} {t('hint.esc_close')}</Text>
+        <Box flexDirection="column" paddingX={1}>
+          <Box flexDirection="column" borderStyle="round" borderColor={TUI_COLORS.error} paddingX={2} paddingY={1}>
+            <Text bold color={TUI_COLORS.error}>{PREFIX.error} {t('ui.params')}: {paramsProvider.name} / {model}</Text>
+            <Text color={TUI_COLORS.textMuted}>{t('hint.esc_close')}</Text>
+          </Box>
         </Box>
       );
     }
     return (
-      <Box flexDirection="column" borderStyle="single" borderColor={TUI_COLORS.accent} paddingX={1}>
-        <Text color={TUI_COLORS.textPrimary}>{PREFIX.setting} {t('ui.params')}: {paramsProvider.name} / {model} ({paramsModelIdx + 1}/{paramsProvider.models.length})</Text>
-        <Text color={TUI_COLORS.textMuted}>{PREFIX.textMuted} {t('ui.protocol_field')}: {paramsProvider.protocol}</Text>
-        <Text color={TUI_COLORS.textMuted}>{'─'.repeat(60)}</Text>
-        {paramsFields.map((f, i) => (
-          <Box key={f.name}>
-            <Text color={i === paramsFieldIdx ? TUI_COLORS.accent : TUI_COLORS.textMuted}>
-              {i === paramsFieldIdx ? `${PREFIX.selected} ` : '  '}
-              {f.name.padEnd(20)}
-            </Text>
-            <Text color={TUI_COLORS.textPrimary}>
-              {f.type === 'enum'
-                ? (paramsBuffer[f.name] != null && paramsBuffer[f.name] !== ''
-                  ? `[${paramsBuffer[f.name]}]`
-                  : `<default>`)
-                : (paramsBuffer[f.name] || '▏')}
-            </Text>
-            <Text color={TUI_COLORS.textMuted}> ({f.type}{f.options ? `: ${f.options.join('/')}` : ''})</Text>
+      <Box flexDirection="column" paddingX={1}>
+        <Box flexDirection="column" borderStyle="round" borderColor={TUI_COLORS.accent} paddingX={2} paddingY={1}>
+          <Box marginBottom={1}>
+            <Text bold color={TUI_COLORS.accent}>{t('ui.params')}: {paramsProvider.name} / {model}</Text>
+            <Text color={TUI_COLORS.textMuted}> ({paramsModelIdx + 1}/{paramsProvider.models.length})</Text>
           </Box>
-        ))}
-        <Text color={TUI_COLORS.textMuted}>{t('hint.provider_params')}</Text>
-        {error && <Text color={TUI_COLORS.error}>{PREFIX.error} {error}</Text>}
-        {busy && <Text color={TUI_COLORS.accent}>{PREFIX.loading} {t('ui.loading')}</Text>}
+          <Text color={TUI_COLORS.textMuted}>{t('ui.protocol_field')}: {paramsProvider.protocol}</Text>
+          <Text color={TUI_COLORS.textMuted}>{'─'.repeat(50)}</Text>
+          {paramsFields.map((f, i) => (
+            <Box key={f.name}>
+              <Text color={i === paramsFieldIdx ? TUI_COLORS.accent : TUI_COLORS.textMuted}>
+                {i === paramsFieldIdx ? `${PREFIX.selected} ` : '  '}
+                {f.name.padEnd(20)}
+              </Text>
+              <Text color={TUI_COLORS.textPrimary}>
+                {f.type === 'enum'
+                  ? (paramsBuffer[f.name] != null && paramsBuffer[f.name] !== ''
+                    ? `[${paramsBuffer[f.name]}]`
+                    : `<default>`)
+                  : (paramsBuffer[f.name] || '▏')}
+              </Text>
+              <Text color={TUI_COLORS.textMuted}> ({f.type}{f.options ? `: ${f.options.join('/')}` : ''})</Text>
+            </Box>
+          ))}
+          <Text color={TUI_COLORS.textMuted}>{t('hint.provider_params')}</Text>
+          {error && <Text color={TUI_COLORS.error}>{PREFIX.error} {error}</Text>}
+          {busy && <Text color={TUI_COLORS.accent}>{PREFIX.loading} {t('ui.loading')}</Text>}
+        </Box>
       </Box>
     );
   }
 
+  // ===== Main list view render =====
+  const operationalCount = providers.filter(p => p.enabled).length;
+  const offlineCount = providers.length - operationalCount;
+
   return (
-    <Box flexDirection="column" borderStyle="single" borderColor={TUI_COLORS.accent} paddingX={1}>
-      <Text color={TUI_COLORS.textPrimary}>{PREFIX.setting} {t('ui.providers')} ({providers.length})</Text>
-      <Text color={TUI_COLORS.textMuted}>{`${PREFIX.textMuted} ${t('ui.models')}: ${models.length} | a:${t('ui.add')} t:${t('ui.test')} d:${t('ui.delete')} e:toggle p:${t('ui.params')} ⏎:${t('ui.set_default')} Esc:${t('ui.close')}`}</Text>
-      <Text color={TUI_COLORS.textMuted}>{'─'.repeat(60)}</Text>
-      {providers.length === 0 && (
-        <Text color={TUI_COLORS.textMuted}>  {t('ui.no_providers_add')}</Text>
-      )}
-      {providers.map((p, i) => (
-        <Box key={p.name}>
-          <Text color={i === cursor ? TUI_COLORS.accent : TUI_COLORS.textMuted}>{i === cursor ? `${PREFIX.selected} ` : '  '}</Text>
-          <Text color={TUI_COLORS.textPrimary}>{p.name.padEnd(20)} </Text>
-          <Text color={TUI_COLORS.textMuted}>{p.protocol.padEnd(14)} </Text>
-          <Text color={TUI_COLORS.textMuted}>{p.models.length} {t('ui.models')}  </Text>
-          {!p.enabled && <Text color={TUI_COLORS.warning}>{t('ui.disabled')}</Text>}
+    <Box flexDirection="column" paddingX={1}>
+      {/* === Topbar === */}
+      <Box borderStyle="single" borderColor={TUI_COLORS.textMuted} paddingX={1} flexShrink={0}>
+        <Text color={sessionStore.connected ? TUI_COLORS.success : TUI_COLORS.error}>● {sessionStore.connected ? 'connected' : 'offline'}</Text>
+        <Text color={TUI_COLORS.cyan}>  cwd {sessionStore.projectPath || '~'}</Text>
+        <Text color={TUI_COLORS.textMuted}>  · branch {sessionStore.gitBranch || '-'}</Text>
+        <Box flexGrow={1} />
+        <Text color={TUI_COLORS.textMuted}> [<Text color={TUI_COLORS.accent}>Esc</Text>] back</Text>
+        <Text color={TUI_COLORS.textMuted}>  [<Text color={TUI_COLORS.accent}>+</Text>] add</Text>
+        <Text color={TUI_COLORS.textMuted}>  [<Text color={TUI_COLORS.accent}>t</Text>] test all</Text>
+      </Box>
+
+      {/* === Card 1: Active Providers === */}
+      <Box flexDirection="column" borderStyle="round" borderColor={TUI_COLORS.textMuted} marginTop={1} flexShrink={0}>
+        {/* Card header */}
+        <Box paddingX={1}>
+          <Text bold color={TUI_COLORS.accent}>Active Providers</Text>
+          <Box flexGrow={1} />
+          <Text color={TUI_COLORS.textMuted}>{providers.length} configured</Text>
         </Box>
-      ))}
-      {mode === 'confirm-delete' && providers[cursor] && (
-        <Box marginTop={1}>
-          <Text color={TUI_COLORS.error}>{t('ui.delete')} "{providers[cursor].name}"? y/n</Text>
+
+        {/* Provider rows */}
+        <Box flexDirection="column" paddingX={1}>
+          {providers.length === 0 && (
+            <Text color={TUI_COLORS.textMuted}>  {t('ui.no_providers_add')}</Text>
+          )}
+          {providers.map((p, i) => {
+            const expanded = i === cursor;
+            const def = p.name === defaultProviderName;
+            const local = isLocalProvider(p);
+            const op = p.enabled;
+            const tr = testResults[p.name];
+
+            return (
+              <Box key={p.name} flexDirection="column">
+                {/* Summary row */}
+                <Box>
+                  {/* Left border accent for default */}
+                  <Text color={def ? TUI_COLORS.accent : TUI_COLORS.textMuted}>{def ? '▌' : ' '}</Text>
+                  {/* Cursor indicator */}
+                  <Text color={i === cursor ? TUI_COLORS.accent : TUI_COLORS.textMuted}>
+                    {i === cursor ? '▸' : ' '}
+                  </Text>
+                  {/* Toggle */}
+                  <Text color={def ? TUI_COLORS.accent : TUI_COLORS.textMuted}>
+                    {expanded ? '▾' : '▸'}{' '}
+                  </Text>
+                  {/* Name */}
+                  <Text bold color={def ? TUI_COLORS.accent : TUI_COLORS.textPrimary}>{p.name}</Text>
+                  {/* Default badge */}
+                  {def && <Text color={TUI_COLORS.success}> [default]</Text>}
+                  {/* Local badge */}
+                  {local && <Text color={TUI_COLORS.warning}> (local)</Text>}
+                  {/* Spacer */}
+                  <Box flexGrow={1} />
+                  {/* Status */}
+                  <Text color={op ? TUI_COLORS.success : TUI_COLORS.error}>
+                    {' '}● {op ? 'operational' : 'offline'}
+                  </Text>
+                </Box>
+
+                {/* Expanded details */}
+                {expanded && (
+                  <Box flexDirection="column" marginLeft={4}>
+                    <Text color={TUI_COLORS.textMuted}>  protocol: <Text color={TUI_COLORS.textPrimary}>{p.protocol}</Text></Text>
+                    <Text color={TUI_COLORS.textMuted}>  base_url: <Text color={TUI_COLORS.textPrimary}>{p.base_url}</Text></Text>
+                    <Text color={TUI_COLORS.textMuted}>  api_key: <Text color={TUI_COLORS.textPrimary}>{p.has_api_key ? 'sk-...****' : t('ui.no_key')}</Text></Text>
+                    <Text color={TUI_COLORS.textMuted}>  models: <Text color={TUI_COLORS.cyan}>{p.models.join(' · ')}</Text></Text>
+                    {/* Actions */}
+                    <Box marginTop={0}>
+                      <Text color={TUI_COLORS.textMuted}>  [<Text color={TUI_COLORS.accent}>t</Text>] test</Text>
+                      <Text color={TUI_COLORS.textMuted}>  [<Text color={TUI_COLORS.accent}>e</Text>] edit</Text>
+                      <Text color={TUI_COLORS.textMuted}>  [<Text color={TUI_COLORS.accent}>d</Text>] delete</Text>
+                      <Text color={TUI_COLORS.textMuted}>  [<Text color={TUI_COLORS.accent}>p</Text>] params</Text>
+                      <Text color={TUI_COLORS.textMuted}>  [⏎] set-default</Text>
+                    </Box>
+                    {/* Test result */}
+                    {tr && (
+                      <Text color={tr.ok ? TUI_COLORS.success : TUI_COLORS.error}>
+                        {'  '}{tr.ok ? PREFIX.done : PREFIX.failed} {tr.text}
+                      </Text>
+                    )}
+                  </Box>
+                )}
+              </Box>
+            );
+          })}
+
+          {/* Confirm delete prompt */}
+          {mode === 'confirm-delete' && providers[cursor] && (
+            <Box marginTop={1}>
+              <Text color={TUI_COLORS.error}>  {PREFIX.error} Delete "{providers[cursor].name}"? [y/n]</Text>
+            </Box>
+          )}
+
+          {/* Error / busy */}
+          {error && <Text color={TUI_COLORS.error}>  {PREFIX.error} {error}</Text>}
+          {busy && <Text color={TUI_COLORS.accent}>  {PREFIX.loading} {t('ui.loading')}</Text>}
         </Box>
-      )}
-      {/* L5 修复: 显示当前 cursor 对应 provider 的 testResult（结构化 ok/text） */}
-      {providers[cursor] && testResults[providers[cursor].name] && (() => {
-        const tr = testResults[providers[cursor].name];
-        return (
-          <Text color={tr.ok ? TUI_COLORS.success : TUI_COLORS.error}>
-            {tr.ok ? PREFIX.done : PREFIX.failed} {tr.text}
-          </Text>
-        );
-      })()}
-      {/* L1 修复: 用 PREFIX.error */}
-      {error && <Text color={TUI_COLORS.error}>{PREFIX.error} {error}</Text>}
-      {/* L2 修复: 用 PREFIX.loading */}
-      {busy && <Text color={TUI_COLORS.accent}>{PREFIX.loading} {t('ui.loading')}</Text>}
+
+        {/* Usage line */}
+        <Box marginTop={1} borderTop paddingX={1}>
+          <Text color={TUI_COLORS.textMuted}>  {providers.length} configured · {operationalCount} operational · {offlineCount} offline</Text>
+        </Box>
+      </Box>
+
+      {/* === Card 2: Provider Routing Rules === */}
+      <Box flexDirection="column" borderStyle="round" borderColor={TUI_COLORS.textMuted} marginTop={1} flexShrink={0}>
+        <Box paddingX={1}>
+          <Text bold color={TUI_COLORS.accent}>Provider Routing Rules</Text>
+          <Box flexGrow={1} />
+          <Text color={TUI_COLORS.textMuted}>{ROUTING_RULES.length} rules</Text>
+        </Box>
+        <Box flexDirection="column" paddingX={1}>
+          {ROUTING_RULES.map((rule) => (
+            <Box key={rule.id}>
+              <Text color={TUI_COLORS.warning}>  rule {rule.id}:</Text>
+              <Text color={TUI_COLORS.textPrimary}> {rule.condition}</Text>
+              <Text color={TUI_COLORS.textMuted}>{' -> '}</Text>
+              <Text color={TUI_COLORS.cyan}>{rule.model}</Text>
+              <Text color={TUI_COLORS.accent}>  [e][d]</Text>
+            </Box>
+          ))}
+          {/* Toolbar */}
+          <Box marginTop={1}>
+            <Text color={TUI_COLORS.success}>  [+ add rule]</Text>
+            <Text color={TUI_COLORS.textMuted}>  [↑↓] reorder</Text>
+          </Box>
+        </Box>
+        <Box marginTop={1} borderTop paddingX={1}>
+          <Text color={TUI_COLORS.textMuted}>  routing priority · first matching rule wins</Text>
+        </Box>
+      </Box>
+
+      {/* === Card 3: Provider Health === */}
+      <Box flexDirection="column" borderStyle="round" borderColor={TUI_COLORS.textMuted} marginTop={1} flexShrink={0}>
+        <Box paddingX={1}>
+          <Text bold color={TUI_COLORS.accent}>Provider Health</Text>
+          <Box flexGrow={1} />
+          <Text color={TUI_COLORS.textMuted}>last run complete</Text>
+        </Box>
+        <Box flexDirection="column" paddingX={1}>
+          {providers.length === 0 && (
+            <Text color={TUI_COLORS.textMuted}>  No providers</Text>
+          )}
+          {providers.map((p) => {
+            const tr = testResults[p.name];
+            const healthy = p.enabled;
+            const statusColor = healthy ? TUI_COLORS.success : TUI_COLORS.error;
+            const statusText = tr ? (tr.ok ? 'healthy' : 'error') : (healthy ? 'healthy' : 'offline');
+            return (
+              <Box key={p.name}>
+                <Text color={TUI_COLORS.textPrimary}>  {p.name}</Text>
+                <Text color={statusColor}>  ● </Text>
+                <Text color={statusColor}>{statusText}</Text>
+                <Text color={TUI_COLORS.textMuted}>  {p.models.length}/{p.models.length} models</Text>
+                <Text color={TUI_COLORS.cyan}>  n/a avg latency</Text>
+              </Box>
+            );
+          })}
+        </Box>
+        <Box marginTop={1} borderTop paddingX={1}>
+          <Text color={TUI_COLORS.textMuted}>  last test: {lastTestTime || 'n/a'}</Text>
+        </Box>
+      </Box>
+
+      {/* === Bottom dock === */}
+      <Box borderStyle="single" borderColor={TUI_COLORS.textMuted} marginTop={1} flexShrink={0} paddingX={1}>
+        <Text color={TUI_COLORS.textMuted}>[<Text color={TUI_COLORS.accent}>↑↓</Text>] navigate</Text>
+        <Text color={TUI_COLORS.textMuted}>  [<Text color={TUI_COLORS.accent}>e</Text>] edit</Text>
+        <Text color={TUI_COLORS.textMuted}>  [<Text color={TUI_COLORS.accent}>t</Text>] test</Text>
+        <Text color={TUI_COLORS.textMuted}>  [<Text color={TUI_COLORS.accent}>Esc</Text>] close</Text>
+      </Box>
     </Box>
   );
 }
