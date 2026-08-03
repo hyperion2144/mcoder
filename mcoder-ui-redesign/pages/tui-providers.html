@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TUI - Providers</title>
+    <style id="theme-vars">
+/* mcoder UI Redesign v2 - Brand CSS
+   Inspired by Tokyo Night palette, refined for agent orchestration tool.
+   Research-backed: medium-dark bg (not pure black), low-saturation accents,
+   JetBrains Mono for code, Inter for UI.
+*/
+
+/* ===== Raw Token Scale ===== */
+:root {
+  /* Brand primary (single hue: blue) */
+  --mc-brand-50: #a9c7ff;
+  --mc-brand-100: #89b4fa;
+  --mc-brand-200: #7aa2f7;
+  --mc-brand-300: #6b91f4;
+  --mc-brand-400: #5c80f1;
+  --mc-brand-500: #4d6fee;
+  --mc-brand-600: #3e5eeb;
+  --mc-brand-700: #2f4de8;
+  --mc-brand-800: #203ce5;
+  --mc-brand-900: #112be2;
+  --mc-brand-950: #021adf;
+
+  /* Neutral scale (Tokyo Night surfaces) */
+  --mc-neutral-0: #16161e;
+  --mc-neutral-50: #1a1b26;
+  --mc-neutral-100: #1f2335;
+  --mc-neutral-200: #292e42;
+  --mc-neutral-300: #3b4261;
+  --mc-neutral-400: #565f89;
+  --mc-neutral-500: #6b7394;
+  --mc-neutral-600: #8289ad;
+  --mc-neutral-700: #9aa5ce;
+  --mc-neutral-800: #b4bdf0;
+  --mc-neutral-900: #c0caf5;
+  --mc-neutral-950: #d4dffb;
+
+  /* State colors (semantic only) */
+  --mc-state-success: #9ece6a;
+  --mc-state-success-dim: rgba(158, 206, 106, 0.12);
+  --mc-state-warning: #e0af68;
+  --mc-state-warning-dim: rgba(224, 175, 104, 0.12);
+  --mc-state-error: #f7768e;
+  --mc-state-error-dim: rgba(247, 118, 142, 0.12);
+  --mc-state-info: #7dcfff;
+  --mc-state-info-dim: rgba(125, 207, 255, 0.12);
+  --mc-state-mauve: #bb9af7;
+  --mc-state-mauve-dim: rgba(187, 154, 247, 0.12);
+  --mc-state-orange: #ff9e64;
+  --mc-state-orange-dim: rgba(255, 158, 100, 0.12);
+}
+
+/* ===== Semantic Aliases (required by head contract) ===== */
+:root {
+  --mc-background: #1a1b26;
+  --mc-foreground: #c0caf5;
+  --mc-card: #16161e;
+  --mc-card-foreground: #c0caf5;
+  --mc-popover: #292e42;
+  --mc-popover-foreground: #c0caf5;
+  --mc-primary: #7aa2f7;
+  --mc-primary-foreground: #16161e;
+  --mc-secondary: #292e42;
+  --mc-secondary-foreground: #c0caf5;
+  --mc-muted: #1f2335;
+  --mc-muted-foreground: #565f89;
+  --mc-accent: #7aa2f7;
+  --mc-accent-foreground: #16161e;
+  --mc-destructive: #f7768e;
+  --mc-destructive-foreground: #16161e;
+  --mc-border: #292e42;
+  --mc-input: #292e42;
+  --mc-ring: #7aa2f7;
+  --mc-radius-small: 4px;
+  --mc-radius-medium: 8px;
+  --mc-radius-large: 12px;
+}
+
+/* ===== Dark mode (default) ===== */
+html.dark {
+  --mc-background: #1a1b26;
+  --mc-foreground: #c0caf5;
+  --mc-card: #16161e;
+  --mc-card-foreground: #c0caf5;
+  --mc-popover: #292e42;
+  --mc-popover-foreground: #c0caf5;
+  --mc-primary: #7aa2f7;
+  --mc-primary-foreground: #16161e;
+  --mc-secondary: #292e42;
+  --mc-secondary-foreground: #c0caf5;
+  --mc-muted: #1f2335;
+  --mc-muted-foreground: #565f89;
+  --mc-accent: #7aa2f7;
+  --mc-accent-foreground: #16161e;
+  --mc-destructive: #f7768e;
+  --mc-destructive-foreground: #16161e;
+  --mc-border: #292e42;
+  --mc-input: #292e42;
+  --mc-ring: #7aa2f7;
+}
+
+/* ===== Typography ===== */
+:root {
+  --mc-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --mc-font-mono: 'JetBrains Mono', 'SF Mono', 'Menlo', 'Monaco', 'Cascadia Code', monospace;
+  --mc-font-display: var(--mc-font-sans);
+}
+
+/* ===== Radius Scale (restrained) ===== */
+:root {
+  --mc-radius-xs: 2px;
+  --mc-radius-sm: 4px;
+  --mc-radius-md: 8px;
+  --mc-radius-lg: 12px;
+}
+
+/* ===== Shadow Scale (subtle, border-first) ===== */
+:root {
+  --mc-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.03);
+  --mc-shadow-2: 0 8px 24px -8px rgba(0, 0, 0, 0.12);
+  --mc-shadow-3: 0 24px 60px -20px rgba(0, 0, 0, 0.20);
+}
+
+/* ===== Spacing Scale (8pt grid) ===== */
+:root {
+  --mc-space-1: 4px;
+  --mc-space-2: 8px;
+  --mc-space-3: 12px;
+  --mc-space-4: 16px;
+  --mc-space-5: 24px;
+  --mc-space-6: 32px;
+  --mc-space-7: 48px;
+  --mc-space-8: 80px;
+}
+
+/* ===== Transition ===== */
+:root {
+  --mc-transition-fast: 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --mc-transition: 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --mc-transition-slow: 240ms cubic-bezier(0.3, 0, 0, 1);
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-background: var(--mc-background);
+    --color-foreground: var(--mc-foreground);
+    --color-card: var(--mc-card);
+    --color-card-foreground: var(--mc-card-foreground);
+    --color-popover: var(--mc-popover);
+    --color-popover-foreground: var(--mc-popover-foreground);
+    --color-primary: var(--mc-primary);
+    --color-primary-foreground: var(--mc-primary-foreground);
+    --color-secondary: var(--mc-secondary);
+    --color-secondary-foreground: var(--mc-secondary-foreground);
+    --color-muted: var(--mc-muted);
+    --color-muted-foreground: var(--mc-muted-foreground);
+    --color-accent: var(--mc-accent);
+    --color-accent-foreground: var(--mc-accent-foreground);
+    --color-destructive: var(--mc-destructive);
+    --color-destructive-foreground: var(--mc-destructive-foreground);
+    --color-border: var(--mc-border);
+    --color-input: var(--mc-input);
+    --color-ring: var(--mc-ring);
+    --radius-sm: var(--mc-radius-sm);
+    --radius-md: var(--mc-radius-md);
+    --radius-lg: var(--mc-radius-lg);
+  }
+  @layer base {
+    body { background: var(--mc-background); color: var(--mc-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style id="semantic-token-fallback">
+      .bg-background { background-color: var(--mc-background); }
+      .text-background { color: var(--mc-background); }
+      .border-background { border-color: var(--mc-background); }
+      .ring-background { --tw-ring-color: var(--mc-background); }
+      .bg-foreground { background-color: var(--mc-foreground); }
+      .text-foreground { color: var(--mc-foreground); }
+      .border-foreground { border-color: var(--mc-foreground); }
+      .ring-foreground { --tw-ring-color: var(--mc-foreground); }
+      .bg-card { background-color: var(--mc-card); }
+      .text-card { color: var(--mc-card); }
+      .border-card { border-color: var(--mc-card); }
+      .ring-card { --tw-ring-color: var(--mc-card); }
+      .bg-card-foreground { background-color: var(--mc-card-foreground); }
+      .text-card-foreground { color: var(--mc-card-foreground); }
+      .border-card-foreground { border-color: var(--mc-card-foreground); }
+      .ring-card-foreground { --tw-ring-color: var(--mc-card-foreground); }
+      .bg-popover { background-color: var(--mc-popover); }
+      .text-popover { color: var(--mc-popover); }
+      .border-popover { border-color: var(--mc-popover); }
+      .ring-popover { --tw-ring-color: var(--mc-popover); }
+      .bg-popover-foreground { background-color: var(--mc-popover-foreground); }
+      .text-popover-foreground { color: var(--mc-popover-foreground); }
+      .border-popover-foreground { border-color: var(--mc-popover-foreground); }
+      .ring-popover-foreground { --tw-ring-color: var(--mc-popover-foreground); }
+      .bg-primary { background-color: var(--mc-primary); }
+      .text-primary { color: var(--mc-primary); }
+      .border-primary { border-color: var(--mc-primary); }
+      .ring-primary { --tw-ring-color: var(--mc-primary); }
+      .bg-primary-foreground { background-color: var(--mc-primary-foreground); }
+      .text-primary-foreground { color: var(--mc-primary-foreground); }
+      .border-primary-foreground { border-color: var(--mc-primary-foreground); }
+      .ring-primary-foreground { --tw-ring-color: var(--mc-primary-foreground); }
+      .bg-secondary { background-color: var(--mc-secondary); }
+      .text-secondary { color: var(--mc-secondary); }
+      .border-secondary { border-color: var(--mc-secondary); }
+      .ring-secondary { --tw-ring-color: var(--mc-secondary); }
+      .bg-secondary-foreground { background-color: var(--mc-secondary-foreground); }
+      .text-secondary-foreground { color: var(--mc-secondary-foreground); }
+      .border-secondary-foreground { border-color: var(--mc-secondary-foreground); }
+      .ring-secondary-foreground { --tw-ring-color: var(--mc-secondary-foreground); }
+      .bg-muted { background-color: var(--mc-muted); }
+      .text-muted { color: var(--mc-muted); }
+      .border-muted { border-color: var(--mc-muted); }
+      .ring-muted { --tw-ring-color: var(--mc-muted); }
+      .bg-muted-foreground { background-color: var(--mc-muted-foreground); }
+      .text-muted-foreground { color: var(--mc-muted-foreground); }
+      .border-muted-foreground { border-color: var(--mc-muted-foreground); }
+      .ring-muted-foreground { --tw-ring-color: var(--mc-muted-foreground); }
+      .bg-accent { background-color: var(--mc-accent); }
+      .text-accent { color: var(--mc-accent); }
+      .border-accent { border-color: var(--mc-accent); }
+      .ring-accent { --tw-ring-color: var(--mc-accent); }
+      .bg-accent-foreground { background-color: var(--mc-accent-foreground); }
+      .text-accent-foreground { color: var(--mc-accent-foreground); }
+      .border-accent-foreground { border-color: var(--mc-accent-foreground); }
+      .ring-accent-foreground { --tw-ring-color: var(--mc-accent-foreground); }
+      .bg-destructive { background-color: var(--mc-destructive); }
+      .text-destructive { color: var(--mc-destructive); }
+      .border-destructive { border-color: var(--mc-destructive); }
+      .ring-destructive { --tw-ring-color: var(--mc-destructive); }
+      .bg-destructive-foreground { background-color: var(--mc-destructive-foreground); }
+      .text-destructive-foreground { color: var(--mc-destructive-foreground); }
+      .border-destructive-foreground { border-color: var(--mc-destructive-foreground); }
+      .ring-destructive-foreground { --tw-ring-color: var(--mc-destructive-foreground); }
+      .bg-border { background-color: var(--mc-border); }
+      .text-border { color: var(--mc-border); }
+      .border-border { border-color: var(--mc-border); }
+      .ring-border { --tw-ring-color: var(--mc-border); }
+      .bg-input { background-color: var(--mc-input); }
+      .text-input { color: var(--mc-input); }
+      .border-input { border-color: var(--mc-input); }
+      .ring-input { --tw-ring-color: var(--mc-input); }
+      .bg-ring { background-color: var(--mc-ring); }
+      .text-ring { color: var(--mc-ring); }
+      .border-ring { border-color: var(--mc-ring); }
+      .ring-ring { --tw-ring-color: var(--mc-ring); }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body><main class="tui" role="application" aria-label="mcoder provider configuration">
+<header class="tool-card provider-topbar" aria-label="Provider configuration header"><div class="tool-head provider-top-head"><span class="connected"><span class="status-dot">●</span> connected</span><span class="workspace">cwd ~/projects/mcoder</span><span class="branch">· branch main</span><span class="fill"></span><nav class="header-actions" aria-label="Header actions"><span><span class="key">[Esc]</span> back</span><span><span class="key">[+]</span> add</span><span><span class="key">[t]</span> test all</span></nav></div></header>
+<section class="transcript"><div class="stream"><div class="messages provider-messages">
+<section class="tool-card provider-card" aria-labelledby="active-providers-title"><div class="tool-head"><span class="name" id="active-providers-title">Active Providers</span><span class="fill"></span><span class="tool-status">4 configured</span></div><div class="tool-body"><div class="provider-list">
+<article class="provider-row provider-row--default" aria-label="openai default provider" aria-expanded="true"><div class="field-row provider-row__summary"><span class="key"><span class="provider-toggle">▾</span> openai <span class="provider-badge">[default]</span></span><span class="value provider-status provider-status--good"><span>●</span> operational</span></div><div class="provider-details"><div class="field-row"><span class="key">protocol:</span><span class="value">openai-completions</span></div><div class="field-row"><span class="key">base_url:</span><span class="value">https://api.openai.com/v1</span></div><div class="field-row"><span class="key">api_key:</span><span class="value">sk-...xxxxxxxxxxxx</span></div><div class="field-row"><span class="key">models:</span><span class="value provider-models">gpt-4o · gpt-4o-mini · o1-preview</span></div></div><div class="provider-actions"><span><span class="key">[t]</span> test</span><span><span class="key">[e]</span> edit</span><span><span class="key">[d]</span> delete</span></div></article>
+<article class="provider-row" aria-label="anthropic provider" aria-expanded="false"><div class="field-row provider-row__summary"><span class="key"><span class="provider-toggle">▸</span> anthropic</span><span class="value provider-status provider-status--good"><span>●</span> operational</span></div></article>
+<article class="provider-row" aria-label="deepseek provider" aria-expanded="false"><div class="field-row provider-row__summary"><span class="key"><span class="provider-toggle">▸</span> deepseek</span><span class="value provider-status provider-status--good"><span>●</span> operational</span></div></article>
+<article class="provider-row" aria-label="ollama local provider" aria-expanded="false"><div class="field-row provider-row__summary"><span class="key"><span class="provider-toggle">▸</span> ollama <span class="provider-local">(local)</span></span><span class="value provider-status provider-status--bad"><span>●</span> offline</span></div></article>
+</div></div><div class="usage-line">4 configured · 3 operational · 1 offline</div></section>
+
+<section class="tool-card provider-card" aria-labelledby="routing-rules-title"><div class="tool-head"><span class="name" id="routing-rules-title">Provider Routing Rules</span><span class="fill"></span><span class="tool-status">4 rules</span></div><div class="tool-body"><div class="rule-list">
+<div class="rule-row"><span class="rule-id">rule 1:</span><span class="rule-condition">tag "complex reasoning"</span><span class="rule-arrow">→</span><span class="rule-model">claude-opus-4</span><span class="rule-actions"><span>[e]</span><span>[d]</span></span></div>
+<div class="rule-row"><span class="rule-id">rule 2:</span><span class="rule-condition">tag "code generation"</span><span class="rule-arrow">→</span><span class="rule-model">claude-sonnet-4</span><span class="rule-actions"><span>[e]</span><span>[d]</span></span></div>
+<div class="rule-row"><span class="rule-id">rule 3:</span><span class="rule-condition">tag "fast iteration"</span><span class="rule-arrow">→</span><span class="rule-model">deepseek-chat</span><span class="rule-actions"><span>[e]</span><span>[d]</span></span></div>
+<div class="rule-row"><span class="rule-id">rule 4:</span><span class="rule-condition">tag "default"</span><span class="rule-arrow">→</span><span class="rule-model">gpt-4o</span><span class="rule-actions"><span>[e]</span><span>[d]</span></span></div>
+</div><div class="rule-toolbar"><span class="rule-toolbar__add">[+ add rule]</span><span>[↑↓] reorder</span></div></div><div class="usage-line">routing priority · first matching rule wins</div></section>
+
+<section class="tool-card provider-card" aria-labelledby="provider-health-title"><div class="tool-head"><span class="name" id="provider-health-title">Provider Health</span><span class="fill"></span><span class="tool-status">last run complete</span></div><div class="tool-body"><div class="health-list">
+<div class="health-row"><span class="health-row__provider">openai</span><span class="health-row__dot health--good">●</span><span class="health-row__status health--good">healthy</span><span class="health-row__models">3/3 models</span><span class="health-row__latency">245ms avg latency</span></div>
+<div class="health-row"><span class="health-row__provider">anthropic</span><span class="health-row__dot health--good">●</span><span class="health-row__status health--good">healthy</span><span class="health-row__models">3/3 models</span><span class="health-row__latency">412ms avg latency</span></div>
+<div class="health-row"><span class="health-row__provider">deepseek</span><span class="health-row__dot health--good">●</span><span class="health-row__status health--good">healthy</span><span class="health-row__models">2/2 models</span><span class="health-row__latency">180ms avg latency</span></div>
+<div class="health-row"><span class="health-row__provider">ollama</span><span class="health-row__dot health--bad">●</span><span class="health-row__status health--bad">offline</span><span class="health-row__models">0/0 models</span><span class="health-row__latency">n/a avg latency</span></div>
+</div><div class="usage-line">last test: <time datetime="2026-08-02T14:23:08">2026-08-02 14:23:08</time></div></div></section>
+</div></div></section>
+<footer class="bottom-dock" aria-label="Provider keyboard actions"><div class="dock-inner provider-dock"><div class="provider-dock-line"><span><span class="key">[↑↓]</span> navigate</span><span><span class="key">[e]</span> edit selected</span><span><span class="key">[t]</span> test selected</span><span><span class="key">[Esc]</span> close</span></div></div></footer>
+</main>
+    <style id="critical-layout">
+    *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden}body{background:var(--mc-background);color:var(--mc-foreground);font:14px/1.55 var(--mc-font-mono);font-feature-settings:"liga" 0,"calt" 0}.tui{height:100vh;display:flex;flex-direction:column}.transcript{flex:1;min-height:0;overflow:auto}.stream,.dock-inner{width:min(1120px,calc(100% - 40px));margin:auto}.stream{padding:18px 0 30px}.header-card,.tool-card,.input-box{border:1px solid #353b55;border-radius:8px;background:rgba(22,22,30,.78);overflow:hidden}.header-section{padding:20px 24px}.welcome{min-height:150px;display:flex;align-items:center;gap:34px}.header-section+.header-section{border-top:1px solid #2d334b}.ascii-logo{color:var(--mc-cyan);margin:0;line-height:1.15}.brand-name{color:var(--mc-blue);font-size:25px;font-weight:700}.version,.date,.muted{color:var(--mc-muted-foreground)}.section-title{font-weight:700;color:#d4dffb;margin-bottom:8px}.rule{width:48px;height:1px;background:#3b4261;margin-bottom:12px}.tips-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:5px 32px}.tip-key{display:inline-block;width:28px;color:var(--mc-cyan)}.split-section{display:grid;grid-template-columns:1fr 1fr;padding:0}.split-section>section{padding:20px 24px}.split-section>section+section{border-left:1px solid #2d334b}.plain-list{list-style:none;padding:0;margin:0}.plain-list li{margin:4px 0}.dot{color:var(--mc-green);margin-right:9px}.session-dot{color:var(--mc-blue);margin-right:9px}.messages{padding:26px 4px 0}.message,.thinking-block,.tool-row,.tool-card{margin-bottom:24px}.role{color:var(--mc-muted-foreground);margin-bottom:5px}.role strong{color:var(--mc-blue)}.message-body{padding-left:18px;white-space:pre-wrap;max-width:800px}.thinking-block{padding-left:18px;color:var(--mc-purple);font-style:italic;max-width:800px}.thinking-title{color:#747a92;font-style:normal;margin-bottom:5px}.thinking-copy{white-space:pre-wrap}.tool-row{display:grid;grid-template-columns:auto 1fr auto;gap:12px;padding-left:18px;color:var(--mc-muted-foreground)}.tool-row .action{color:#747a92}.filename{color:var(--mc-foreground)}.tool-card{background:rgba(41,46,66,.17)}.tool-head{display:flex;align-items:center;gap:9px;min-height:38px;padding:8px 16px;border-bottom:1px solid rgba(59,66,97,.54)}.tool-head .name{color:#9099bd}.tool-head .file{color:var(--mc-foreground)}.fill{flex:1;height:1px;background:linear-gradient(90deg,#3b4261,transparent)}.tool-status{white-space:nowrap;color:var(--mc-muted-foreground)}.running-dot{color:var(--mc-blue)}.tool-body{padding:15px 18px 17px}.code-table{border-collapse:collapse;width:100%}.code-table td{padding:0;vertical-align:top;white-space:pre}.line-no{width:34px;color:#4f5674;text-align:right;padding-right:11px!important;border-right:1px solid #30364d}.code{padding-left:12px!important;color:#b8c2e8}.comment{color:#6c7086}.code-summary{color:var(--mc-muted-foreground);margin-top:11px;padding-left:47px}.field-row{display:grid;grid-template-columns:86px 1fr}.field-row .key{color:#69708e}.field-row .value{white-space:pre-wrap;color:#b8c2e8}.field-row+.field-row{margin-top:5px}.diff{margin-top:13px;white-space:pre-wrap}.diff-line{display:block;padding-left:8px}.diff-line.del{color:var(--mc-red);background:var(--mc-state-error-dim,rgba(247,118,142,.12))}.diff-line.add{color:var(--mc-green);background:var(--mc-state-success-dim,rgba(158,206,106,.12))}.cancel{color:var(--mc-red);margin-top:14px}.usage-line{margin:15px 0 0 18px;padding-top:9px;border-top:1px solid #30364d;color:#59617f;font-size:12px;font-variant-numeric:tabular-nums}.usage-line .up{color:var(--mc-blue)}.bash-success{border-color:rgba(158,206,106,.72);background:rgba(158,206,106,.09)}.bash-success .tool-head{border-color:rgba(158,206,106,.25)}.bash-warn{border-color:rgba(224,175,104,.78);background:rgba(224,175,104,.09)}.bash-warn .tool-head{border-color:rgba(224,175,104,.25)}.bash-fail{border-color:rgba(247,118,142,.84);background:rgba(247,118,142,.10)}.bash-fail .tool-head{border-color:rgba(247,118,142,.28)}.success{color:var(--mc-green)}.warning{color:var(--mc-orange)}.failure{color:var(--mc-red)}.test-output{margin:0;white-space:pre-wrap;color:#b8c2e8}.pass{color:var(--mc-green)}.warn{color:var(--mc-orange)}.error{color:var(--mc-red)}@keyframes shimmer{0%{background-position:-200% center}100%{background-position:200% center}}.shimmer{background:linear-gradient(90deg,#565f89,#c0caf5,#fff,#c0caf5,#565f89);background-size:200% 100%;background-clip:text;-webkit-background-clip:text;color:transparent;animation:shimmer 1.8s linear infinite}.ask{border-color:rgba(224,175,104,.72);background:rgba(224,175,104,.045)}.ask .tool-head,.permission .tool-head{color:var(--mc-orange)}.choice{margin:5px 0}.choice-key{display:inline-block;width:34px;color:var(--mc-orange)}.note{color:#777f9f;margin-top:13px}.actions{color:#6f789c;margin-top:13px}.actions span{margin-right:13px}.permission{border-color:rgba(224,175,104,.58);background:rgba(255,158,100,.045)}.bottom-dock{flex:0 0 auto;background:linear-gradient(180deg,rgba(26,27,38,.92),var(--mc-background) 12%);box-shadow:0 -16px 35px rgba(26,27,38,.92)}.dock-inner{padding:5px 0 14px}.inline-section{border-top:1px solid #30364d;padding:6px 8px 7px}.inline-section:last-of-type{border-bottom:1px solid #30364d}.inline-title{color:#7e87a9}.inline-row{display:grid;grid-template-columns:20px minmax(260px,1fr) 100px 74px;min-height:21px}.todo-row{grid-template-columns:20px 1fr}.active-mark,.agent-active{color:var(--mc-blue)}.open-mark{color:#59617f}.done-mark{color:var(--mc-green)}.agent-state,.agent-time,.more{color:#616987}.more{padding-left:20px}.input-box{margin-top:10px;border-color:#47506f}.session-label{position:absolute;transform:translate(14px,-11px);padding:0 7px;background:var(--mc-background);color:#7781a5}.session-info{padding:15px 16px 9px;border-bottom:1px solid #353c56}.info-primary,.info-secondary{display:flex;gap:10px;white-space:nowrap;overflow:hidden}.info-secondary{color:#666f91;margin-top:3px;font-size:13px}.model{color:var(--mc-blue)}.thinking{color:var(--mc-purple)}.mode,.path{color:var(--mc-cyan)}.branch{color:#68718f}.streaming{color:var(--mc-green)}.input-area{padding:11px 16px 9px}.prompt{display:flex;gap:10px;color:var(--mc-blue);min-height:24px}.prompt-line{color:var(--mc-foreground)}.hints{color:#59617f;font-size:13px}.hints span{color:#7d86a8}@media(max-width:900px){.stream,.dock-inner{width:calc(100% - 24px)}.split-section{grid-template-columns:1fr}.split-section>section+section{border-left:0;border-top:1px solid #2d334b}.tips-grid{grid-template-columns:1fr}}
+
+    .provider-topbar{width:min(1120px,calc(100% - 40px));margin:10px auto 0;flex:0 0 auto;background:rgba(22,22,30,.84)}
+    .provider-top-head{min-height:34px;padding:6px 16px}
+    .connected{display:inline-flex;align-items:center;gap:8px;color:var(--mc-state-success);white-space:nowrap}
+    .status-dot{color:var(--mc-state-success)}
+    .workspace{margin-left:24px;color:var(--mc-state-info);white-space:nowrap}
+    .branch{color:var(--mc-muted-foreground);white-space:nowrap}
+    .header-actions{display:flex;align-items:center;gap:22px;margin-left:auto;padding-left:28px;color:var(--mc-muted-foreground);white-space:nowrap}
+    .header-actions .key,.provider-actions .key{color:var(--mc-primary)}
+    .provider-messages{padding-top:16px}
+    .provider-card{background:rgba(41,46,66,.17)}
+    .provider-card .tool-head .name{color:var(--mc-primary);font-weight:700}
+    .provider-card .tool-status{color:var(--mc-muted-foreground)}
+    .provider-list{display:grid;gap:2px}
+    .provider-row{padding:8px 0 9px;border-bottom:1px solid rgba(59,66,97,.48)}
+    .provider-row:last-child{border-bottom:0}
+    .provider-row--default{padding:9px 12px 10px;border:1px solid rgba(122,162,247,.42);border-left:3px solid var(--mc-primary);border-radius:8px;background:linear-gradient(90deg,rgba(122,162,247,.12),rgba(41,46,66,.34) 58%,transparent);box-shadow:inset 0 0 0 1px rgba(122,162,247,.04)}
+    .provider-row__summary{align-items:center;min-height:26px}
+    .provider-row__summary .key{display:flex;align-items:center;gap:8px;color:var(--mc-foreground);font-weight:700;white-space:nowrap}
+    .provider-row--default .provider-row__summary .key{color:var(--mc-primary)}
+    .provider-toggle{display:inline-block;width:14px;color:var(--mc-primary);text-align:center}
+    .provider-row:not(.provider-row--default) .provider-toggle{color:var(--mc-muted-foreground)}
+    .provider-badge{padding:1px 7px;border:1px solid rgba(158,206,106,.56);border-radius:5px;color:var(--mc-state-success);background:rgba(158,206,106,.08);font-size:12px;font-weight:400}
+    .provider-local{color:var(--mc-state-orange);font-weight:400}
+    .provider-status{display:flex;align-items:center;justify-self:end;gap:8px;white-space:nowrap}
+    .provider-status--good{color:var(--mc-state-success)!important}
+    .provider-status--bad{color:var(--mc-state-error)!important}
+    .provider-details{display:grid;gap:1px;margin:6px 0 0 24px}
+    .provider-details .field-row .value{overflow-wrap:anywhere}
+    .provider-details .field-row:last-child .value{color:var(--mc-state-info)}
+    .provider-actions{display:flex;gap:24px;margin:6px 0 0 110px;color:var(--mc-muted-foreground)}
+    .rule-list{display:grid;gap:2px;padding:2px 4px 3px}
+    .rule-row{display:grid;grid-template-columns:74px minmax(0,1fr) 24px minmax(150px,.62fr) auto;gap:11px;align-items:center;min-height:28px;padding:3px 8px;border-radius:6px}
+    .rule-row:hover{background:rgba(41,46,66,.46)}
+    .rule-id{color:var(--mc-state-orange)}
+    .rule-condition{color:var(--mc-foreground)}
+    .rule-arrow{color:var(--mc-muted-foreground);text-align:center}
+    .rule-model{color:var(--mc-state-info)}
+    .rule-actions{display:flex;justify-content:flex-end;gap:12px;color:var(--mc-primary);white-space:nowrap}
+    .rule-toolbar{display:flex;gap:28px;margin:8px 0 2px 8px;padding-top:8px;border-top:1px solid rgba(59,66,97,.5);color:var(--mc-muted-foreground)}
+    .rule-toolbar__add{color:var(--mc-state-success)}
+    .health-list{display:grid;gap:1px;padding:2px 12px 0}
+    .health-row{display:grid;grid-template-columns:126px 18px 110px 130px minmax(0,1fr);gap:8px;align-items:center;min-height:28px}
+    .health-row__provider{color:var(--mc-foreground);font-weight:600}
+    .health-row__dot{font-size:12px;line-height:1}
+    .health--good{color:var(--mc-state-success)}
+    .health--bad{color:var(--mc-state-error)}
+    .health-row__models{color:var(--mc-muted-foreground)}
+    .health-row__latency{color:var(--mc-state-info)}
+    .usage-line time{color:var(--mc-state-info)}
+    .provider-dock{padding:5px 0 10px}
+    .provider-dock-line{display:flex;align-items:center;justify-content:flex-start;gap:24px;border-top:1px solid #30364d;padding:8px 8px 1px;color:var(--mc-muted-foreground);white-space:nowrap}
+    .provider-dock-line>span{color:var(--mc-foreground)}
+    .provider-dock-line .key{color:var(--mc-primary)}
+    @media(max-width:900px){.provider-topbar{width:calc(100% - 24px)}.rule-row{grid-template-columns:74px minmax(0,1fr) 24px minmax(130px,.55fr) auto}.health-row{grid-template-columns:110px 18px 94px 112px minmax(180px,1fr)}}
+    @media(max-width:680px){.provider-top-head{overflow:auto}.header-actions{gap:14px;padding-left:16px}.provider-details{margin-left:0}.provider-actions{margin-left:0}.rule-row{grid-template-columns:70px minmax(0,1fr) 20px minmax(110px,.5fr) auto;gap:7px}.health-row{grid-template-columns:92px 16px 82px 100px minmax(150px,1fr);gap:5px}.provider-dock-line{gap:14px;overflow:auto}}
+  </style>
+</body></html>

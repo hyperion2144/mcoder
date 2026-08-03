@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Preflight</title>
+    <style id="theme-vars">
+/* mcoder UI Redesign v2 - Brand CSS
+   Inspired by Tokyo Night palette, refined for agent orchestration tool.
+   Research-backed: medium-dark bg (not pure black), low-saturation accents,
+   JetBrains Mono for code, Inter for UI.
+*/
+
+/* ===== Raw Token Scale ===== */
+:root {
+  /* Brand primary (single hue: blue) */
+  --mc-brand-50: #a9c7ff;
+  --mc-brand-100: #89b4fa;
+  --mc-brand-200: #7aa2f7;
+  --mc-brand-300: #6b91f4;
+  --mc-brand-400: #5c80f1;
+  --mc-brand-500: #4d6fee;
+  --mc-brand-600: #3e5eeb;
+  --mc-brand-700: #2f4de8;
+  --mc-brand-800: #203ce5;
+  --mc-brand-900: #112be2;
+  --mc-brand-950: #021adf;
+
+  /* Neutral scale (Tokyo Night surfaces) */
+  --mc-neutral-0: #16161e;
+  --mc-neutral-50: #1a1b26;
+  --mc-neutral-100: #1f2335;
+  --mc-neutral-200: #292e42;
+  --mc-neutral-300: #3b4261;
+  --mc-neutral-400: #565f89;
+  --mc-neutral-500: #6b7394;
+  --mc-neutral-600: #8289ad;
+  --mc-neutral-700: #9aa5ce;
+  --mc-neutral-800: #b4bdf0;
+  --mc-neutral-900: #c0caf5;
+  --mc-neutral-950: #d4dffb;
+
+  /* State colors (semantic only) */
+  --mc-state-success: #9ece6a;
+  --mc-state-success-dim: rgba(158, 206, 106, 0.12);
+  --mc-state-warning: #e0af68;
+  --mc-state-warning-dim: rgba(224, 175, 104, 0.12);
+  --mc-state-error: #f7768e;
+  --mc-state-error-dim: rgba(247, 118, 142, 0.12);
+  --mc-state-info: #7dcfff;
+  --mc-state-info-dim: rgba(125, 207, 255, 0.12);
+  --mc-state-mauve: #bb9af7;
+  --mc-state-mauve-dim: rgba(187, 154, 247, 0.12);
+  --mc-state-orange: #ff9e64;
+  --mc-state-orange-dim: rgba(255, 158, 100, 0.12);
+}
+
+/* ===== Semantic Aliases (required by head contract) ===== */
+:root {
+  --mc-background: #1a1b26;
+  --mc-foreground: #c0caf5;
+  --mc-card: #16161e;
+  --mc-card-foreground: #c0caf5;
+  --mc-popover: #292e42;
+  --mc-popover-foreground: #c0caf5;
+  --mc-primary: #7aa2f7;
+  --mc-primary-foreground: #16161e;
+  --mc-secondary: #292e42;
+  --mc-secondary-foreground: #c0caf5;
+  --mc-muted: #1f2335;
+  --mc-muted-foreground: #565f89;
+  --mc-accent: #7aa2f7;
+  --mc-accent-foreground: #16161e;
+  --mc-destructive: #f7768e;
+  --mc-destructive-foreground: #16161e;
+  --mc-border: #292e42;
+  --mc-input: #292e42;
+  --mc-ring: #7aa2f7;
+  --mc-radius-small: 4px;
+  --mc-radius-medium: 8px;
+  --mc-radius-large: 12px;
+}
+
+/* ===== Dark mode (default) ===== */
+html.dark {
+  --mc-background: #1a1b26;
+  --mc-foreground: #c0caf5;
+  --mc-card: #16161e;
+  --mc-card-foreground: #c0caf5;
+  --mc-popover: #292e42;
+  --mc-popover-foreground: #c0caf5;
+  --mc-primary: #7aa2f7;
+  --mc-primary-foreground: #16161e;
+  --mc-secondary: #292e42;
+  --mc-secondary-foreground: #c0caf5;
+  --mc-muted: #1f2335;
+  --mc-muted-foreground: #565f89;
+  --mc-accent: #7aa2f7;
+  --mc-accent-foreground: #16161e;
+  --mc-destructive: #f7768e;
+  --mc-destructive-foreground: #16161e;
+  --mc-border: #292e42;
+  --mc-input: #292e42;
+  --mc-ring: #7aa2f7;
+}
+
+/* ===== Typography ===== */
+:root {
+  --mc-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --mc-font-mono: 'JetBrains Mono', 'SF Mono', 'Menlo', 'Monaco', 'Cascadia Code', monospace;
+  --mc-font-display: var(--mc-font-sans);
+}
+
+/* ===== Radius Scale (restrained) ===== */
+:root {
+  --mc-radius-xs: 2px;
+  --mc-radius-sm: 4px;
+  --mc-radius-md: 8px;
+  --mc-radius-lg: 12px;
+}
+
+/* ===== Shadow Scale (subtle, border-first) ===== */
+:root {
+  --mc-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.03);
+  --mc-shadow-2: 0 8px 24px -8px rgba(0, 0, 0, 0.12);
+  --mc-shadow-3: 0 24px 60px -20px rgba(0, 0, 0, 0.20);
+}
+
+/* ===== Spacing Scale (8pt grid) ===== */
+:root {
+  --mc-space-1: 4px;
+  --mc-space-2: 8px;
+  --mc-space-3: 12px;
+  --mc-space-4: 16px;
+  --mc-space-5: 24px;
+  --mc-space-6: 32px;
+  --mc-space-7: 48px;
+  --mc-space-8: 80px;
+}
+
+/* ===== Transition ===== */
+:root {
+  --mc-transition-fast: 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --mc-transition: 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --mc-transition-slow: 240ms cubic-bezier(0.3, 0, 0, 1);
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-background: var(--mc-background);
+    --color-foreground: var(--mc-foreground);
+    --color-card: var(--mc-card);
+    --color-card-foreground: var(--mc-card-foreground);
+    --color-popover: var(--mc-popover);
+    --color-popover-foreground: var(--mc-popover-foreground);
+    --color-primary: var(--mc-primary);
+    --color-primary-foreground: var(--mc-primary-foreground);
+    --color-secondary: var(--mc-secondary);
+    --color-secondary-foreground: var(--mc-secondary-foreground);
+    --color-muted: var(--mc-muted);
+    --color-muted-foreground: var(--mc-muted-foreground);
+    --color-accent: var(--mc-accent);
+    --color-accent-foreground: var(--mc-accent-foreground);
+    --color-destructive: var(--mc-destructive);
+    --color-destructive-foreground: var(--mc-destructive-foreground);
+    --color-border: var(--mc-border);
+    --color-input: var(--mc-input);
+    --color-ring: var(--mc-ring);
+    --radius-sm: var(--mc-radius-sm);
+    --radius-md: var(--mc-radius-md);
+    --radius-lg: var(--mc-radius-lg);
+  }
+  @layer base {
+    body { background: var(--mc-background); color: var(--mc-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style id="semantic-token-fallback">
+      .bg-background { background-color: var(--mc-background); }
+      .text-background { color: var(--mc-background); }
+      .border-background { border-color: var(--mc-background); }
+      .ring-background { --tw-ring-color: var(--mc-background); }
+      .bg-foreground { background-color: var(--mc-foreground); }
+      .text-foreground { color: var(--mc-foreground); }
+      .border-foreground { border-color: var(--mc-foreground); }
+      .ring-foreground { --tw-ring-color: var(--mc-foreground); }
+      .bg-card { background-color: var(--mc-card); }
+      .text-card { color: var(--mc-card); }
+      .border-card { border-color: var(--mc-card); }
+      .ring-card { --tw-ring-color: var(--mc-card); }
+      .bg-card-foreground { background-color: var(--mc-card-foreground); }
+      .text-card-foreground { color: var(--mc-card-foreground); }
+      .border-card-foreground { border-color: var(--mc-card-foreground); }
+      .ring-card-foreground { --tw-ring-color: var(--mc-card-foreground); }
+      .bg-popover { background-color: var(--mc-popover); }
+      .text-popover { color: var(--mc-popover); }
+      .border-popover { border-color: var(--mc-popover); }
+      .ring-popover { --tw-ring-color: var(--mc-popover); }
+      .bg-popover-foreground { background-color: var(--mc-popover-foreground); }
+      .text-popover-foreground { color: var(--mc-popover-foreground); }
+      .border-popover-foreground { border-color: var(--mc-popover-foreground); }
+      .ring-popover-foreground { --tw-ring-color: var(--mc-popover-foreground); }
+      .bg-primary { background-color: var(--mc-primary); }
+      .text-primary { color: var(--mc-primary); }
+      .border-primary { border-color: var(--mc-primary); }
+      .ring-primary { --tw-ring-color: var(--mc-primary); }
+      .bg-primary-foreground { background-color: var(--mc-primary-foreground); }
+      .text-primary-foreground { color: var(--mc-primary-foreground); }
+      .border-primary-foreground { border-color: var(--mc-primary-foreground); }
+      .ring-primary-foreground { --tw-ring-color: var(--mc-primary-foreground); }
+      .bg-secondary { background-color: var(--mc-secondary); }
+      .text-secondary { color: var(--mc-secondary); }
+      .border-secondary { border-color: var(--mc-secondary); }
+      .ring-secondary { --tw-ring-color: var(--mc-secondary); }
+      .bg-secondary-foreground { background-color: var(--mc-secondary-foreground); }
+      .text-secondary-foreground { color: var(--mc-secondary-foreground); }
+      .border-secondary-foreground { border-color: var(--mc-secondary-foreground); }
+      .ring-secondary-foreground { --tw-ring-color: var(--mc-secondary-foreground); }
+      .bg-muted { background-color: var(--mc-muted); }
+      .text-muted { color: var(--mc-muted); }
+      .border-muted { border-color: var(--mc-muted); }
+      .ring-muted { --tw-ring-color: var(--mc-muted); }
+      .bg-muted-foreground { background-color: var(--mc-muted-foreground); }
+      .text-muted-foreground { color: var(--mc-muted-foreground); }
+      .border-muted-foreground { border-color: var(--mc-muted-foreground); }
+      .ring-muted-foreground { --tw-ring-color: var(--mc-muted-foreground); }
+      .bg-accent { background-color: var(--mc-accent); }
+      .text-accent { color: var(--mc-accent); }
+      .border-accent { border-color: var(--mc-accent); }
+      .ring-accent { --tw-ring-color: var(--mc-accent); }
+      .bg-accent-foreground { background-color: var(--mc-accent-foreground); }
+      .text-accent-foreground { color: var(--mc-accent-foreground); }
+      .border-accent-foreground { border-color: var(--mc-accent-foreground); }
+      .ring-accent-foreground { --tw-ring-color: var(--mc-accent-foreground); }
+      .bg-destructive { background-color: var(--mc-destructive); }
+      .text-destructive { color: var(--mc-destructive); }
+      .border-destructive { border-color: var(--mc-destructive); }
+      .ring-destructive { --tw-ring-color: var(--mc-destructive); }
+      .bg-destructive-foreground { background-color: var(--mc-destructive-foreground); }
+      .text-destructive-foreground { color: var(--mc-destructive-foreground); }
+      .border-destructive-foreground { border-color: var(--mc-destructive-foreground); }
+      .ring-destructive-foreground { --tw-ring-color: var(--mc-destructive-foreground); }
+      .bg-border { background-color: var(--mc-border); }
+      .text-border { color: var(--mc-border); }
+      .border-border { border-color: var(--mc-border); }
+      .ring-border { --tw-ring-color: var(--mc-border); }
+      .bg-input { background-color: var(--mc-input); }
+      .text-input { color: var(--mc-input); }
+      .border-input { border-color: var(--mc-input); }
+      .ring-input { --tw-ring-color: var(--mc-input); }
+      .bg-ring { background-color: var(--mc-ring); }
+      .text-ring { color: var(--mc-ring); }
+      .border-ring { border-color: var(--mc-ring); }
+      .ring-ring { --tw-ring-color: var(--mc-ring); }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+    <main>
+    </main>
+    <script>lucide.createIcons();</script>
+</body>
+</html>

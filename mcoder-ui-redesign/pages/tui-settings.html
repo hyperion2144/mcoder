@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TUI - Settings</title>
+    <style id="theme-vars">
+/* mcoder UI Redesign v2 - Brand CSS
+   Inspired by Tokyo Night palette, refined for agent orchestration tool.
+   Research-backed: medium-dark bg (not pure black), low-saturation accents,
+   JetBrains Mono for code, Inter for UI.
+*/
+
+/* ===== Raw Token Scale ===== */
+:root {
+  /* Brand primary (single hue: blue) */
+  --mc-brand-50: #a9c7ff;
+  --mc-brand-100: #89b4fa;
+  --mc-brand-200: #7aa2f7;
+  --mc-brand-300: #6b91f4;
+  --mc-brand-400: #5c80f1;
+  --mc-brand-500: #4d6fee;
+  --mc-brand-600: #3e5eeb;
+  --mc-brand-700: #2f4de8;
+  --mc-brand-800: #203ce5;
+  --mc-brand-900: #112be2;
+  --mc-brand-950: #021adf;
+
+  /* Neutral scale (Tokyo Night surfaces) */
+  --mc-neutral-0: #16161e;
+  --mc-neutral-50: #1a1b26;
+  --mc-neutral-100: #1f2335;
+  --mc-neutral-200: #292e42;
+  --mc-neutral-300: #3b4261;
+  --mc-neutral-400: #565f89;
+  --mc-neutral-500: #6b7394;
+  --mc-neutral-600: #8289ad;
+  --mc-neutral-700: #9aa5ce;
+  --mc-neutral-800: #b4bdf0;
+  --mc-neutral-900: #c0caf5;
+  --mc-neutral-950: #d4dffb;
+
+  /* State colors (semantic only) */
+  --mc-state-success: #9ece6a;
+  --mc-state-success-dim: rgba(158, 206, 106, 0.12);
+  --mc-state-warning: #e0af68;
+  --mc-state-warning-dim: rgba(224, 175, 104, 0.12);
+  --mc-state-error: #f7768e;
+  --mc-state-error-dim: rgba(247, 118, 142, 0.12);
+  --mc-state-info: #7dcfff;
+  --mc-state-info-dim: rgba(125, 207, 255, 0.12);
+  --mc-state-mauve: #bb9af7;
+  --mc-state-mauve-dim: rgba(187, 154, 247, 0.12);
+  --mc-state-orange: #ff9e64;
+  --mc-state-orange-dim: rgba(255, 158, 100, 0.12);
+}
+
+/* ===== Semantic Aliases (required by head contract) ===== */
+:root {
+  --mc-background: #1a1b26;
+  --mc-foreground: #c0caf5;
+  --mc-card: #16161e;
+  --mc-card-foreground: #c0caf5;
+  --mc-popover: #292e42;
+  --mc-popover-foreground: #c0caf5;
+  --mc-primary: #7aa2f7;
+  --mc-primary-foreground: #16161e;
+  --mc-secondary: #292e42;
+  --mc-secondary-foreground: #c0caf5;
+  --mc-muted: #1f2335;
+  --mc-muted-foreground: #565f89;
+  --mc-accent: #7aa2f7;
+  --mc-accent-foreground: #16161e;
+  --mc-destructive: #f7768e;
+  --mc-destructive-foreground: #16161e;
+  --mc-border: #292e42;
+  --mc-input: #292e42;
+  --mc-ring: #7aa2f7;
+  --mc-radius-small: 4px;
+  --mc-radius-medium: 8px;
+  --mc-radius-large: 12px;
+}
+
+/* ===== Dark mode (default) ===== */
+html.dark {
+  --mc-background: #1a1b26;
+  --mc-foreground: #c0caf5;
+  --mc-card: #16161e;
+  --mc-card-foreground: #c0caf5;
+  --mc-popover: #292e42;
+  --mc-popover-foreground: #c0caf5;
+  --mc-primary: #7aa2f7;
+  --mc-primary-foreground: #16161e;
+  --mc-secondary: #292e42;
+  --mc-secondary-foreground: #c0caf5;
+  --mc-muted: #1f2335;
+  --mc-muted-foreground: #565f89;
+  --mc-accent: #7aa2f7;
+  --mc-accent-foreground: #16161e;
+  --mc-destructive: #f7768e;
+  --mc-destructive-foreground: #16161e;
+  --mc-border: #292e42;
+  --mc-input: #292e42;
+  --mc-ring: #7aa2f7;
+}
+
+/* ===== Typography ===== */
+:root {
+  --mc-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --mc-font-mono: 'JetBrains Mono', 'SF Mono', 'Menlo', 'Monaco', 'Cascadia Code', monospace;
+  --mc-font-display: var(--mc-font-sans);
+}
+
+/* ===== Radius Scale (restrained) ===== */
+:root {
+  --mc-radius-xs: 2px;
+  --mc-radius-sm: 4px;
+  --mc-radius-md: 8px;
+  --mc-radius-lg: 12px;
+}
+
+/* ===== Shadow Scale (subtle, border-first) ===== */
+:root {
+  --mc-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.03);
+  --mc-shadow-2: 0 8px 24px -8px rgba(0, 0, 0, 0.12);
+  --mc-shadow-3: 0 24px 60px -20px rgba(0, 0, 0, 0.20);
+}
+
+/* ===== Spacing Scale (8pt grid) ===== */
+:root {
+  --mc-space-1: 4px;
+  --mc-space-2: 8px;
+  --mc-space-3: 12px;
+  --mc-space-4: 16px;
+  --mc-space-5: 24px;
+  --mc-space-6: 32px;
+  --mc-space-7: 48px;
+  --mc-space-8: 80px;
+}
+
+/* ===== Transition ===== */
+:root {
+  --mc-transition-fast: 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --mc-transition: 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --mc-transition-slow: 240ms cubic-bezier(0.3, 0, 0, 1);
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-background: var(--mc-background);
+    --color-foreground: var(--mc-foreground);
+    --color-card: var(--mc-card);
+    --color-card-foreground: var(--mc-card-foreground);
+    --color-popover: var(--mc-popover);
+    --color-popover-foreground: var(--mc-popover-foreground);
+    --color-primary: var(--mc-primary);
+    --color-primary-foreground: var(--mc-primary-foreground);
+    --color-secondary: var(--mc-secondary);
+    --color-secondary-foreground: var(--mc-secondary-foreground);
+    --color-muted: var(--mc-muted);
+    --color-muted-foreground: var(--mc-muted-foreground);
+    --color-accent: var(--mc-accent);
+    --color-accent-foreground: var(--mc-accent-foreground);
+    --color-destructive: var(--mc-destructive);
+    --color-destructive-foreground: var(--mc-destructive-foreground);
+    --color-border: var(--mc-border);
+    --color-input: var(--mc-input);
+    --color-ring: var(--mc-ring);
+    --radius-sm: var(--mc-radius-sm);
+    --radius-md: var(--mc-radius-md);
+    --radius-lg: var(--mc-radius-lg);
+  }
+  @layer base {
+    body { background: var(--mc-background); color: var(--mc-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style id="semantic-token-fallback">
+      .bg-background { background-color: var(--mc-background); }
+      .text-background { color: var(--mc-background); }
+      .border-background { border-color: var(--mc-background); }
+      .ring-background { --tw-ring-color: var(--mc-background); }
+      .bg-foreground { background-color: var(--mc-foreground); }
+      .text-foreground { color: var(--mc-foreground); }
+      .border-foreground { border-color: var(--mc-foreground); }
+      .ring-foreground { --tw-ring-color: var(--mc-foreground); }
+      .bg-card { background-color: var(--mc-card); }
+      .text-card { color: var(--mc-card); }
+      .border-card { border-color: var(--mc-card); }
+      .ring-card { --tw-ring-color: var(--mc-card); }
+      .bg-card-foreground { background-color: var(--mc-card-foreground); }
+      .text-card-foreground { color: var(--mc-card-foreground); }
+      .border-card-foreground { border-color: var(--mc-card-foreground); }
+      .ring-card-foreground { --tw-ring-color: var(--mc-card-foreground); }
+      .bg-popover { background-color: var(--mc-popover); }
+      .text-popover { color: var(--mc-popover); }
+      .border-popover { border-color: var(--mc-popover); }
+      .ring-popover { --tw-ring-color: var(--mc-popover); }
+      .bg-popover-foreground { background-color: var(--mc-popover-foreground); }
+      .text-popover-foreground { color: var(--mc-popover-foreground); }
+      .border-popover-foreground { border-color: var(--mc-popover-foreground); }
+      .ring-popover-foreground { --tw-ring-color: var(--mc-popover-foreground); }
+      .bg-primary { background-color: var(--mc-primary); }
+      .text-primary { color: var(--mc-primary); }
+      .border-primary { border-color: var(--mc-primary); }
+      .ring-primary { --tw-ring-color: var(--mc-primary); }
+      .bg-primary-foreground { background-color: var(--mc-primary-foreground); }
+      .text-primary-foreground { color: var(--mc-primary-foreground); }
+      .border-primary-foreground { border-color: var(--mc-primary-foreground); }
+      .ring-primary-foreground { --tw-ring-color: var(--mc-primary-foreground); }
+      .bg-secondary { background-color: var(--mc-secondary); }
+      .text-secondary { color: var(--mc-secondary); }
+      .border-secondary { border-color: var(--mc-secondary); }
+      .ring-secondary { --tw-ring-color: var(--mc-secondary); }
+      .bg-secondary-foreground { background-color: var(--mc-secondary-foreground); }
+      .text-secondary-foreground { color: var(--mc-secondary-foreground); }
+      .border-secondary-foreground { border-color: var(--mc-secondary-foreground); }
+      .ring-secondary-foreground { --tw-ring-color: var(--mc-secondary-foreground); }
+      .bg-muted { background-color: var(--mc-muted); }
+      .text-muted { color: var(--mc-muted); }
+      .border-muted { border-color: var(--mc-muted); }
+      .ring-muted { --tw-ring-color: var(--mc-muted); }
+      .bg-muted-foreground { background-color: var(--mc-muted-foreground); }
+      .text-muted-foreground { color: var(--mc-muted-foreground); }
+      .border-muted-foreground { border-color: var(--mc-muted-foreground); }
+      .ring-muted-foreground { --tw-ring-color: var(--mc-muted-foreground); }
+      .bg-accent { background-color: var(--mc-accent); }
+      .text-accent { color: var(--mc-accent); }
+      .border-accent { border-color: var(--mc-accent); }
+      .ring-accent { --tw-ring-color: var(--mc-accent); }
+      .bg-accent-foreground { background-color: var(--mc-accent-foreground); }
+      .text-accent-foreground { color: var(--mc-accent-foreground); }
+      .border-accent-foreground { border-color: var(--mc-accent-foreground); }
+      .ring-accent-foreground { --tw-ring-color: var(--mc-accent-foreground); }
+      .bg-destructive { background-color: var(--mc-destructive); }
+      .text-destructive { color: var(--mc-destructive); }
+      .border-destructive { border-color: var(--mc-destructive); }
+      .ring-destructive { --tw-ring-color: var(--mc-destructive); }
+      .bg-destructive-foreground { background-color: var(--mc-destructive-foreground); }
+      .text-destructive-foreground { color: var(--mc-destructive-foreground); }
+      .border-destructive-foreground { border-color: var(--mc-destructive-foreground); }
+      .ring-destructive-foreground { --tw-ring-color: var(--mc-destructive-foreground); }
+      .bg-border { background-color: var(--mc-border); }
+      .text-border { color: var(--mc-border); }
+      .border-border { border-color: var(--mc-border); }
+      .ring-border { --tw-ring-color: var(--mc-border); }
+      .bg-input { background-color: var(--mc-input); }
+      .text-input { color: var(--mc-input); }
+      .border-input { border-color: var(--mc-input); }
+      .ring-input { --tw-ring-color: var(--mc-input); }
+      .bg-ring { background-color: var(--mc-ring); }
+      .text-ring { color: var(--mc-ring); }
+      .border-ring { border-color: var(--mc-ring); }
+      .ring-ring { --tw-ring-color: var(--mc-ring); }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body><main class="tui"><section class="transcript"><div class="stream">
+<header class="header-card header-bar"><div class="header-bar-row"><div class="header-bar-left"><span class="bar-dot">●</span><span class="bar-label">connected</span><span class="bar-sep">·</span><span class="bar-path">~/projects/mcoder</span><span class="bar-sep">·</span><span class="bar-branch">main</span></div><div class="header-bar-right"><span class="bar-hint"><span class="hint-key">[Esc]</span> back</span><span class="bar-sep">·</span><span class="bar-hint"><span class="hint-key">[s]</span> save</span></div></div><div class="header-bar-title"><span class="bar-title-main">Settings</span><span class="bar-title-sub">Configure mcoder preferences</span></div></header>
+<div class="settings-grid">
+<aside class="settings-sidebar"><nav class="category-list"><div class="category active"><span class="cat-marker">▸</span><span>General</span></div><div class="category"><span class="cat-marker">▹</span><span>Providers</span></div><div class="category"><span class="cat-marker">▹</span><span>Models</span></div><div class="category"><span class="cat-marker">▹</span><span>Permissions</span></div><div class="category"><span class="cat-marker">▹</span><span>Hooks</span></div><div class="category"><span class="cat-marker">▹</span><span>MCP Servers</span></div><div class="category"><span class="cat-marker">▹</span><span>Memory &amp; Context</span></div><div class="category"><span class="cat-marker">▹</span><span>Sub-agents</span></div><div class="category"><span class="cat-marker">▹</span><span>Workflow</span></div><div class="category"><span class="cat-marker">▹</span><span>Display</span></div><div class="category"><span class="cat-marker">▹</span><span>Updates</span></div></nav></aside>
+<div class="settings-pane">
+<section class="settings-section"><div class="section-head"><span class="section-head-name">Server Connection</span><span class="fill"></span></div><div class="section-body"><div class="settings-row"><span class="settings-key">Server URL</span><span class="settings-value">ws://127.0.0.1:7654</span></div><div class="settings-row"><span class="settings-key">Auth token</span><span class="settings-value">a1b2c3d4e5f6...xxxx</span></div><div class="settings-row"><span class="settings-key">TLS mode</span><span class="settings-value settings-dropdown"><span>auto</span><span class="dropdown-arrow">▾</span></span></div><div class="settings-row"><span class="settings-key">Status</span><span class="settings-value"><span class="status-ok">● connected</span><span class="settings-note">(3 sessions · 5 agents active)</span></span></div><div class="settings-actions"><span class="settings-action"><span class="hint-key">[r]</span> reconnect</span><span class="settings-action"><span class="hint-key">[R]</span> restart</span><span class="settings-action settings-action-danger"><span class="hint-key">[d]</span> disconnect</span></div></div></section>
+<section class="settings-section"><div class="section-head"><span class="section-head-name">Agent Behavior</span><span class="fill"></span></div><div class="section-body"><div class="settings-row"><span class="settings-key">Default role</span><span class="settings-value settings-dropdown"><span>coder</span><span class="dropdown-arrow">▾</span></span></div><div class="settings-row"><span class="settings-key">Permission level</span><span class="settings-value settings-dropdown"><span>Standard</span><span class="dropdown-arrow">▾</span></span></div><div class="options-list"><div class="options-row"><span class="opt-marker">▸</span><span class="opt-name">YOLO</span><span class="opt-note">(auto-approve all)</span></div><div class="options-row options-row-active"><span class="opt-marker">▸</span><span class="opt-name">Standard</span><span class="opt-note">(approve writes — recommended)</span></div><div class="options-row"><span class="opt-marker">▸</span><span class="opt-name">Strict</span><span class="opt-note">(approve everything)</span></div></div><div class="settings-row settings-row-gap"><span class="settings-key">Auto-recall memory</span><span class="settings-value"><span class="toggle-on">✓ enabled</span></span></div><div class="settings-row"><span class="settings-key">Auto-capture memory</span><span class="settings-value"><span class="toggle-off">✗ disabled</span></span></div><div class="settings-row"><span class="settings-key">Max iterations</span><span class="settings-value">50</span></div><div class="settings-row"><span class="settings-key">Compact threshold</span><span class="settings-value">0.8</span></div></div></section>
+<section class="settings-section"><div class="section-head"><span class="section-head-name">UI Preferences</span><span class="fill"></span></div><div class="section-body"><div class="settings-row"><span class="settings-key">Theme</span><span class="settings-value settings-dropdown"><span>Tokyo Night</span><span class="dropdown-arrow">▾</span></span></div><div class="options-list"><div class="options-row"><span class="opt-marker">▸</span><span class="opt-name">Catppuccin Mocha</span></div><div class="options-row options-row-active"><span class="opt-marker">▸</span><span class="opt-name">Tokyo Night</span></div><div class="options-row"><span class="opt-marker">▸</span><span class="opt-name">Tokyo Night Storm</span></div><div class="options-row"><span class="opt-marker">▸</span><span class="opt-name">Gruvbox Dark</span></div></div><div class="settings-row settings-row-gap"><span class="settings-key">Date format</span><span class="settings-value">2026-08-02 14:23</span></div><div class="settings-row"><span class="settings-key">Time format</span><span class="settings-value">14:23:08</span></div><div class="settings-row"><span class="settings-key">Streaming indicator</span><span class="settings-value"><span class="toggle-on">● on</span></span></div><div class="settings-row"><span class="settings-key">Compact mode</span><span class="settings-value"><span class="toggle-off">✗ off</span></span></div><div class="settings-row"><span class="settings-key">Verbose tool output</span><span class="settings-value"><span class="toggle-on">✓ on</span></span></div></div></section>
+<section class="settings-section"><div class="section-head"><span class="section-head-name">Quick Shortcuts</span><span class="fill"></span></div><div class="section-body"><div class="keybind-grid"><div class="keybind-chip"><span class="hint-key">[Ctrl+C]</span><span class="keybind-label">quit</span></div><div class="keybind-chip"><span class="hint-key">[Ctrl+S]</span><span class="keybind-label">sessions</span></div><div class="keybind-chip"><span class="hint-key">[Ctrl+T]</span><span class="keybind-label">todos</span></div><div class="keybind-chip"><span class="hint-key">[Ctrl+K]</span><span class="keybind-label">tasks</span></div><div class="keybind-chip"><span class="hint-key">[Ctrl+,]</span><span class="keybind-label">config</span></div><div class="keybind-chip"><span class="hint-key">[Ctrl+R]</span><span class="keybind-label">resume</span></div><div class="keybind-chip"><span class="hint-key">[/]</span><span class="keybind-label">cmd</span></div><div class="keybind-chip"><span class="hint-key">[@]</span><span class="keybind-label">files</span></div><div class="keybind-chip"><span class="hint-key">[?]</span><span class="keybind-label">help</span></div></div></div></section>
+</div>
+</div></div></section>
+<footer class="bottom-dock"><div class="dock-inner"><section class="inline-section"><div class="inline-title">status</div><div class="inline-row"><span class="status-ok">●</span><span>config synced</span><span class="agent-state">auto-save enabled</span></div><div class="inline-row"><span class="run-key">[↑↓]</span><span>navigate</span><span class="run-key">[Tab]</span><span>next field</span><span class="run-key">[Esc]</span><span>back</span></div></section><section class="input-box"><div class="session-label">page · settings</div><div class="session-info"><div class="info-primary"><span class="model">mcoder</span><span>│</span><span class="thinking">config</span><span>│</span><span class="mode">edit</span><span>│</span><span class="path">~/projects/mcoder</span><span>│</span><span class="branch">main</span></div><div class="info-secondary"><span>11 sections</span><span>·</span><span>auto-save on</span><span>·</span><span class="streaming">unsaved · 0</span></div></div><div class="input-area"><div class="prompt"><span>&gt;</span><span class="prompt-line"><span class="command-hint">/settings.search</span> <span>_</span></span></div><div class="hints"><span>[Enter]</span> confirm&nbsp; <span>[Esc]</span> back&nbsp; <span>[/]</span> commands&nbsp; <span>[?]</span> help</div></div></section></div></footer></main>
+    <style id="critical-layout">
+    *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden}body{background:var(--mc-background);color:var(--mc-foreground);font:14px/1.55 var(--mc-font-mono);font-feature-settings:"liga" 0,"calt" 0}.tui{height:100vh;display:flex;flex-direction:column}.transcript{flex:1;min-height:0;overflow:auto}.stream,.dock-inner{width:min(1120px,calc(100% - 40px));margin:auto}.stream{padding:18px 0 30px}.header-card,.tool-card,.input-box{border:1px solid #353b55;border-radius:8px;background:rgba(22,22,30,.78);overflow:hidden}.header-section{padding:20px 24px}.welcome{min-height:150px;display:flex;align-items:center;gap:34px}.header-section+.header-section{border-top:1px solid #2d334b}.ascii-logo{color:var(--mc-cyan);margin:0;line-height:1.15}.brand-name{color:var(--mc-blue);font-size:25px;font-weight:700}.version,.date,.muted{color:var(--mc-muted-foreground)}.section-title{font-weight:700;color:#d4dffb;margin-bottom:8px}.rule{width:48px;height:1px;background:#3b4261;margin-bottom:12px}.tips-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:5px 32px}.tip-key{display:inline-block;width:28px;color:var(--mc-cyan)}.split-section{display:grid;grid-template-columns:1fr 1fr;padding:0}.split-section>section{padding:20px 24px}.split-section>section+section{border-left:1px solid #2d334b}.plain-list{list-style:none;padding:0;margin:0}.plain-list li{margin:4px 0}.dot{color:var(--mc-green);margin-right:9px}.session-dot{color:var(--mc-blue);margin-right:9px}.messages{padding:26px 4px 0}.message,.thinking-block,.tool-row,.tool-card{margin-bottom:24px}.role{color:var(--mc-muted-foreground);margin-bottom:5px}.role strong{color:var(--mc-blue)}.message-body{padding-left:18px;white-space:pre-wrap;max-width:800px}.thinking-block{padding-left:18px;color:var(--mc-purple);font-style:italic;max-width:800px}.thinking-title{color:#747a92;font-style:normal;margin-bottom:5px}.thinking-copy{white-space:pre-wrap}.tool-row{display:grid;grid-template-columns:auto 1fr auto;gap:12px;padding-left:18px;color:var(--mc-muted-foreground)}.tool-row .action{color:#747a92}.filename{color:var(--mc-foreground)}.tool-card{background:rgba(41,46,66,.17)}.tool-head{display:flex;align-items:center;gap:9px;min-height:38px;padding:8px 16px;border-bottom:1px solid rgba(59,66,97,.54)}.tool-head .name{color:#9099bd}.tool-head .file{color:var(--mc-foreground)}.fill{flex:1;height:1px;background:linear-gradient(90deg,#3b4261,transparent)}.tool-status{white-space:nowrap;color:var(--mc-muted-foreground)}.running-dot{color:var(--mc-blue)}.tool-body{padding:15px 18px 17px}.code-table{border-collapse:collapse;width:100%}.code-table td{padding:0;vertical-align:top;white-space:pre}.line-no{width:34px;color:#4f5674;text-align:right;padding-right:11px!important;border-right:1px solid #30364d}.code{padding-left:12px!important;color:#b8c2e8}.comment{color:#6c7086}.code-summary{color:var(--mc-muted-foreground);margin-top:11px;padding-left:47px}.field-row{display:grid;grid-template-columns:86px 1fr}.field-row .key{color:#69708e}.field-row .value{white-space:pre-wrap;color:#b8c2e8}.field-row+.field-row{margin-top:5px}.diff{margin-top:13px;white-space:pre-wrap}.diff-line{display:block;padding-left:8px}.diff-line.del{color:var(--mc-red);background:var(--mc-state-error-dim,rgba(247,118,142,.12))}.diff-line.add{color:var(--mc-green);background:var(--mc-state-success-dim,rgba(158,206,106,.12))}.cancel{color:var(--mc-red);margin-top:14px}.usage-line{margin:15px 0 0 18px;padding-top:9px;border-top:1px solid #30364d;color:#59617f;font-size:12px;font-variant-numeric:tabular-nums}.usage-line .up{color:var(--mc-blue)}.bash-success{border-color:rgba(158,206,106,.72);background:rgba(158,206,106,.09)}.bash-success .tool-head{border-color:rgba(158,206,106,.25)}.bash-warn{border-color:rgba(224,175,104,.78);background:rgba(224,175,104,.09)}.bash-warn .tool-head{border-color:rgba(224,175,104,.25)}.bash-fail{border-color:rgba(247,118,142,.84);background:rgba(247,118,142,.10)}.bash-fail .tool-head{border-color:rgba(247,118,142,.28)}.success{color:var(--mc-green)}.warning{color:var(--mc-orange)}.failure{color:var(--mc-red)}.test-output{margin:0;white-space:pre-wrap;color:#b8c2e8}.pass{color:var(--mc-green)}.warn{color:var(--mc-orange)}.error{color:var(--mc-red)}@keyframes shimmer{0%{background-position:-200% center}100%{background-position:200% center}}.shimmer{background:linear-gradient(90deg,#565f89,#c0caf5,#fff,#c0caf5,#565f89);background-size:200% 100%;background-clip:text;-webkit-background-clip:text;color:transparent;animation:shimmer 1.8s linear infinite}.ask{border-color:rgba(224,175,104,.72);background:rgba(224,175,104,.045)}.ask .tool-head,.permission .tool-head{color:var(--mc-orange)}.choice{margin:5px 0}.choice-key{display:inline-block;width:34px;color:var(--mc-orange)}.note{color:#777f9f;margin-top:13px}.actions{color:#6f789c;margin-top:13px}.actions span{margin-right:13px}.permission{border-color:rgba(224,175,104,.58);background:rgba(255,158,100,.045)}.bottom-dock{flex:0 0 auto;background:linear-gradient(180deg,rgba(26,27,38,.92),var(--mc-background) 12%);box-shadow:0 -16px 35px rgba(26,27,38,.92)}.dock-inner{padding:5px 0 14px}.inline-section{border-top:1px solid #30364d;padding:6px 8px 7px}.inline-section:last-of-type{border-bottom:1px solid #30364d}.inline-title{color:#7e87a9}.inline-row{display:grid;grid-template-columns:20px minmax(260px,1fr) 100px 74px;min-height:21px}.todo-row{grid-template-columns:20px 1fr}.active-mark,.agent-active{color:var(--mc-blue)}.open-mark{color:#59617f}.done-mark{color:var(--mc-green)}.agent-state,.agent-time,.more{color:#616987}.more{padding-left:20px}.input-box{margin-top:10px;border-color:#47506f}.session-label{position:absolute;transform:translate(14px,-11px);padding:0 7px;background:var(--mc-background);color:#7781a5}.session-info{padding:15px 16px 9px;border-bottom:1px solid #353c56}.info-primary,.info-secondary{display:flex;gap:10px;white-space:nowrap;overflow:hidden}.info-secondary{color:#666f91;margin-top:3px;font-size:13px}.model{color:var(--mc-blue)}.thinking{color:var(--mc-purple)}.mode,.path{color:var(--mc-cyan)}.branch{color:#68718f}.streaming{color:var(--mc-green)}.input-area{padding:11px 16px 9px}.prompt{display:flex;gap:10px;color:var(--mc-blue);min-height:24px}.prompt-line{color:var(--mc-foreground)}.hints{color:#59617f;font-size:13px}.hints span{color:#7d86a8}@media(max-width:900px){.stream,.dock-inner{width:calc(100% - 24px)}.split-section{grid-template-columns:1fr}.split-section>section+section{border-left:0;border-top:1px solid #2d334b}.tips-grid{grid-template-columns:1fr}}
+
+/* ===== Settings page extensions (sibling to .tool-card) ===== */
+.header-bar{padding:0;border:1px solid #353b55}
+.header-bar-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:8px 16px;border-bottom:1px solid #2d334b;color:var(--mc-muted-foreground);font-size:13px}
+.header-bar-left,.header-bar-right{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.bar-dot{color:var(--mc-green)}
+.bar-label,.bar-path{color:var(--mc-foreground)}
+.bar-sep{color:#59617f}
+.bar-branch{color:#68718f}
+.bar-hint{color:#747a92}
+.hint-key{color:var(--mc-orange)}
+.header-bar-title{display:flex;align-items:baseline;gap:14px;padding:14px 18px 18px}
+.bar-title-main{color:var(--mc-foreground);font-size:18px;font-weight:700;letter-spacing:.01em}
+.bar-title-sub{color:var(--mc-muted-foreground);font-size:13px}
+.settings-grid{display:grid;grid-template-columns:260px minmax(0,1fr);gap:18px;padding:24px 4px 0;margin-bottom:24px}
+.settings-sidebar{border:1px solid #353b55;border-radius:8px;background:rgba(22,22,30,.78);padding:8px 0}
+.category-list{display:flex;flex-direction:column}
+.category{position:relative;display:flex;align-items:center;gap:10px;min-height:34px;padding:6px 16px;color:var(--mc-muted-foreground);font-size:13px}
+.cat-marker{width:12px;color:#59617f;text-align:center}
+.category.active{color:var(--mc-blue);background:rgba(122,162,247,.08)}
+.category.active::before{content:"";position:absolute;left:-1px;top:0;bottom:0;width:3px;background:var(--mc-blue);border-radius:0 3px 3px 0}
+.category.active .cat-marker{color:var(--mc-blue)}
+.settings-pane{display:flex;flex-direction:column;gap:18px;min-width:0}
+.settings-section{border:1px solid #353b55;border-radius:8px;background:rgba(22,22,30,.78);overflow:hidden}
+.settings-section .section-head{display:flex;align-items:center;gap:10px;min-height:38px;padding:8px 16px;border-bottom:1px solid #2d334b;color:var(--mc-foreground)}
+.section-head-name{font-weight:700;color:#d4dffb;font-size:14px}
+.section-body{padding:15px 18px 17px}
+.settings-row{display:grid;grid-template-columns:172px minmax(0,1fr);align-items:center;gap:14px;min-height:30px;padding:3px 0}
+.settings-row+.settings-row{margin-top:3px}
+.settings-row-gap{margin-top:8px}
+.settings-key{color:#69708e;font-size:13px}
+.settings-value{display:flex;align-items:center;flex-wrap:wrap;gap:10px;color:var(--mc-foreground)}
+.settings-note{color:#59617f;font-size:12px}
+.settings-dropdown{justify-content:space-between;min-width:280px;padding:5px 12px;border:1px solid #353b55;border-radius:6px;background:rgba(41,46,66,.28);color:var(--mc-foreground)}
+.dropdown-arrow{color:var(--mc-muted-foreground)}
+.options-list{margin:6px 0 8px 186px;padding:8px 12px;border-left:1px solid #2d334b;color:var(--mc-muted-foreground);font-size:13px}
+.options-row{display:grid;grid-template-columns:14px minmax(80px,auto) 1fr;align-items:center;gap:10px;min-height:24px;padding:1px 0}
+.opt-marker{color:#59617f}
+.opt-name{color:var(--mc-muted-foreground)}
+.opt-note{color:#59617f;font-size:12px}
+.options-row-active .opt-marker,.options-row-active .opt-name{color:var(--mc-blue)}
+.toggle-on{color:var(--mc-green)}
+.toggle-off{color:var(--mc-red)}
+.status-ok{color:var(--mc-green)}
+.settings-actions{display:flex;flex-wrap:wrap;gap:10px 22px;margin-top:14px;padding-top:12px;border-top:1px dashed #30364d;color:var(--mc-muted-foreground)}
+.settings-action{display:inline-flex;align-items:center;gap:6px;color:var(--mc-foreground);font-size:13px}
+.settings-action-danger{color:var(--mc-red)}
+.keybind-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 32px;padding-top:6px;padding-bottom:4px}
+.keybind-chip{display:flex;align-items:center;gap:12px;min-height:30px;color:var(--mc-foreground);font-size:13px}
+.keybind-label{color:var(--mc-muted-foreground)}
+.run-key{color:var(--mc-orange);margin-right:4px}
+.command-hint{color:var(--mc-purple)}
+@media(max-width:900px){.settings-grid{grid-template-columns:1fr}.keybind-grid{grid-template-columns:1fr}}
+  </style>
+</body></html>

@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="zh" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TUI - Plan Approval</title>
+    <style id="theme-vars">
+/* mcoder UI Redesign v2 - Brand CSS
+   Inspired by Tokyo Night palette, refined for agent orchestration tool.
+   Research-backed: medium-dark bg (not pure black), low-saturation accents,
+   JetBrains Mono for code, Inter for UI.
+*/
+
+/* ===== Raw Token Scale ===== */
+:root {
+  /* Brand primary (single hue: blue) */
+  --mc-brand-50: #a9c7ff;
+  --mc-brand-100: #89b4fa;
+  --mc-brand-200: #7aa2f7;
+  --mc-brand-300: #6b91f4;
+  --mc-brand-400: #5c80f1;
+  --mc-brand-500: #4d6fee;
+  --mc-brand-600: #3e5eeb;
+  --mc-brand-700: #2f4de8;
+  --mc-brand-800: #203ce5;
+  --mc-brand-900: #112be2;
+  --mc-brand-950: #021adf;
+
+  /* Neutral scale (Tokyo Night surfaces) */
+  --mc-neutral-0: #16161e;
+  --mc-neutral-50: #1a1b26;
+  --mc-neutral-100: #1f2335;
+  --mc-neutral-200: #292e42;
+  --mc-neutral-300: #3b4261;
+  --mc-neutral-400: #565f89;
+  --mc-neutral-500: #6b7394;
+  --mc-neutral-600: #8289ad;
+  --mc-neutral-700: #9aa5ce;
+  --mc-neutral-800: #b4bdf0;
+  --mc-neutral-900: #c0caf5;
+  --mc-neutral-950: #d4dffb;
+
+  /* State colors (semantic only) */
+  --mc-state-success: #9ece6a;
+  --mc-state-success-dim: rgba(158, 206, 106, 0.12);
+  --mc-state-warning: #e0af68;
+  --mc-state-warning-dim: rgba(224, 175, 104, 0.12);
+  --mc-state-error: #f7768e;
+  --mc-state-error-dim: rgba(247, 118, 142, 0.12);
+  --mc-state-info: #7dcfff;
+  --mc-state-info-dim: rgba(125, 207, 255, 0.12);
+  --mc-state-mauve: #bb9af7;
+  --mc-state-mauve-dim: rgba(187, 154, 247, 0.12);
+  --mc-state-orange: #ff9e64;
+  --mc-state-orange-dim: rgba(255, 158, 100, 0.12);
+}
+
+/* ===== Semantic Aliases (required by head contract) ===== */
+:root {
+  --mc-background: #1a1b26;
+  --mc-foreground: #c0caf5;
+  --mc-card: #16161e;
+  --mc-card-foreground: #c0caf5;
+  --mc-popover: #292e42;
+  --mc-popover-foreground: #c0caf5;
+  --mc-primary: #7aa2f7;
+  --mc-primary-foreground: #16161e;
+  --mc-secondary: #292e42;
+  --mc-secondary-foreground: #c0caf5;
+  --mc-muted: #1f2335;
+  --mc-muted-foreground: #565f89;
+  --mc-accent: #7aa2f7;
+  --mc-accent-foreground: #16161e;
+  --mc-destructive: #f7768e;
+  --mc-destructive-foreground: #16161e;
+  --mc-border: #292e42;
+  --mc-input: #292e42;
+  --mc-ring: #7aa2f7;
+  --mc-radius-small: 4px;
+  --mc-radius-medium: 8px;
+  --mc-radius-large: 12px;
+}
+
+/* ===== Dark mode (default) ===== */
+html.dark {
+  --mc-background: #1a1b26;
+  --mc-foreground: #c0caf5;
+  --mc-card: #16161e;
+  --mc-card-foreground: #c0caf5;
+  --mc-popover: #292e42;
+  --mc-popover-foreground: #c0caf5;
+  --mc-primary: #7aa2f7;
+  --mc-primary-foreground: #16161e;
+  --mc-secondary: #292e42;
+  --mc-secondary-foreground: #c0caf5;
+  --mc-muted: #1f2335;
+  --mc-muted-foreground: #565f89;
+  --mc-accent: #7aa2f7;
+  --mc-accent-foreground: #16161e;
+  --mc-destructive: #f7768e;
+  --mc-destructive-foreground: #16161e;
+  --mc-border: #292e42;
+  --mc-input: #292e42;
+  --mc-ring: #7aa2f7;
+}
+
+/* ===== Typography ===== */
+:root {
+  --mc-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --mc-font-mono: 'JetBrains Mono', 'SF Mono', 'Menlo', 'Monaco', 'Cascadia Code', monospace;
+  --mc-font-display: var(--mc-font-sans);
+}
+
+/* ===== Radius Scale (restrained) ===== */
+:root {
+  --mc-radius-xs: 2px;
+  --mc-radius-sm: 4px;
+  --mc-radius-md: 8px;
+  --mc-radius-lg: 12px;
+}
+
+/* ===== Shadow Scale (subtle, border-first) ===== */
+:root {
+  --mc-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.03);
+  --mc-shadow-2: 0 8px 24px -8px rgba(0, 0, 0, 0.12);
+  --mc-shadow-3: 0 24px 60px -20px rgba(0, 0, 0, 0.20);
+}
+
+/* ===== Spacing Scale (8pt grid) ===== */
+:root {
+  --mc-space-1: 4px;
+  --mc-space-2: 8px;
+  --mc-space-3: 12px;
+  --mc-space-4: 16px;
+  --mc-space-5: 24px;
+  --mc-space-6: 32px;
+  --mc-space-7: 48px;
+  --mc-space-8: 80px;
+}
+
+/* ===== Transition ===== */
+:root {
+  --mc-transition-fast: 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --mc-transition: 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --mc-transition-slow: 240ms cubic-bezier(0.3, 0, 0, 1);
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-background: var(--mc-background);
+    --color-foreground: var(--mc-foreground);
+    --color-card: var(--mc-card);
+    --color-card-foreground: var(--mc-card-foreground);
+    --color-popover: var(--mc-popover);
+    --color-popover-foreground: var(--mc-popover-foreground);
+    --color-primary: var(--mc-primary);
+    --color-primary-foreground: var(--mc-primary-foreground);
+    --color-secondary: var(--mc-secondary);
+    --color-secondary-foreground: var(--mc-secondary-foreground);
+    --color-muted: var(--mc-muted);
+    --color-muted-foreground: var(--mc-muted-foreground);
+    --color-accent: var(--mc-accent);
+    --color-accent-foreground: var(--mc-accent-foreground);
+    --color-destructive: var(--mc-destructive);
+    --color-destructive-foreground: var(--mc-destructive-foreground);
+    --color-border: var(--mc-border);
+    --color-input: var(--mc-input);
+    --color-ring: var(--mc-ring);
+    --radius-sm: var(--mc-radius-sm);
+    --radius-md: var(--mc-radius-md);
+    --radius-lg: var(--mc-radius-lg);
+  }
+  @layer base {
+    body { background: var(--mc-background); color: var(--mc-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style id="semantic-token-fallback">
+      .bg-background { background-color: var(--mc-background); }
+      .text-background { color: var(--mc-background); }
+      .border-background { border-color: var(--mc-background); }
+      .ring-background { --tw-ring-color: var(--mc-background); }
+      .bg-foreground { background-color: var(--mc-foreground); }
+      .text-foreground { color: var(--mc-foreground); }
+      .border-foreground { border-color: var(--mc-foreground); }
+      .ring-foreground { --tw-ring-color: var(--mc-foreground); }
+      .bg-card { background-color: var(--mc-card); }
+      .text-card { color: var(--mc-card); }
+      .border-card { border-color: var(--mc-card); }
+      .ring-card { --tw-ring-color: var(--mc-card); }
+      .bg-card-foreground { background-color: var(--mc-card-foreground); }
+      .text-card-foreground { color: var(--mc-card-foreground); }
+      .border-card-foreground { border-color: var(--mc-card-foreground); }
+      .ring-card-foreground { --tw-ring-color: var(--mc-card-foreground); }
+      .bg-popover { background-color: var(--mc-popover); }
+      .text-popover { color: var(--mc-popover); }
+      .border-popover { border-color: var(--mc-popover); }
+      .ring-popover { --tw-ring-color: var(--mc-popover); }
+      .bg-popover-foreground { background-color: var(--mc-popover-foreground); }
+      .text-popover-foreground { color: var(--mc-popover-foreground); }
+      .border-popover-foreground { border-color: var(--mc-popover-foreground); }
+      .ring-popover-foreground { --tw-ring-color: var(--mc-popover-foreground); }
+      .bg-primary { background-color: var(--mc-primary); }
+      .text-primary { color: var(--mc-primary); }
+      .border-primary { border-color: var(--mc-primary); }
+      .ring-primary { --tw-ring-color: var(--mc-primary); }
+      .bg-primary-foreground { background-color: var(--mc-primary-foreground); }
+      .text-primary-foreground { color: var(--mc-primary-foreground); }
+      .border-primary-foreground { border-color: var(--mc-primary-foreground); }
+      .ring-primary-foreground { --tw-ring-color: var(--mc-primary-foreground); }
+      .bg-secondary { background-color: var(--mc-secondary); }
+      .text-secondary { color: var(--mc-secondary); }
+      .border-secondary { border-color: var(--mc-secondary); }
+      .ring-secondary { --tw-ring-color: var(--mc-secondary); }
+      .bg-secondary-foreground { background-color: var(--mc-secondary-foreground); }
+      .text-secondary-foreground { color: var(--mc-secondary-foreground); }
+      .border-secondary-foreground { border-color: var(--mc-secondary-foreground); }
+      .ring-secondary-foreground { --tw-ring-color: var(--mc-secondary-foreground); }
+      .bg-muted { background-color: var(--mc-muted); }
+      .text-muted { color: var(--mc-muted); }
+      .border-muted { border-color: var(--mc-muted); }
+      .ring-muted { --tw-ring-color: var(--mc-muted); }
+      .bg-muted-foreground { background-color: var(--mc-muted-foreground); }
+      .text-muted-foreground { color: var(--mc-muted-foreground); }
+      .border-muted-foreground { border-color: var(--mc-muted-foreground); }
+      .ring-muted-foreground { --tw-ring-color: var(--mc-muted-foreground); }
+      .bg-accent { background-color: var(--mc-accent); }
+      .text-accent { color: var(--mc-accent); }
+      .border-accent { border-color: var(--mc-accent); }
+      .ring-accent { --tw-ring-color: var(--mc-accent); }
+      .bg-accent-foreground { background-color: var(--mc-accent-foreground); }
+      .text-accent-foreground { color: var(--mc-accent-foreground); }
+      .border-accent-foreground { border-color: var(--mc-accent-foreground); }
+      .ring-accent-foreground { --tw-ring-color: var(--mc-accent-foreground); }
+      .bg-destructive { background-color: var(--mc-destructive); }
+      .text-destructive { color: var(--mc-destructive); }
+      .border-destructive { border-color: var(--mc-destructive); }
+      .ring-destructive { --tw-ring-color: var(--mc-destructive); }
+      .bg-destructive-foreground { background-color: var(--mc-destructive-foreground); }
+      .text-destructive-foreground { color: var(--mc-destructive-foreground); }
+      .border-destructive-foreground { border-color: var(--mc-destructive-foreground); }
+      .ring-destructive-foreground { --tw-ring-color: var(--mc-destructive-foreground); }
+      .bg-border { background-color: var(--mc-border); }
+      .text-border { color: var(--mc-border); }
+      .border-border { border-color: var(--mc-border); }
+      .ring-border { --tw-ring-color: var(--mc-border); }
+      .bg-input { background-color: var(--mc-input); }
+      .text-input { color: var(--mc-input); }
+      .border-input { border-color: var(--mc-input); }
+      .ring-input { --tw-ring-color: var(--mc-input); }
+      .bg-ring { background-color: var(--mc-ring); }
+      .text-ring { color: var(--mc-ring); }
+      .border-ring { border-color: var(--mc-ring); }
+      .ring-ring { --tw-ring-color: var(--mc-ring); }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body><main class="tui">
+
+<!-- ========== Top header bar (thin pattern, like main page's bottom-dock) ========== -->
+<header class="top-bar"><div class="top-bar-inner">
+  <div class="top-bar-left">
+    <span class="conn"><span class="conn-dot">●</span><span class="conn-text">connected</span></span>
+    <span class="top-bar-meta"><span class="path">~/projects/mcoder</span><span class="sep">·</span><span class="branch">main</span></span>
+  </div>
+  <div class="top-bar-right">
+    <span class="top-act"><span class="kb">[Esc]</span><span class="lbl">cancel</span></span>
+    <span class="top-act"><span class="kb">[a]</span><span class="lbl">approve</span></span>
+    <span class="top-act"><span class="kb">[e]</span><span class="lbl">edit</span></span>
+  </div>
+</div></header>
+
+<section class="transcript"><div class="stream">
+
+<!-- ========== Plan header card ========== -->
+<header class="header-card"><div class="header-section plan-header">
+  <div class="plan-title-row">
+    <span class="plan-label">Plan</span>
+    <span class="plan-dot">·</span>
+    <span class="plan-title">Refactor login.ts to use async/await</span>
+  </div>
+  <div class="plan-meta-grid">
+    <div class="plan-meta-item"><span class="meta-key">Created</span><span class="meta-val">2026-08-02 14:23:08</span></div>
+    <div class="plan-meta-item"><span class="meta-key">Plan model</span><span class="meta-val meta-purple">claude-opus-4</span></div>
+    <div class="plan-meta-item"><span class="meta-key">Estimated turns</span><span class="meta-val">12</span></div>
+    <div class="plan-meta-item"><span class="meta-key">Estimated files</span><span class="meta-val">4</span></div>
+    <div class="plan-meta-item"><span class="meta-key">Estimated cost</span><span class="meta-val meta-green">$0.05</span></div>
+    <div class="plan-meta-item"><span class="meta-key">Complexity</span><span class="meta-val meta-orange">medium</span></div>
+  </div>
+</div></header>
+
+<!-- ========== Steps card ========== -->
+<section class="tool-card">
+  <div class="tool-head">
+    <span class="name">▸ Steps</span>
+    <span class="fill"></span>
+    <span class="tool-status">5 steps · 1 done · 1 current</span>
+  </div>
+  <div class="tool-body plan-steps-body">
+
+    <div class="plan-step done">
+      <div class="plan-step-row">
+        <span class="plan-step-num">1.</span>
+        <span class="plan-marker done">✓</span>
+        <span class="plan-step-title">Analyze current callback structure in login.ts</span>
+      </div>
+      <div class="plan-sub-list">
+        <div class="plan-sub"><span class="plan-connector">└─</span><span class="plan-sub-text">identify all callback parameters and their semantics</span></div>
+      </div>
+    </div>
+
+    <div class="plan-step current">
+      <div class="plan-step-row">
+        <span class="plan-step-num">2.</span>
+        <span class="plan-marker current">●</span>
+        <span class="plan-step-title">Convert login() to async function</span>
+      </div>
+      <div class="plan-sub-list">
+        <div class="plan-sub"><span class="plan-connector">└─</span><span class="plan-sub-text">transform <span class="hl-purple">callback(null, (err, user))</span> to <span class="hl-orange">try/catch + await</span></span></div>
+        <div class="plan-sub"><span class="plan-connector">└─</span><span class="plan-sub-text">files: <span class="hl-cyan">src/login.ts</span></span></div>
+        <div class="plan-sub plan-sub-tag"><span class="plan-tag">[current step]</span></div>
+      </div>
+    </div>
+
+    <div class="plan-step">
+      <div class="plan-step-row">
+        <span class="plan-step-num">3.</span>
+        <span class="plan-marker pending">○</span>
+        <span class="plan-step-title">Update call sites</span>
+      </div>
+      <div class="plan-sub-list">
+        <div class="plan-sub"><span class="plan-connector">└─</span><span class="plan-sub-text">file 1: <span class="hl-cyan">src/auth.ts</span> <span class="dim">(line 45-52)</span></span></div>
+        <div class="plan-sub"><span class="plan-connector">└─</span><span class="plan-sub-text">file 2: <span class="hl-cyan">src/middleware.ts</span> <span class="dim">(line 23-31)</span></span></div>
+      </div>
+    </div>
+
+    <div class="plan-step">
+      <div class="plan-step-row">
+        <span class="plan-step-num">4.</span>
+        <span class="plan-marker pending">○</span>
+        <span class="plan-step-title">Add error handling</span>
+      </div>
+      <div class="plan-sub-list">
+        <div class="plan-sub"><span class="plan-connector">└─</span><span class="plan-sub-text">wrap thrown errors in custom <span class="hl-cyan">AuthError</span> class</span></div>
+      </div>
+    </div>
+
+    <div class="plan-step">
+      <div class="plan-step-row">
+        <span class="plan-step-num">5.</span>
+        <span class="plan-marker pending">○</span>
+        <span class="plan-step-title">Run test suite</span>
+      </div>
+      <div class="plan-sub-list">
+        <div class="plan-sub"><span class="plan-connector">└─</span><span class="plan-sub-text"><span class="hl-orange">npm test --coverage</span></span></div>
+        <div class="plan-sub"><span class="plan-connector">└─</span><span class="plan-sub-text">expected: <span class="hl-purple">47</span> tests pass</span></div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ========== Affected files card ========== -->
+<section class="tool-card">
+  <div class="tool-head">
+    <span class="name">▸ Affected Files</span>
+    <span class="fill"></span>
+    <span class="tool-status">4 files</span>
+  </div>
+  <div class="tool-body plan-files-body">
+
+    <div class="plan-file-row">
+      <span class="plan-file-path">src/login.ts</span>
+      <span class="plan-file-mode">read + write</span>
+      <span class="plan-file-stat"><span class="num">152</span> lines <span class="dim">→</span> <span class="num">145</span> lines</span>
+    </div>
+
+    <div class="plan-file-row">
+      <span class="plan-file-path">src/auth.ts</span>
+      <span class="plan-file-mode">edit</span>
+      <span class="plan-file-stat"><span class="add">+5</span> lines</span>
+    </div>
+
+    <div class="plan-file-row">
+      <span class="plan-file-path">src/middleware.ts</span>
+      <span class="plan-file-mode">edit</span>
+      <span class="plan-file-stat"><span class="add">+3</span> <span class="rem">-2</span> lines</span>
+    </div>
+
+    <div class="plan-file-row">
+      <span class="plan-file-path">src/__tests__/auth.test.ts</span>
+      <span class="plan-file-mode">edit</span>
+      <span class="plan-file-stat"><span class="add">+12</span> lines</span>
+    </div>
+
+  </div>
+</section>
+
+<!-- ========== Risks & considerations card ========== -->
+<section class="tool-card plan-risk-card">
+  <div class="tool-head">
+    <span class="name">▸ Risks &amp; Considerations</span>
+    <span class="fill"></span>
+    <span class="tool-status">2 items</span>
+  </div>
+  <div class="tool-body plan-risks-body">
+
+    <div class="plan-risk break">
+      <span class="plan-risk-icon break">!</span>
+      <div class="plan-risk-body">
+        <div class="plan-risk-head"><span class="tag-break">Breaking change:</span> <span class="text">login() signature changes from sync to async</span></div>
+        <div class="plan-risk-reco"><span class="reco-arrow">→</span> all callers must be updated in same commit</div>
+      </div>
+    </div>
+
+    <div class="plan-risk warn">
+      <span class="plan-risk-icon warn">~</span>
+      <div class="plan-risk-body">
+        <div class="plan-risk-head"><span class="tag-warn">Test coverage:</span> <span class="text">existing tests cover happy path, may miss error cases</span></div>
+        <div class="plan-risk-reco"><span class="reco-arrow">→</span> recommendation: add new test cases for error scenarios</div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+</div></section>
+
+<!-- ========== Bottom action bar ========== -->
+<footer class="bottom-dock"><div class="dock-inner">
+  <section class="plan-action-bar">
+    <span class="plan-action primary">
+      <span class="kb">[a]</span>
+      <span class="lbl">approve &amp; execute</span>
+    </span>
+    <span class="plan-action">
+      <span class="kb">[e]</span>
+      <span class="lbl">edit plan</span>
+    </span>
+    <span class="plan-action danger">
+      <span class="kb">[r]</span>
+      <span class="lbl">reject</span>
+    </span>
+  </section>
+  <div class="plan-confirm-hint">
+    <span class="hint-arrow">→</span> pressing <span class="hl-cyan">[a]</span> will switch to <span class="hl-cyan">execute mode</span> and run all <span class="hl-fg">5 steps</span> with <span class="hl-purple">claude-sonnet-4</span>
+  </div>
+</div></footer>
+</main>
+    <style id="critical-layout">
+    *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden}body{background:var(--mc-background);color:var(--mc-foreground);font:14px/1.55 var(--mc-font-mono);font-feature-settings:"liga" 0,"calt" 0}.tui{height:100vh;display:flex;flex-direction:column}.transcript{flex:1;min-height:0;overflow:auto}.stream,.dock-inner{width:min(1120px,calc(100% - 40px));margin:auto}.stream{padding:18px 0 30px}.header-card,.tool-card,.input-box{border:1px solid #353b55;border-radius:8px;background:rgba(22,22,30,.78);overflow:hidden}.header-section{padding:20px 24px}.welcome{min-height:150px;display:flex;align-items:center;gap:34px}.header-section+.header-section{border-top:1px solid #2d334b}.ascii-logo{color:var(--mc-cyan);margin:0;line-height:1.15}.brand-name{color:var(--mc-blue);font-size:25px;font-weight:700}.version,.date,.muted{color:var(--mc-muted-foreground)}.section-title{font-weight:700;color:#d4dffb;margin-bottom:8px}.rule{width:48px;height:1px;background:#3b4261;margin-bottom:12px}.tips-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:5px 32px}.tip-key{display:inline-block;width:28px;color:var(--mc-cyan)}.split-section{display:grid;grid-template-columns:1fr 1fr;padding:0}.split-section>section{padding:20px 24px}.split-section>section+section{border-left:1px solid #2d334b}.plain-list{list-style:none;padding:0;margin:0}.plain-list li{margin:4px 0}.dot{color:var(--mc-green);margin-right:9px}.session-dot{color:var(--mc-blue);margin-right:9px}.messages{padding:26px 4px 0}.message,.thinking-block,.tool-row,.tool-card{margin-bottom:24px}.role{color:var(--mc-muted-foreground);margin-bottom:5px}.role strong{color:var(--mc-blue)}.message-body{padding-left:18px;white-space:pre-wrap;max-width:800px}.thinking-block{padding-left:18px;color:var(--mc-purple);font-style:italic;max-width:800px}.thinking-title{color:#747a92;font-style:normal;margin-bottom:5px}.thinking-copy{white-space:pre-wrap}.tool-row{display:grid;grid-template-columns:auto 1fr auto;gap:12px;padding-left:18px;color:var(--mc-muted-foreground)}.tool-row .action{color:#747a92}.filename{color:var(--mc-foreground)}.tool-card{background:rgba(41,46,66,.17)}.tool-head{display:flex;align-items:center;gap:9px;min-height:38px;padding:8px 16px;border-bottom:1px solid rgba(59,66,97,.54)}.tool-head .name{color:#9099bd}.tool-head .file{color:var(--mc-foreground)}.fill{flex:1;height:1px;background:linear-gradient(90deg,#3b4261,transparent)}.tool-status{white-space:nowrap;color:var(--mc-muted-foreground)}.running-dot{color:var(--mc-blue)}.tool-body{padding:15px 18px 17px}.code-table{border-collapse:collapse;width:100%}.code-table td{padding:0;vertical-align:top;white-space:pre}.line-no{width:34px;color:#4f5674;text-align:right;padding-right:11px!important;border-right:1px solid #30364d}.code{padding-left:12px!important;color:#b8c2e8}.comment{color:#6c7086}.code-summary{color:var(--mc-muted-foreground);margin-top:11px;padding-left:47px}.field-row{display:grid;grid-template-columns:86px 1fr}.field-row .key{color:#69708e}.field-row .value{white-space:pre-wrap;color:#b8c2e8}.field-row+.field-row{margin-top:5px}.diff{margin-top:13px;white-space:pre-wrap}.diff-line{display:block;padding-left:8px}.diff-line.del{color:var(--mc-red);background:var(--mc-state-error-dim,rgba(247,118,142,.12))}.diff-line.add{color:var(--mc-green);background:var(--mc-state-success-dim,rgba(158,206,106,.12))}.cancel{color:var(--mc-red);margin-top:14px}.usage-line{margin:15px 0 0 18px;padding-top:9px;border-top:1px solid #30364d;color:#59617f;font-size:12px;font-variant-numeric:tabular-nums}.usage-line .up{color:var(--mc-blue)}.bash-success{border-color:rgba(158,206,106,.72);background:rgba(158,206,106,.09)}.bash-success .tool-head{border-color:rgba(158,206,106,.25)}.bash-warn{border-color:rgba(224,175,104,.78);background:rgba(224,175,104,.09)}.bash-warn .tool-head{border-color:rgba(224,175,104,.25)}.bash-fail{border-color:rgba(247,118,142,.84);background:rgba(247,118,142,.10)}.bash-fail .tool-head{border-color:rgba(247,118,142,.28)}.success{color:var(--mc-green)}.warning{color:var(--mc-orange)}.failure{color:var(--mc-red)}.test-output{margin:0;white-space:pre-wrap;color:#b8c2e8}.pass{color:var(--mc-green)}.warn{color:var(--mc-orange)}.error{color:var(--mc-red)}@keyframes shimmer{0%{background-position:-200% center}100%{background-position:200% center}}.shimmer{background:linear-gradient(90deg,#565f89,#c0caf5,#fff,#c0caf5,#565f89);background-size:200% 100%;background-clip:text;-webkit-background-clip:text;color:transparent;animation:shimmer 1.8s linear infinite}.ask{border-color:rgba(224,175,104,.72);background:rgba(224,175,104,.045)}.ask .tool-head,.permission .tool-head{color:var(--mc-orange)}.choice{margin:5px 0}.choice-key{display:inline-block;width:34px;color:var(--mc-orange)}.note{color:#777f9f;margin-top:13px}.actions{color:#6f789c;margin-top:13px}.actions span{margin-right:13px}.permission{border-color:rgba(224,175,104,.58);background:rgba(255,158,100,.045)}.bottom-dock{flex:0 0 auto;background:linear-gradient(180deg,rgba(26,27,38,.92),var(--mc-background) 12%);box-shadow:0 -16px 35px rgba(26,27,38,.92)}.dock-inner{padding:5px 0 14px}.inline-section{border-top:1px solid #30364d;padding:6px 8px 7px}.inline-section:last-of-type{border-bottom:1px solid #30364d}.inline-title{color:#7e87a9}.inline-row{display:grid;grid-template-columns:20px minmax(260px,1fr) 100px 74px;min-height:21px}.todo-row{grid-template-columns:20px 1fr}.active-mark,.agent-active{color:var(--mc-blue)}.open-mark{color:#59617f}.done-mark{color:var(--mc-green)}.agent-state,.agent-time,.more{color:#616987}.more{padding-left:20px}.input-box{margin-top:10px;border-color:#47506f}.session-label{position:absolute;transform:translate(14px,-11px);padding:0 7px;background:var(--mc-background);color:#7781a5}.session-info{padding:15px 16px 9px;border-bottom:1px solid #353c56}.info-primary,.info-secondary{display:flex;gap:10px;white-space:nowrap;overflow:hidden}.info-secondary{color:#666f91;margin-top:3px;font-size:13px}.model{color:var(--mc-blue)}.thinking{color:var(--mc-purple)}.mode,.path{color:var(--mc-cyan)}.branch{color:#68718f}.streaming{color:var(--mc-green)}.input-area{padding:11px 16px 9px}.prompt{display:flex;gap:10px;color:var(--mc-blue);min-height:24px}.prompt-line{color:var(--mc-foreground)}.hints{color:#59617f;font-size:13px}.hints span{color:#7d86a8}@media(max-width:900px){.stream,.dock-inner{width:calc(100% - 24px)}.split-section{grid-template-columns:1fr}.split-section>section+section{border-left:0;border-top:1px solid #2d334b}.tips-grid{grid-template-columns:1fr}}
+
+    /* ===== Plan approval page: top bar ===== */
+    .top-bar{flex:0 0 auto;border-bottom:1px solid #2d334b;background:linear-gradient(180deg,var(--mc-background),rgba(26,27,38,.92) 88%)}
+    .top-bar-inner{display:flex;align-items:center;gap:18px;width:min(1120px,calc(100% - 40px));margin:auto;padding:10px 0 11px;font-size:13px;white-space:nowrap;overflow:hidden}
+    .top-bar-left{display:flex;align-items:center;gap:18px;color:var(--mc-muted-foreground);overflow:hidden}
+    .top-bar-right{display:flex;align-items:center;gap:14px;margin-left:auto;color:var(--mc-muted-foreground)}
+    .top-bar .conn{display:inline-flex;align-items:center;gap:6px;color:var(--mc-foreground)}
+    .top-bar .conn-dot{color:var(--mc-green);font-size:11px;line-height:1}
+    .top-bar .conn-text{color:var(--mc-foreground)}
+    .top-bar-meta{display:inline-flex;align-items:center;gap:8px}
+    .top-bar-meta .path{color:var(--mc-cyan)}
+    .top-bar-meta .branch{color:var(--mc-purple)}
+    .top-bar-meta .sep{color:#4f5674}
+    .top-bar .top-act{display:inline-flex;align-items:center;gap:6px}
+    .top-bar .top-act .kb{color:var(--mc-blue)}
+    .top-bar .top-act .lbl{color:var(--mc-muted-foreground)}
+
+    /* ===== Plan header card (uses .header-card) ===== */
+    .header-card{margin-bottom:24px}
+    .plan-header{padding:20px 24px}
+    .plan-title-row{display:flex;align-items:baseline;gap:10px;margin-bottom:14px;font-size:18px;font-weight:700;line-height:1.4}
+    .plan-label{color:var(--mc-blue)}
+    .plan-dot{color:var(--mc-muted-foreground);font-weight:400}
+    .plan-title{color:var(--mc-blue)}
+    .plan-meta-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px 24px;font-size:13px}
+    .plan-meta-item{display:flex;gap:10px;align-items:baseline;white-space:nowrap;overflow:hidden}
+    .plan-meta-item .meta-key{color:var(--mc-muted-foreground)}
+    .plan-meta-item .meta-val{color:var(--mc-foreground)}
+    .plan-meta-item .meta-val.meta-purple{color:var(--mc-purple)}
+    .plan-meta-item .meta-val.meta-green{color:var(--mc-green)}
+    .plan-meta-item .meta-val.meta-orange{color:var(--mc-orange)}
+    .plan-meta-item .meta-val.meta-red{color:var(--mc-red)}
+    .plan-meta-item .meta-val.meta-cyan{color:var(--mc-cyan)}
+
+    /* ===== Steps (uses .tool-card) ===== */
+    .plan-steps-body{padding:14px 18px 17px}
+    .plan-step{display:grid;grid-template-columns:28px 22px 1fr;column-gap:8px;row-gap:2px;align-items:start;padding:6px 8px;border-radius:6px;margin:0 -8px}
+    .plan-step.current{background:rgba(122,162,247,.08);box-shadow:inset 2px 0 0 var(--mc-blue)}
+    .plan-step-row{display:contents}
+    .plan-step-num{color:var(--mc-muted-foreground);text-align:right;font-variant-numeric:tabular-nums;font-size:13px;padding-top:2px}
+    .plan-marker{font-size:14px;line-height:1;padding-top:3px;text-align:center}
+    .plan-marker.done{color:var(--mc-green)}
+    .plan-marker.current{color:var(--mc-blue)}
+    .plan-marker.pending{color:#59617f}
+    .plan-step-title{color:var(--mc-foreground);font-weight:500;font-size:14px;line-height:1.5;padding-top:1px}
+    .plan-step.current .plan-step-title{color:var(--mc-blue);font-weight:600}
+    .plan-sub-list{grid-column:3/4;display:flex;flex-direction:column;gap:2px;margin-top:4px}
+    .plan-sub{display:grid;grid-template-columns:24px 1fr;column-gap:4px;color:var(--mc-muted-foreground);font-size:13px;line-height:1.55}
+    .plan-connector{color:#4f5674;white-space:pre}
+    .plan-sub-text{color:var(--mc-muted-foreground)}
+    .plan-sub-text .hl-cyan{color:var(--mc-cyan)}
+    .plan-sub-text .hl-orange{color:var(--mc-orange)}
+    .plan-sub-text .hl-purple{color:var(--mc-purple)}
+    .plan-sub-text .hl-green{color:var(--mc-green)}
+    .plan-sub-text .dim{color:#59617f}
+    .plan-sub.plan-sub-tag{display:block;margin-top:4px}
+    .plan-sub.plan-sub-tag .plan-tag{color:var(--mc-blue);font-size:12px;background:rgba(122,162,247,.10);border:1px solid rgba(122,162,247,.30);padding:1px 8px;border-radius:4px;display:inline-block}
+
+    /* ===== Affected files (uses .tool-card) ===== */
+    .plan-files-body{padding:10px 18px 14px;display:flex;flex-direction:column;gap:6px;font-size:13.5px}
+    .plan-file-row{display:grid;grid-template-columns:1.6fr 110px 1fr;column-gap:24px;align-items:baseline;padding:2px 0}
+    .plan-file-path{color:var(--mc-cyan);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .plan-file-mode{color:var(--mc-purple);font-size:13px}
+    .plan-file-stat{color:var(--mc-muted-foreground);font-size:13px;font-variant-numeric:tabular-nums}
+    .plan-file-stat .num{color:var(--mc-foreground)}
+    .plan-file-stat .dim{color:#59617f}
+    .plan-file-stat .add{color:var(--mc-green)}
+    .plan-file-stat .rem{color:var(--mc-red)}
+
+    /* ===== Risks (uses .tool-card with subtle orange border) ===== */
+    .plan-risk-card{border-color:rgba(224,175,104,.45);background:rgba(255,158,100,.04)}
+    .plan-risk-card .tool-head{color:var(--mc-orange);border-bottom-color:rgba(224,175,104,.22)}
+    .plan-risk-card .tool-head .name{color:var(--mc-orange)}
+    .plan-risks-body{padding:14px 18px 17px;display:flex;flex-direction:column;gap:12px}
+    .plan-risk{display:grid;grid-template-columns:22px 1fr;column-gap:10px;row-gap:2px;align-items:start}
+    .plan-risk-icon{font-weight:700;font-size:14px;line-height:1.55;text-align:center}
+    .plan-risk-icon.break{color:var(--mc-red)}
+    .plan-risk-icon.warn{color:var(--mc-orange)}
+    .plan-risk-body{display:flex;flex-direction:column;gap:2px}
+    .plan-risk-head{color:var(--mc-foreground);font-size:14px;line-height:1.55}
+    .plan-risk-head .text{color:var(--mc-foreground)}
+    .plan-risk-head .tag-break{color:var(--mc-red);font-weight:600}
+    .plan-risk-head .tag-warn{color:var(--mc-orange);font-weight:600}
+    .plan-risk-reco{color:var(--mc-muted-foreground);font-size:13px;line-height:1.55}
+    .plan-risk-reco .reco-arrow{color:var(--mc-cyan);margin-right:4px}
+
+    /* ===== Bottom action bar (uses .bottom-dock) ===== */
+    .plan-action-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:8px 8px 6px;font-size:14px}
+    .plan-action{display:inline-flex;align-items:center;gap:8px;padding:5px 12px 5px 5px;border:1px solid #353b55;background:rgba(41,46,66,.17);color:var(--mc-foreground);border-radius:6px;min-height:30px}
+    .plan-action .kb{display:inline-block;padding:2px 8px;background:rgba(22,22,30,.78);color:var(--mc-blue);font-weight:600;border:1px solid #353b55;line-height:1.4;border-radius:4px;font-size:13px}
+    .plan-action .lbl{letter-spacing:.02em}
+    .plan-action.primary{border-color:var(--mc-blue);background:rgba(122,162,247,.10);color:var(--mc-foreground)}
+    .plan-action.primary .kb{background:var(--mc-blue);color:var(--mc-primary-foreground);border-color:var(--mc-blue)}
+    .plan-action.danger .kb{color:var(--mc-red)}
+    .plan-confirm-hint{margin-top:6px;padding:0 8px 4px;color:var(--mc-muted-foreground);font-size:13px;line-height:1.55}
+    .plan-confirm-hint .hint-arrow{color:var(--mc-cyan);margin-right:4px}
+    .plan-confirm-hint .hl-fg{color:var(--mc-foreground)}
+    .plan-confirm-hint .hl-cyan{color:var(--mc-cyan)}
+    .plan-confirm-hint .hl-purple{color:var(--mc-purple)}
+
+    @media(max-width:900px){
+      .stream,.dock-inner,.top-bar-inner{width:calc(100% - 24px)}
+      .plan-meta-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .plan-file-row{grid-template-columns:1fr;row-gap:2px}
+      .plan-file-row .plan-file-mode,.plan-file-row .plan-file-stat{grid-column:1/-1;padding-left:12px}
+      .top-bar-right .top-act .lbl{display:none}
+    }
+    @media(max-width:640px){
+      .top-bar-right{display:none}
+      .plan-meta-grid{grid-template-columns:1fr}
+    }
+  </style>
+</body></html>

@@ -1,0 +1,124 @@
+{
+  "data": [
+    {
+      "id": "page-tui-main",
+      "title": "TUI - 主界面（全屏）",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1785658000000,
+      "canvasData": {
+        "x": 624,
+        "y": -168,
+        "group": 0,
+        "layoutSnapshot": {
+          "version": 1,
+          "contentHeight": 2408,
+          "viewportWidth": 1440,
+          "sourceHash": "fnv1a-e72f44b5",
+          "measuredAt": 1785660989416
+        }
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/tui-main.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-tui-settings",
+      "title": "TUI - 设置面板（全屏）",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1785658000000,
+      "canvasData": {
+        "x": 1164,
+        "y": -168,
+        "group": 1,
+        "layoutSnapshot": {
+          "version": 1,
+          "contentHeight": 1291,
+          "viewportWidth": 1440,
+          "sourceHash": "fnv1a-442c1b1b",
+          "measuredAt": 1785660034936
+        }
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/tui-settings.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-tui-plan-approval",
+      "title": "TUI - Plan 审批（全屏）",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1785658000000,
+      "canvasData": {
+        "x": 1692,
+        "y": -168,
+        "group": 2,
+        "layoutSnapshot": {
+          "version": 1,
+          "contentHeight": 1221,
+          "viewportWidth": 1440,
+          "sourceHash": "fnv1a-72815fd4",
+          "measuredAt": 1785660034936
+        }
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/tui-plan-approval.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-tui-providers",
+      "title": "TUI - Provider 配置（全屏）",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1785658000000,
+      "canvasData": {
+        "x": 1152,
+        "y": 468,
+        "group": 3,
+        "layoutSnapshot": {
+          "version": 1,
+          "contentHeight": 1250,
+          "viewportWidth": 1440,
+          "sourceHash": "fnv1a-902f8e64",
+          "measuredAt": 1785660034936
+        }
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/tui-providers.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-tui-model-switcher",
+      "title": "TUI - 模型切换（底部弹出）",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1785658000000,
+      "canvasData": {
+        "x": 624,
+        "y": 1392,
+        "group": 4,
+        "layoutSnapshot": {
+          "version": 1,
+          "contentHeight": 900,
+          "viewportWidth": 1440,
+          "sourceHash": "fnv1a-eafa7e74",
+          "measuredAt": 1785660078925
+        }
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/tui-model-switcher.html",
+        "interactions": []
+      }
+    }
+  ],
+  "config": {
+    "autoLayout": false,
+    "deviceType": "desktop",
+    "projectName": "mcoder TUI Redesign"
+  }
+}

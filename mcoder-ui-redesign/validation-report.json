@@ -1,0 +1,250 @@
+{
+  "success": false,
+  "outcome": "validation_failed",
+  "repairable": true,
+  "terminalViolations": [],
+  "terminalBlockingSummary": null,
+  "skillProvenance": {
+    "name": "solo-design",
+    "version": "2026.07.22.00.00.00",
+    "version_source": "skill-release-manifest.json",
+    "runtime_skill_dir": "/Users/mutou/.trae-cn/builtin/design/default/skills/solo-design",
+    "recorded_at": null,
+    "expected_version": "2026.07.22.00.00.00",
+    "status": "manifest_fallback",
+    "read_status": "ok",
+    "reason": "runtime-orchestration-summary.json missing skillProvenance; used skill-release-manifest.json"
+  },
+  "operatingMode": "free-explore",
+  "renderBlockingErrorCount": 3,
+  "softWarningCount": 11,
+  "renderBlockingErrors": [
+    "[html-infrastructure] [MAIN-AGENT] tui-main.html missing Tailwind CSS CDN (<script src=\"...@tailwindcss/browser@4\">). Impact: all utility classes stop working; page degrades to unstyled HTML. Fix: run apply-html-head-contract.mjs <css-path> tui-main.html --replace-head",
+    "[html-infrastructure] [MAIN-AGENT] tui-main.html missing @theme inline Tailwind <-> CSS variable bridge block. Impact: bg-primary, text-foreground and similar classes cannot map to theme colors. Fix: run apply-html-head-contract.mjs <css-path> tui-main.html --replace-head",
+    "[html-infrastructure] [MAIN-AGENT] tui-main.html missing @layer base global base styles. Impact: body background color, font, table word-break and other base styles are lost. Fix: run apply-html-head-contract.mjs <css-path> tui-main.html --replace-head"
+  ],
+  "errorSignatures": [
+    {
+      "errorClass": "head-infrastructure",
+      "normalized": "[html-infrastructure] [MAIN-AGENT] tui-main.html missing Tailwind CSS CDN (<script src=\"...@tailwindcss/browser@4\">). Impact: all utility classes stop working; page degrades to unstyled HTML. Fix: run apply-html-head-contract.mjs <css-path> tui-main.html --replace-head",
+      "signature": "8de2982a7fe4ed7626e0f7bd8b0988b28067d8af9bb0fcc01cf3cd0c1037a7ba"
+    },
+    {
+      "errorClass": "head-infrastructure",
+      "normalized": "[html-infrastructure] [MAIN-AGENT] tui-main.html missing @theme inline Tailwind <-> CSS variable bridge block. Impact: bg-primary, text-foreground and similar classes cannot map to theme colors. Fix: run apply-html-head-contract.mjs <css-path> tui-main.html --replace-head",
+      "signature": "507795b3b7f61da48b6d6fcb5e4854eb715b2cc833783a493fd4c875c8086305"
+    },
+    {
+      "errorClass": "head-infrastructure",
+      "normalized": "[html-infrastructure] [MAIN-AGENT] tui-main.html missing @layer base global base styles. Impact: body background color, font, table word-break and other base styles are lost. Fix: run apply-html-head-contract.mjs <css-path> tui-main.html --replace-head",
+      "signature": "b5c5d2140f03f9836873aad154e39eb7a4278d1102c295b5c0e6e3d488e9a08e"
+    }
+  ],
+  "softWarnings": [
+    "[html-head-style] tui-main.html: found 1 custom <style> block(s) in <head>. The <head> is owned by apply-html-head-contract.mjs; move custom styles before </body> or re-run apply-html-head-contract.mjs <css-path> <html-file> --replace-head to relocate them.",
+    "[html-head-style] tui-model-switcher.html: found 1 custom <style> block(s) in <head>. The <head> is owned by apply-html-head-contract.mjs; move custom styles before </body> or re-run apply-html-head-contract.mjs <css-path> <html-file> --replace-head to relocate them.",
+    "[html-head-style] tui-providers.html: found 2 custom <style> block(s) in <head>. The <head> is owned by apply-html-head-contract.mjs; move custom styles before </body> or re-run apply-html-head-contract.mjs <css-path> <html-file> --replace-head to relocate them.",
+    "[html-head-style] tui-settings.html: found 1 custom <style> block(s) in <head>. The <head> is owned by apply-html-head-contract.mjs; move custom styles before </body> or re-run apply-html-head-contract.mjs <css-path> <html-file> --replace-head to relocate them.",
+    "[html-quality] colors_and_type.css: free-explore brand CSS must use one primary hue only; forbidden secondary/accent brand variables found (--mc-secondary, --mc-secondary-foreground, --mc-accent, --mc-accent-foreground). Use --state-success/warning/error/info only for semantic states.",
+    "[html-quality] colors_and_type.css: ordinary/static shadow tokens must keep every shadow alpha <= 0.05; deeper shadows are allowed only for floating-layer tokens such as modal/popover/dropdown/drawer/overlay (--mc-shadow-2: 0 8px 24px -8px rgba(0, 0, 0, 0.12), --mc-shadow-3: 0 24px 60px -20px rgba(0, 0, 0, 0.20)).",
+    "[html-quality] tui-main.html: hardcoded colors are forbidden outside <style id=\"theme-vars\">. Use brand CSS variables from the token reference.",
+    "[html-quality] tui-model-switcher.html: free-explore pages must not use secondary/accent brand variables. Use the single primary hue, neutral tints, or --state-success/warning/error/info for real semantic states.",
+    "[html-quality] tui-plan-approval.html: free-explore pages must not use secondary/accent brand variables. Use the single primary hue, neutral tints, or --state-success/warning/error/info for real semantic states.",
+    "[html-quality] tui-providers.html: free-explore pages must not use secondary/accent brand variables. Use the single primary hue, neutral tints, or --state-success/warning/error/info for real semantic states.",
+    "[html-quality] tui-settings.html: free-explore pages must not use secondary/accent brand variables. Use the single primary hue, neutral tints, or --state-success/warning/error/info for real semantic states."
+  ],
+  "repairPlanHints": [
+    {
+      "errorClass": "head-infrastructure-missing",
+      "owner": "main-agent",
+      "repairScope": "affected-page-head",
+      "strategy": "run_apply_html_head_replace",
+      "affectedFiles": [
+        "tui-main.html"
+      ],
+      "repairReportPath": null,
+      "repairAlreadyAttempted": false,
+      "allowSourceRead": "no-full-html-read",
+      "maxValidationRuns": 2
+    },
+    {
+      "errorClass": "hardcoded-color-in-body",
+      "owner": "sub-agent",
+      "repairScope": "targeted-token-replace",
+      "strategy": "targeted_token_replace_once",
+      "affectedFiles": [
+        "tui-main.html"
+      ],
+      "repairReportPath": null,
+      "repairAlreadyAttempted": false,
+      "allowSourceRead": "no-full-html-read",
+      "maxValidationRuns": 2
+    }
+  ],
+  "repairActionTable": [
+    {
+      "error": "[html-infrastructure] [MAIN-AGENT] tui-main.html missing Tailwind CSS CDN (<script src=\"...@tailwindcss/browser@4\">). Impact: all utility classes stop working; page degrades to unstyled HTML. Fix: run apply-html-head-contract.mjs <css-path> tui-main.html --replace-head",
+      "errorClass": "head-infrastructure",
+      "severity": "blocking",
+      "action": "run_apply_html_head_replace_once",
+      "owner": "main-agent",
+      "sourceReadPolicy": "no-validator-source-read"
+    },
+    {
+      "error": "[html-infrastructure] [MAIN-AGENT] tui-main.html missing @theme inline Tailwind <-> CSS variable bridge block. Impact: bg-primary, text-foreground and similar classes cannot map to theme colors. Fix: run apply-html-head-contract.mjs <css-path> tui-main.html --replace-head",
+      "errorClass": "head-infrastructure",
+      "severity": "blocking",
+      "action": "run_apply_html_head_replace_once",
+      "owner": "main-agent",
+      "sourceReadPolicy": "no-validator-source-read"
+    },
+    {
+      "error": "[html-infrastructure] [MAIN-AGENT] tui-main.html missing @layer base global base styles. Impact: body background color, font, table word-break and other base styles are lost. Fix: run apply-html-head-contract.mjs <css-path> tui-main.html --replace-head",
+      "errorClass": "head-infrastructure",
+      "severity": "blocking",
+      "action": "run_apply_html_head_replace_once",
+      "owner": "main-agent",
+      "sourceReadPolicy": "no-validator-source-read"
+    }
+  ],
+  "errorCount": 3,
+  "warningCount": 11,
+  "errors": [
+    "[html-infrastructure] [MAIN-AGENT] tui-main.html missing Tailwind CSS CDN (<script src=\"...@tailwindcss/browser@4\">). Impact: all utility classes stop working; page degrades to unstyled HTML. Fix: run apply-html-head-contract.mjs <css-path> tui-main.html --replace-head",
+    "[html-infrastructure] [MAIN-AGENT] tui-main.html missing @theme inline Tailwind <-> CSS variable bridge block. Impact: bg-primary, text-foreground and similar classes cannot map to theme colors. Fix: run apply-html-head-contract.mjs <css-path> tui-main.html --replace-head",
+    "[html-infrastructure] [MAIN-AGENT] tui-main.html missing @layer base global base styles. Impact: body background color, font, table word-break and other base styles are lost. Fix: run apply-html-head-contract.mjs <css-path> tui-main.html --replace-head"
+  ],
+  "warnings": [
+    "[html-head-style] tui-main.html: found 1 custom <style> block(s) in <head>. The <head> is owned by apply-html-head-contract.mjs; move custom styles before </body> or re-run apply-html-head-contract.mjs <css-path> <html-file> --replace-head to relocate them.",
+    "[html-head-style] tui-model-switcher.html: found 1 custom <style> block(s) in <head>. The <head> is owned by apply-html-head-contract.mjs; move custom styles before </body> or re-run apply-html-head-contract.mjs <css-path> <html-file> --replace-head to relocate them.",
+    "[html-head-style] tui-providers.html: found 2 custom <style> block(s) in <head>. The <head> is owned by apply-html-head-contract.mjs; move custom styles before </body> or re-run apply-html-head-contract.mjs <css-path> <html-file> --replace-head to relocate them.",
+    "[html-head-style] tui-settings.html: found 1 custom <style> block(s) in <head>. The <head> is owned by apply-html-head-contract.mjs; move custom styles before </body> or re-run apply-html-head-contract.mjs <css-path> <html-file> --replace-head to relocate them.",
+    "[html-quality] colors_and_type.css: free-explore brand CSS must use one primary hue only; forbidden secondary/accent brand variables found (--mc-secondary, --mc-secondary-foreground, --mc-accent, --mc-accent-foreground). Use --state-success/warning/error/info only for semantic states.",
+    "[html-quality] colors_and_type.css: ordinary/static shadow tokens must keep every shadow alpha <= 0.05; deeper shadows are allowed only for floating-layer tokens such as modal/popover/dropdown/drawer/overlay (--mc-shadow-2: 0 8px 24px -8px rgba(0, 0, 0, 0.12), --mc-shadow-3: 0 24px 60px -20px rgba(0, 0, 0, 0.20)).",
+    "[html-quality] tui-main.html: hardcoded colors are forbidden outside <style id=\"theme-vars\">. Use brand CSS variables from the token reference.",
+    "[html-quality] tui-model-switcher.html: free-explore pages must not use secondary/accent brand variables. Use the single primary hue, neutral tints, or --state-success/warning/error/info for real semantic states.",
+    "[html-quality] tui-plan-approval.html: free-explore pages must not use secondary/accent brand variables. Use the single primary hue, neutral tints, or --state-success/warning/error/info for real semantic states.",
+    "[html-quality] tui-providers.html: free-explore pages must not use secondary/accent brand variables. Use the single primary hue, neutral tints, or --state-success/warning/error/info for real semantic states.",
+    "[html-quality] tui-settings.html: free-explore pages must not use secondary/accent brand variables. Use the single primary hue, neutral tints, or --state-success/warning/error/info for real semantic states."
+  ],
+  "validationRunDisciplineStatus": {
+    "declared": false,
+    "restoreMode": false,
+    "maxFullValidationRuns": null,
+    "validationHistoryCount": 0,
+    "repairLedgerCount": 0,
+    "softWarningsTriggerRepair": null,
+    "terminalState": null,
+    "nextAction": null,
+    "violations": [],
+    "success": true
+  },
+  "terminalState": null,
+  "nextCheck": {
+    "type": "full",
+    "command": "node '/Users/mutou/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/validate-design-workspace.mjs' '/Users/mutou/vault/projects/mcoder/mcoder-ui-redesign' --report-json='/Users/mutou/vault/projects/mcoder/mcoder-ui-redesign/validation-report.json'",
+    "fullValidationAllowed": true,
+    "reason": "no narrower deterministic targeted check is available for the current failure class"
+  },
+  "repairBatch": [
+    {
+      "error": "[html-infrastructure] [MAIN-AGENT] tui-main.html missing Tailwind CSS CDN (<script src=\"...@tailwindcss/browser@4\">). Impact: all utility classes stop working; page degrades to unstyled HTML. Fix: run apply-html-head-contract.mjs <css-path> tui-main.html --replace-head",
+      "errorClass": "head-infrastructure",
+      "severity": "blocking",
+      "action": "run_apply_html_head_replace_once",
+      "owner": "main-agent",
+      "sourceReadPolicy": "no-validator-source-read"
+    },
+    {
+      "error": "[html-infrastructure] [MAIN-AGENT] tui-main.html missing @theme inline Tailwind <-> CSS variable bridge block. Impact: bg-primary, text-foreground and similar classes cannot map to theme colors. Fix: run apply-html-head-contract.mjs <css-path> tui-main.html --replace-head",
+      "errorClass": "head-infrastructure",
+      "severity": "blocking",
+      "action": "run_apply_html_head_replace_once",
+      "owner": "main-agent",
+      "sourceReadPolicy": "no-validator-source-read"
+    },
+    {
+      "error": "[html-infrastructure] [MAIN-AGENT] tui-main.html missing @layer base global base styles. Impact: body background color, font, table word-break and other base styles are lost. Fix: run apply-html-head-contract.mjs <css-path> tui-main.html --replace-head",
+      "errorClass": "head-infrastructure",
+      "severity": "blocking",
+      "action": "run_apply_html_head_replace_once",
+      "owner": "main-agent",
+      "sourceReadPolicy": "no-validator-source-read"
+    }
+  ],
+  "repairContextPacket": {
+    "schema_version": "1.0",
+    "purpose": "small-context repair packet; read this before full validation-report.json",
+    "success": false,
+    "terminalState": null,
+    "skillProvenance": {
+      "name": "solo-design",
+      "version": "2026.07.22.00.00.00",
+      "version_source": "skill-release-manifest.json",
+      "runtime_skill_dir": "/Users/mutou/.trae-cn/builtin/design/default/skills/solo-design",
+      "recorded_at": null,
+      "expected_version": "2026.07.22.00.00.00",
+      "status": "manifest_fallback",
+      "read_status": "ok",
+      "reason": "runtime-orchestration-summary.json missing skillProvenance; used skill-release-manifest.json"
+    },
+    "renderBlockingErrorCount": 3,
+    "softWarningCount": 11,
+    "renderBlockingErrors": [
+      "[html-infrastructure] [MAIN-AGENT] tui-main.html missing Tailwind CSS CDN (<script src=\"...@tailwindcss/browser@4\">). Impact: all utility classes stop working; page degrades to unstyled HTML. Fix: run apply-html-head-contract.mjs <css-path> tui-main.html --replace-head",
+      "[html-infrastructure] [MAIN-AGENT] tui-main.html missing @theme inline Tailwind <-> CSS variable bridge block. Impact: bg-primary, text-foreground and similar classes cannot map to theme colors. Fix: run apply-html-head-contract.mjs <css-path> tui-main.html --replace-head",
+      "[html-infrastructure] [MAIN-AGENT] tui-main.html missing @layer base global base styles. Impact: body background color, font, table word-break and other base styles are lost. Fix: run apply-html-head-contract.mjs <css-path> tui-main.html --replace-head"
+    ],
+    "repairActionTable": [
+      {
+        "errorClass": "head-infrastructure",
+        "owner": "main-agent",
+        "severity": "blocking",
+        "action": "run_apply_html_head_replace_once",
+        "affectedFiles": [],
+        "sourceReadPolicy": "no-validator-source-read"
+      },
+      {
+        "errorClass": "head-infrastructure",
+        "owner": "main-agent",
+        "severity": "blocking",
+        "action": "run_apply_html_head_replace_once",
+        "affectedFiles": [],
+        "sourceReadPolicy": "no-validator-source-read"
+      },
+      {
+        "errorClass": "head-infrastructure",
+        "owner": "main-agent",
+        "severity": "blocking",
+        "action": "run_apply_html_head_replace_once",
+        "affectedFiles": [],
+        "sourceReadPolicy": "no-validator-source-read"
+      }
+    ],
+    "nextCheck": {
+      "type": "full",
+      "command": "node '/Users/mutou/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/validate-design-workspace.mjs' '/Users/mutou/vault/projects/mcoder/mcoder-ui-redesign' --report-json='/Users/mutou/vault/projects/mcoder/mcoder-ui-redesign/validation-report.json'",
+      "fullValidationAllowed": true,
+      "reason": "no narrower deterministic targeted check is available for the current failure class"
+    },
+    "forbidden": [
+      "do not read validator source",
+      "do not rerun full validation when nextCheck.fullValidationAllowed=false",
+      "do not start preview/browser unless user explicitly asks",
+      "do not hand-edit repair ledger fields"
+    ]
+  },
+  "projectFileHashes": {
+    "mcoder-ui-redesign.design": "b8de1e85b6d4bedd3f9fe33e892927eaf10a3022046517829e3baf4875a7f490",
+    "colors_and_type.css": "73be44e94089ce0df50e5862b3aca366561c3aee9d201cb8ec8bd69c1e3435b6",
+    "pages/tui-main.html": "a0a57264bfbf2d42500dfde9eca4f7d5bda9f2712c41aa57b7aefc349082292e",
+    "pages/tui-model-switcher.html": "34e162c7636cbe2262ad9503f7654c39d30686330612debb3f0128d3cd991f72",
+    "pages/tui-plan-approval.html": "33f2d0fabd262327062562c88fb09a7ff0eb783677964d524f0ba0b3c5e0b2eb",
+    "pages/tui-providers.html": "41336c259e4312714c0f72c5f2db21924d828cc756508e2843dc47e4201471d3",
+    "pages/tui-settings.html": "708bf84415e41aebb241a628ae1d44a89aa2fb9a472e35a4197e88c3abab50ed"
+  },
+  "designDir": "/Users/mutou/vault/projects/mcoder/mcoder-ui-redesign",
+  "expectedPages": null,
+  "requireInteractions": null,
+  "checkedAt": "2026-08-02T08:55:46.137Z"
+}
