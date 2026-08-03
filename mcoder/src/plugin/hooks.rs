@@ -16,7 +16,6 @@ use crate::plugin::{HookContext, HookHandler, HookPoint, HookResult};
 use crate::types::HookConfig;
 use anyhow::Result;
 use async_trait::async_trait;
-use tokio::process::Command;
 
 /// Shell 命令 Hook 处理器
 pub struct ShellHookHandler {

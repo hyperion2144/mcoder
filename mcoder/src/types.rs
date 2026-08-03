@@ -609,7 +609,7 @@ impl ProviderConfig {
         }
         // "provider/model" 形式
         let prefixed = format!("{provider_name}/{model_name}");
-        if let Some(rest) = prefixed.strip_prefix(&format!("{provider_name}/")) {
+        if let Some(_rest) = prefixed.strip_prefix(&format!("{provider_name}/")) {
             // model_name 本身就是 "provider/model" 形式
             if model_name.starts_with(&format!("{provider_name}/")) {
                 let bare = &model_name[provider_name.len() + 1..];

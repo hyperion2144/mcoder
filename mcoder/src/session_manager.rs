@@ -2075,7 +2075,7 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
 
                         // 设计文档 §8.8: 权限审批（write 工具之前）
                         // PermissionConfig.requires_approval 决定：yolo 跳过；standard 写工具需批；strict 更严
-                        if let Some(reason) = self.current_config().permission.requires_approval(&tc.name) {
+                        if let Some(_reason) = self.current_config().permission.requires_approval(&tc.name) {
                             match self
                                 .permission_registry
                                 .check_and_wait(&self.current_config().permission, session_id, tc)
@@ -2802,7 +2802,7 @@ pub async fn inject_pending_lsp_diagnostics(&self, session_id: &str) {
     }
 
     /// permission.peek - 客户端 attach 时查询当前 pending 审批（用于断线重连恢复）
-    pub async fn peek_permission(&self, session_id: &str) -> Option<serde_json::Value> {
+    pub async fn peek_permission(&self, _session_id: &str) -> Option<serde_json::Value> {
         // 简化：仅查内存中的 pending；复杂持久化留给后续
         None
     }

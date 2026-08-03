@@ -234,7 +234,7 @@ fn compact_bash_output(s: &str, threshold: usize) -> String {
         let stdout_truncated;
         let stdout_text = if stdout_chars.len() > keep_stdout {
             let skip = stdout_chars.len() - keep_stdout;
-            stdout_chars = stdout_chars.split_off(skip);
+            let _ = stdout_chars.split_off(skip);
             stdout_truncated = skip;
             stdout.to_string()
         } else {
@@ -289,7 +289,7 @@ fn compact_grep_output(s: &str, threshold: usize) -> String {
 }
 
 /// glob 输出压缩：只保留文件列表（每行短）
-fn compact_glob_output(s: &str, threshold: usize) -> String {
+fn compact_glob_output(s: &str, _threshold: usize) -> String {
     let lines: Vec<&str> = s.lines().filter(|l| !l.is_empty()).collect();
     if lines.len() <= 100 {
         return s.to_string();
@@ -318,7 +318,7 @@ fn compact_lsp_diagnostics(s: &str, threshold: usize) -> String {
 }
 
 /// launch logs 输出：保留前 50 + 后 50 行
-fn compact_launch_output(s: &str, threshold: usize) -> String {
+fn compact_launch_output(s: &str, _threshold: usize) -> String {
     let lines: Vec<&str> = s.lines().collect();
     if lines.len() <= 100 {
         return s.to_string();
@@ -486,7 +486,7 @@ pub async fn summarize_middle_as_system(
                 messages.len()
             )
         });
-    let mut msg = Message::system(summary);
+    let msg = Message::system(summary);
     // 不设 display_only：摘要消息必须送入 LLM context 才能生效
     msg
 }

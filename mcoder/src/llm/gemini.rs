@@ -1,6 +1,6 @@
 use crate::llm::retry::{self, RetryError};
 use crate::llm::{LLMAdapter, LLMEvent, LLMResponse, Usage};
-use crate::types::{ContentBlock, Message, ModelConfig, Role, ThinkingDepth, ToolCall, ToolSchema};
+use crate::types::{ContentBlock, Message, ModelConfig, Role, ToolCall, ToolSchema};
 use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
 use base64::Engine;

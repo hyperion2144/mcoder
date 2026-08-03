@@ -324,7 +324,6 @@ fn html_to_text(html: &str) -> String {
     let mut out = String::with_capacity(html.len() / 2);
     let mut in_tag = false;
     // 简单状态机：检测开始标签 / 结束标签，决定是否输出字符
-    let mut skip_depth: u32 = 0; // 嵌套深度，用于嵌套 <script> 情况
     let mut in_skip = false; // 当前是否在 script/style 内
 
     let lower = html.to_lowercase();
@@ -340,9 +339,8 @@ fn html_to_text(html: &str) -> String {
                     // 看后面是否紧跟着 closing tag
                     let after_open = idx + end + 1;
                     in_skip = true;
-                    skip_depth = 1;
                     // 直接跳到 > 之后
-                    while let Some((i, ch)) = chars.next() {
+                    while let Some((i, _ch)) = chars.next() {
                         if i >= after_open - 1 {
                             break;
                         }
@@ -372,7 +370,6 @@ fn html_to_text(html: &str) -> String {
                     if let Some(end) = html[idx..].find('>') {
                         let after = idx + end + 1;
                         in_skip = false;
-                        skip_depth = 0;
                         // 跳到 > 之后
                         while let Some((i, _)) = chars.next() {
                             if i >= after - 1 {

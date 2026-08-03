@@ -485,12 +485,6 @@ impl AgentSession {
         compaction::inject_layers(&self.compaction_layers, &self.messages)
     }
 
-    /// 估算单条消息的 token 数（每 4 字符 ≈ 1 token；图片按 1000 token 估算）
-    /// 已迁移到 crate::agent::compaction::estimate_tokens，这里保留为 wrapper
-    fn estimate_tokens(msg: &Message) -> usize {
-        crate::agent::compaction::estimate_tokens(msg)
-    }
-
     pub fn estimate_total_tokens(&self) -> usize {
         self.messages.iter().map(crate::agent::compaction::estimate_tokens).sum()
     }

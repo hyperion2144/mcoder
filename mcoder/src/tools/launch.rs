@@ -183,7 +183,7 @@ impl LaunchManager {
 
         // 2. 持 write 锁期间检查所有约束并插入（避免并发 start 越过限制）
         // 顺序：name 冲突 → 进程数限制 → insert
-        let mut procs = self.inner.processes.write().await;
+        let procs = self.inner.processes.write().await;
         if let Some(ref n) = name {
             let by_name = self.inner.by_name.read().await;
             if by_name.contains_key(&(session_id.to_string(), n.clone())) {

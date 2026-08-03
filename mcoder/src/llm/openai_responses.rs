@@ -3,14 +3,13 @@
 
 use crate::llm::retry::{self, RetryError};
 use crate::llm::{LLMAdapter, LLMEvent, LLMResponse, Usage};
-use crate::types::{ContentBlock, Message, ModelConfig, ThinkingDepth, ToolCall, ToolSchema};
+use crate::types::{ContentBlock, Message, ModelConfig, ToolCall, ToolSchema};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use base64::Engine;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
 
 /// OpenAI Responses API adapter (/v1/responses)
 /// New API with structured input/output items, supports built-in tools
