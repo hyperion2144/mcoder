@@ -1,9 +1,10 @@
-# mcoder 三端 UI 设计规范
+# mcoder 三端 UI 设计规范 v2
 
 > **设计哲学**：简洁 · 精致 · 不喧嚣
-> 不堆砌 emoji · 不滥用颜色 · 不重复分隔符 · 不留 AI 味
+> 基于 Tokyo Night 配色，为 agent orchestration 工具精炼而成。
+> 中暗背景（非纯黑）、低饱和度强调色、JetBrains Mono 代码字体、Inter UI 字体。
 
-本规范对 **TUI / Desktop / Mobile** 三端统一起效。所有 UI 改动必须遵守本规范，PR review 时按本规范逐条对照。
+本规范对 **TUI / Desktop / Mobile** 三端统一起效。所有 UI 改动必须遵守本规范。
 
 ---
 
@@ -15,11 +16,11 @@
 4. [边框风格](#4-边框风格)
 5. [字号 / 间距节奏](#5-字号--间距节奏)
 6. [标题规范](#6-标题规范)
-7. [Loading 流动光效（核心）](#7-loading-流动光效核心)
+7. [Loading 流动光效](#7-loading-流动光效)
 8. [排版规则](#8-排版规则)
-9. [三端对齐表](#9-三端对齐表)
-10. [移除 AI 味清单](#10-移除-ai-味清单)
-11. [实施示例](#11-实施示例)
+9. [TUI 布局规范](#9-tui-布局规范)
+10. [三端对齐表](#10-三端对齐表)
+11. [移除 AI 味清单](#11-移除-ai-味清单)
 12. [违规检查清单](#12-违规检查清单)
 
 ---
@@ -34,91 +35,83 @@
 | **精致** | 细节有打磨（对齐、节奏、token 一致）|
 | **不喧嚣** | 动画只在必要场景出现；颜色克制；不用 emoji 卖萌 |
 
-### 1.2 禁止事项（违反即不通过 review）
+### 1.2 禁止事项
 
-- ❌ 任何 emoji 装饰字符（🔒 ✓ ⚠ 💡 🚀 ⠋ 等）
-- ❌ `--` / `───` / `===` ASCII 分隔符
-- ❌ `italic` 修饰（TUI 终端多数不可见，等同废弃）
-- ❌ `dimColor` 滥用（视觉噪音）
-- ❌ 中英混合装饰文本（如 `▸ ask_user (等待你的回答)`）
-- ❌ 工具卡片按 sub-category 用 6+ 种颜色
-- ❌ inline style 写 hex 颜色（必须用 token）
-- ❌ 不在 8 倍数节奏上的 spacing（10/14/18 等）
+- 任何 emoji 装饰字符（🔒 ✓ ⚠ 💡 🚀 ⠋ 等；`✓` 和 `✗` 是允许的语义字符）
+- `--` / `───` / `===` ASCII 分隔符
+- `italic` 修饰（TUI 终端多数不可见）
+- `dimColor` 滥用
+- inline style 写 hex 颜色（必须用 token）
+- 不在 8 倍数节奏上的 spacing
 
 ---
 
 ## 2. 颜色 Token
 
-所有颜色来自 catppuccin mocha 调色板，**严禁在代码里硬编码 hex**（TUI 用色名，Desktop/Mobile 用 CSS 变量）。
+基于 **Tokyo Night** 调色板。
 
-| 用途 | Token | TUI name | CSS hex | 用途说明 |
-|------|-------|----------|---------|----------|
-| **背景** | `--bg-base` | — | `#1e1e2e` | 页面底色 |
-| **表面** | `--bg-surface` | — | `#181825` | 卡片表面 |
-| **浮起** | `--bg-elevated` | — | `#313244` | 浮起的元素（badge bg、input） |
-| **悬停** | `--bg-hover` | — | `#45475a` | 鼠标悬停态 |
-| **激活** | `--bg-active` | — | `#585b70` | 按钮按下态 |
-| **弱化** | `--bg-overlay` | — | `#6c7086` | 弱背景（spinner 弱端） |
-| **文字-主** | `--text-primary` | `white` | `#cdd6f4` | 主要内容文字 |
-| **文字-次** | `--text-secondary` | `gray` | `#a6adc8` | 辅助说明 |
-| **文字-弱** | `--text-muted` | `gray` | `#6c7086` | 占位、提示 |
-| **accent** | `--accent` | `cyan` | `#89b4fa` | 主品牌色 / 执行类 |
-| **success** | `--success` | `green` | `#a6e3a1` | 成功状态 |
-| **warning** | `--warning` | `yellow` | `#f9e2af` | 待操作 / 警告 |
-| **error** | `--error` | `red` | `#f38ba8` | 错误 / 失败 |
-| **mauve** | `--mauve` | `magenta` | `#cba6f7` | 思考 / 推理类 |
+### 2.1 原始 Token 刻度
 
-### 2.1 TUI 颜色使用规则
+| 用途 | Token | TUI name | CSS hex | 说明 |
+|------|-------|----------|---------|------|
+| **背景** | `--mc-background` | - | `#1a1b26` | 页面底色 |
+| **卡片** | `--mc-card` | - | `#16161e` | 卡片表面 |
+| **浮起** | `--mc-popover` | - | `#292e42` | 浮起元素 |
+| **边框** | `--mc-border` | - | `#292e42` | 边框色 |
+| **文字-主** | `--mc-foreground` | `white` | `#c0caf5` | 主要内容文字 |
+| **文字-次** | `--mc-neutral-700` | `gray` | `#9aa5ce` | 辅助说明 |
+| **文字-弱** | `--mc-muted-foreground` | `gray` | `#565f89` | 占位、提示 |
+| **品牌/主色** | `--mc-primary` | `blue` | `#7aa2f7` | 主品牌色 / 执行类 |
+| **成功** | `--mc-state-success` | `green` | `#9ece6a` | 成功状态 |
+| **警告** | `--mc-state-warning` | `yellow` | `#e0af68` | 待操作 / 警告 |
+| **错误** | `--mc-state-error` | `red` | `#f7768e` | 错误 / 失败 |
+| **紫罗兰** | `--mc-state-mauve` | `magenta` | `#bb9af7` | 思考 / 推理类 |
+| **青色** | `--mc-state-info` | `cyan` | `#7dcfff` | 信息 / 路径 |
+| **橙色** | `--mc-state-orange` | `yellow` | `#ff9e64` | 橙色（TUI 映射到 yellow） |
 
-TUI 没有背景色（继承终端），ink 支持的色名映射到 catppuccin：
+### 2.2 TUI 颜色使用规则
+
+TUI 没有背景色（继承终端），ink 支持的色名映射到 Tokyo Night：
 
 ```typescript
-// mcoder-tui/src/theme.ts（统一导出）
+// mcoder-tui/src/theme.ts
 export const TUI_COLORS = {
-  bgBase: null,             // 透明
-  bgElevated: null,         // 透明
-  textPrimary: 'white',
-  textSecondary: 'gray',
-  textMuted: 'gray',
-  accent: 'cyan',
-  success: 'green',
-  warning: 'yellow',
-  error: 'red',
-  mauve: 'magenta',
+  brand: 'blue',         // #7aa2f7
+  accent: 'blue',         // #7aa2f7 (alias)
+  textPrimary: 'white',   // #c0caf5
+  textSecondary: 'gray',  // #a9b1d6
+  textMuted: 'gray',      // #565f89
+  success: 'green',       // #9ece6a
+  warning: 'yellow',      // #e0af68
+  error: 'red',           // #f7768e
+  mauve: 'magenta',       // #bb9af7
+  cyan: 'cyan',           // #7dcfff
+  orange: 'yellow',       // #ff9e64
 } as const;
 ```
 
-### 2.2 Desktop / Mobile CSS 变量定义
+### 2.3 Desktop / Mobile CSS 变量
 
 ```css
-/* mcoder-desktop/src/styles.css 与 mcoder-mobile/src/styles.css 同源 */
 :root {
-  --bg-base: #1e1e2e;
-  --bg-surface: #181825;
-  --bg-elevated: #313244;
-  --bg-hover: #45475a;
-  --bg-active: #585b70;
-  --bg-overlay: #6c7086;
-  --text-primary: #cdd6f4;
-  --text-secondary: #a6adc8;
-  --text-muted: #6c7086;
-  --accent: #89b4fa;
-  --accent-dim: rgba(137, 180, 250, 0.12);
-  --success: #a6e3a1;
-  --success-dim: rgba(166, 227, 161, 0.12);
-  --warning: #f9e2af;
-  --warning-dim: rgba(249, 226, 175, 0.12);
-  --error: #f38ba8;
-  --error-dim: rgba(243, 139, 168, 0.12);
-  --mauve: #cba6f7;
-  --mauve-dim: rgba(203, 166, 247, 0.12);
-  --border: #313244;
-  --border-subtle: #45475a;
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --transition: 0.15s ease;
-  --font-mono: 'SF Mono', 'Menlo', 'Monaco', 'Cascadia Code', monospace;
+  --mc-background: #1a1b26;
+  --mc-foreground: #c0caf5;
+  --mc-card: #16161e;
+  --mc-popover: #292e42;
+  --mc-primary: #7aa2f7;
+  --mc-secondary: #292e42;
+  --mc-muted: #1f2335;
+  --mc-muted-foreground: #565f89;
+  --mc-accent: #7aa2f7;
+  --mc-destructive: #f7768e;
+  --mc-border: #292e42;
+  --mc-input: #292e42;
+  --mc-ring: #7aa2f7;
+  --mc-radius-sm: 4px;
+  --mc-radius-md: 8px;
+  --mc-radius-lg: 12px;
+  --mc-font-sans: 'Inter', -apple-system, sans-serif;
+  --mc-font-mono: 'JetBrains Mono', 'SF Mono', monospace;
 }
 ```
 
@@ -130,15 +123,11 @@ export const TUI_COLORS = {
 
 | 类别 | Token | TUI name | 用途 |
 |------|-------|----------|------|
-| **interaction** | warning | `yellow` | 待用户操作（ask_user / permission / plan approval） |
-| **execution** | accent | `cyan` | agent 主动执行（write / edit / bash / read / search） |
+| **interaction** | warning | `yellow` | 待用户操作（ask_user / permission / plan） |
+| **execution** | accent | `blue` | agent 主动执行（write / edit / bash / read / search） |
 | **thinking** | mauve | `magenta` | agent 推理 / 思考 |
 | **done** | text-muted | `gray` | 已完成（折叠默认） |
 | **error** | error | `red` | 失败 |
-
-**反例**（旧 ToolCard）：thinking/file/command/code/graph/subagent/plan/workflow/other 9 种分类 9 种颜色。
-
-**正例**（新 ToolCard）：所有工具归一为 `execution` 一种颜色。
 
 ---
 
@@ -146,56 +135,44 @@ export const TUI_COLORS = {
 
 | 场景 | TUI | Desktop / Mobile |
 |------|-----|------------------|
-| **交互卡片**（ask / permission / plan） | `borderStyle="round"` + warning | `border: 1px solid var(--warning)` + `background: var(--warning-dim)` |
-| **执行卡片**（tool calls） | `borderStyle="round"` + accent | `border: 1px solid var(--accent)` + `background: var(--bg-surface)` |
-| **思考卡片**（thinking） | `borderStyle="round"` + mauve | `border: 1px solid var(--mauve)` + `background: var(--mauve-dim)` |
-| **面板**（session list / todo / tree / setting / config / help） | `borderStyle="single"` + text-muted | `border: 1px solid var(--border-subtle)` + `background: var(--bg-surface)` |
-| **摘要**（已回答 / 已完成 / 已决议） | `borderStyle="single"` + text-muted | `border: 1px solid var(--border-subtle)` + `background: var(--bg-surface)` + `opacity: 0.85` |
-| **status bar**（顶部 / 底部固定） | `borderStyle="single"` + text-muted | `border-bottom/top: 1px solid var(--border-subtle)` |
-| **消息流角色行** | 无 border，靠左侧 `│` 引导 | 无 border，靠左侧 2px 实心引导条 |
-
-> **原则**：border 是结构的体现，不是装饰。
+| **交互卡片**（ask / permission / plan） | `borderStyle="round"` + warning | `border: 1px solid var(--mc-state-warning)` |
+| **执行卡片**（tool calls） | `borderStyle="round"` + accent | `border: 1px solid var(--mc-primary)` |
+| **思考卡片**（thinking） | `borderStyle="round"` + mauve | `border: 1px solid var(--mc-state-mauve)` |
+| **面板**（session / todo / setting） | `borderStyle="single"` + text-muted | `border: 1px solid var(--mc-border)` |
+| **底部 dock**（input + todos） | `borderStyle="round"` + text-muted | `border: 1px solid var(--mc-border)` |
 
 ---
 
 ## 5. 字号 / 间距节奏
 
-### 5.1 间距（8 倍数）
-
-```
-可用值：4 · 8 · 12 · 16 · 24 · 32
-禁止值：10 · 14 · 18 · 20
-```
+### 5.1 间距（8pt grid）
 
 | 用途 | 值 |
 |------|-----|
 | 卡片内边距 | `12px` |
 | 卡片外边距 | `8px` |
 | 卡片内元素 gap | `8px` |
-| 卡片内行高 | `4px` |
 | 段落间距 | `16px` |
 | 大区块间距 | `24px` |
 
 ### 5.2 圆角
 
-| 用途 | 值 |
-|------|-----|
-| 按钮 | `4px` (Desktop) / `6px` (Mobile) |
-| 卡片 | `6px` (Desktop) / `8px` (Mobile) |
-| Badge | `4px` |
-| Input | `4px` (Desktop) / `6px` (Mobile) |
+| 用途 | Desktop | Mobile |
+|------|---------|--------|
+| 按钮 | `4px` | `6px` |
+| 卡片 | `8px` | `12px` |
+| Input | `4px` | `6px` |
 
-### 5.3 字号（仅 Desktop / Mobile）
+### 5.3 字号
 
 | 用途 | Desktop | Mobile |
 |------|---------|--------|
-| 卡片标题 | `13px` bold | `14px` bold |
-| 正文 | `12px` | `13px` |
-| 弱文字 / 提示 | `11px` | `12px` |
-| 代码 / mono | `12px` | `13px` |
-| 按钮 | `12px` | `15px` (大触摸区) |
+| 卡片标题 | `14px` bold | `15px` bold |
+| 正文 | `14px` | `15px` |
+| 弱文字 | `13px` | `14px` |
+| 代码 / mono | `14px` | `15px` |
 
-> TUI 不控制字号，仅靠颜色区分主次。
+> TUI 不控制字号，仅靠颜色区分主次。字体为 `JetBrains Mono`（Desktop/Mobile CSS）/ 终端默认（TUI）。
 
 ---
 
@@ -204,309 +181,188 @@ export const TUI_COLORS = {
 ### 6.1 通用格式
 
 ```
-<前缀符号> <类别> · <子状态> · <badge>
+<前缀符号> <类别> · <子状态>
 ```
 
-- **前缀符号**（单字符，语义化，**仅 5 种**）：
+- **前缀符号**（5 种语义化字符）：
   - `▸` 待操作 / 折叠
   - `▶` 执行中
   - `✓` 已完成
   - `✗` 失败
   - `?` 待审批
 
-- **类别**（卡片类型）：
-  - `ask_user` / `permission` / `plan` / `write` / `bash` / `thinking` 等
-
-- **子状态**（可选）：
-  - `等待输入` / `等待确认` / `已通过` / `已拒绝`
-
-- **badge**（方括号）：
-  - `[STD]` / `[YOLO]` / `[STRICT]`（权限级别）
-  - `[3/5]`（进度）
-  - `[error]`（异常）
-
 ### 6.2 标题示例
 
 | 场景 | 标题 |
 |------|------|
-| 待审批 ask_user | `▸ ask_user · 等待输入` |
-| 待审批 permission | `▸ permission · STD · 等待确认` |
+| 待审批 ask_user | `▸ ask_user · waiting for input` |
 | 执行中 write | `▶ write foo.rs` |
-| 执行中 bash | `▶ bash npm test` |
 | 已完成 write | `✓ write foo.rs` |
 | 失败 bash | `✗ bash npm test` |
-| 思考中 | `▶ Thinking` |
-| 已回答 ask | `ask_user · 已回答` |
-
-### 6.3 字号 / 颜色
-
-| 端 | 标题样式 |
-|----|----------|
-| TUI | `bold` + 角色色（warning / accent / mauve / gray / red） |
-| Desktop | `13px` `font-weight: 600` + 角色色 |
-| Mobile | `14px` `font-weight: 600` + 角色色 |
+| 思考中 | `▶ thinking` |
 
 ---
 
-## 7. Loading 流动光效（核心）
+## 7. Loading 流动光效
 
 ### 7.1 何时启用
 
-**所有正在执行的工具卡片和思考卡片必须启用**：
-
-| 必须有 | 工具 / 场景 |
-|--------|------------|
-| ✅ | `write` / `edit` / `ast_edit` |
-| ✅ | `bash` / `launch` |
-| ✅ | `read` / `grep` / `glob` / `code_graph_*` |
-| ✅ | `lsp_*` / `ast_query` |
-| ✅ | `mcp_*` / `browser_*` / `screen_*` / `app_*` |
-| ✅ | **thinking 卡片**（LLM 流式推理）|
-| ❌ | 已完成（✓）/ 失败（✗）/ 待用户操作（▸） |
+所有正在执行的工具卡片和 thinking 卡片必须启用流光。
 
 ### 7.2 视觉规范
 
-逐字符扫描：每个字符的亮度按 sin 波在 0.35 ~ 1.0 之间循环，整体向前推进。
-
-```
-字符位置:  0    1    2    3    4    5    6    7
-亮度:      ░░░▒▒▓▓██▓▓▒▒░░░░░░▒▒▓▓██▓▓▒▒░░
-           ←─── 高亮波峰 ───→
-           ←──── 低亮度尾部 ────→
-```
+逐字符扫描：每个字符的亮度按 sin 波在 0.35 ~ 1.0 之间循环。
 
 **实现参数**：
-
 - 帧间隔：80ms（12.5fps）
 - 波形：`sin(i / N * π * 2 + phase)`，`phase` 随时间累加 `+0.4`
 - 亮度区间：0.35 ~ 1.0
-- 颜色：TUI `white` → `bg-overlay` 渐变；Desktop/Mobile `var(--text-primary)` → `var(--bg-overlay)`
+- 颜色：TUI `white` -> `gray` 三档；Desktop/Mobile `var(--mc-foreground)` -> `var(--mc-muted-foreground)`
 
 ### 7.3 TUI 实现
 
 ```typescript
-// mcoder-tui/src/components/ShimmerText.tsx
-import React, { useState, useEffect } from 'react';
-import { Text } from 'ink';
-
-export function ShimmerText({ text }: { text: string }) {
-  const [phase, setPhase] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setPhase(p => p + 0.4), 80);
-    return () => clearInterval(id);
-  }, []);
-
-  if (!text) return null;
-  return (
-    <Text>
-      {text.split('').map((ch, i) => {
-        const wave = Math.sin((i / Math.max(text.length, 1)) * Math.PI * 2 + phase);
-        const brightness = 0.35 + 0.65 * Math.max(0, wave);
-        // 三档亮度：gray（暗）/ white（亮）/ white bold（最亮）
-        if (brightness < 0.5) return <Text key={i} color="gray">{ch}</Text>;
-        if (brightness < 0.85) return <Text key={i} color="white">{ch}</Text>;
-        return <Text key={i} color="white" bold>{ch}</Text>;
-      })}
-    </Text>
-  );
-}
+// ShimmerText.tsx - 三档亮度模拟
+if (brightness < 0.5) return <Text color="gray">{ch}</Text>;
+if (brightness < 0.85) return <Text color="white">{ch}</Text>;
+return <Text color="white" bold>{ch}</Text>;
 ```
-
-> TUI 不支持真彩色 RGB，所以用三档亮度（gray / white / white bold）模拟。
-
-### 7.4 Desktop / Mobile 实现（CSS 动画）
-
-```css
-/* 流动光效 - 适用 .tool-card[data-loading="true"] .tool-card-title */
-@keyframes shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-
-.tool-card[data-loading="true"] .tool-card-title {
-  background: linear-gradient(
-    90deg,
-    var(--bg-overlay) 0%,
-    var(--bg-overlay) 30%,
-    var(--text-primary) 50%,
-    var(--bg-overlay) 70%,
-    var(--bg-overlay) 100%
-  );
-  background-size: 200% 100%;
-  background-clip: text;
-  -webkit-background-clip: text;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-  animation: shimmer 1.6s ease-in-out infinite;
-}
-```
-
-### 7.5 thinking 卡片特殊性
-
-LLM 推理流式输出，**持续时间最长**。处理方式：
-
-1. **首行**：标题 `▶ Thinking` + 流光
-2. **正文**：折叠的 markdown 文本块，随流式追加自动展开
-3. **结束**：标题变 `✓ done` 或 `✗ failed`（取决于是否有工具调用），流光停止
 
 ---
 
 ## 8. 排版规则
 
-### 8.1 分隔符统一
-
-**所有卡片内部仅用以下分隔符**：
+### 8.1 分隔符
 
 | 场景 | 分隔符 |
 |------|--------|
-| 字段并列（标题 + 状态 + badge） | ` · `（中点 + 空格）|
-| 区块（Input / Result） | 顶部 1px border-bottom + 小字标题 |
-| 多项（todo / plan steps） | 换行 + 缩进 |
+| 字段并列 | ` · `（中点 + 空格）|
+| 区块 | 顶部 1px border-bottom + 小字标题 |
+| 多项 | 换行 + 缩进 |
 
-**禁止**：
+### 8.2 缩进
 
-- ❌ `── Input ──`
-- ❌ `---`
-- ❌ `***`
-- ❌ `===`
-
-### 8.2 缩进规则
-
-| 元素 | 缩进 |
-|------|------|
-| 卡片内主内容 | `0`（顶满）|
-| 卡片内子项 | `4px` / TUI `marginLeft=2` |
-| 嵌套层 | 上一级 + `8px` |
-| 代码块 | `12px` |
-
-### 8.3 字体
-
-- 默认：系统 sans-serif
-- 代码：monospace token (`--font-mono`)
-- **禁止**：自定义特殊字体（除 mono）
+| 元素 | TUI | Desktop/Mobile |
+|------|-----|----------------|
+| 卡片内主内容 | `paddingX=1` | `12px` |
+| 卡片内子项 | `marginLeft=2` | `4px` |
+| 代码块 | `marginLeft=4` | `12px` |
 
 ---
 
-## 9. 三端对齐表
+## 9. TUI 布局规范
+
+### 9.1 主界面布局（tui-main）
+
+```
+┌─ header-card ──────────────────────────────────────┐
+│ mcoder v0.1.0                                      │
+│ Tips: # prompt  / commands  ! bash  $ python       │
+│ LSP Servers: ● typescript  ● rust                  │
+│ Recent sessions: ● Refactor login  ● Fix auth bug  │
+└────────────────────────────────────────────────────┘
+┌─ messages stream ──────────────────────────────────┐
+│ user                                               │
+│   Refactor login.ts to use async/await             │
+│ ▶ thinking                                         │
+│ │ ▶ read src/login.ts                              │
+│ │   10 lines shown, 152 total                      │
+│ │ ✓ edit_replace src/login.ts                      │
+│ mcoder                                             │
+│   Login has been refactored...                     │
+└────────────────────────────────────────────────────┘
+┌─ bottom dock ──────────────────────────────────────┐
+│ todos (3)                                          │
+│ ● Convert login() to async                         │
+│ ○ Update calling sites                             │
+│ ┌─ input-box ────────────────────────────────────┐ │
+│ │ claude-sonnet-4 · default · ~/projects/mcoder  │ │
+│ │ 12.4k / 200k (6.2%) · $0.03 · streaming        │ │
+│ │ > _                                              │ │
+│ │ [Enter] send  [Shift+Enter] newline  [/] cmd   │ │
+│ └──────────────────────────────────────────────────┘ │
+└────────────────────────────────────────────────────┘
+```
+
+### 9.2 组件层级
+
+```
+App (flexDirection=column, height=100%)
+├── MessageList (flexGrow=1, overflow=hidden)
+│   ├── HeaderCard (无消息时显示)
+│   ├── MessageView[] (消息流)
+│   └── ShimmerText (streaming 时)
+├── PlanApproval
+├── 覆盖层视图 (sessions/todos/tasks/config/help/...)
+├── TodoSummaryBar (inline section)
+├── SubagentBar (inline section)
+├── ResumeBar
+├── CommandPicker (输入 / 时)
+└── InputBox (border=round, 固定底部)
+    ├── session-info (model · role · path · branch)
+    ├── usage (context · cost · streaming)
+    ├── TextInput (> prompt)
+    └── hints ([Enter] send [/] cmd [@] files)
+```
+
+### 9.3 Header Card（欢迎屏）
+
+无消息时显示，有消息后隐藏：
+
+- `mcoder` (bold cyan) + `v{version}` (muted)
+- `Tips` (bold) + `# prompt  / commands  ! bash  $ python` (muted)
+- `LSP Servers` (bold) + `● {lang}` 列表 (muted)
+- `Recent sessions` (bold) + `● {title}` 列表 (muted)
+
+### 9.4 Input Box（底部 dock）
+
+- 边框：`round` + `textMuted`
+- 第一行：`{model}` (blue) ` · ` `{role}` (mauve if non-default) ` · ` `{path}` (cyan) ` · ` `{branch}` (muted)
+- 第二行：`{context_used} / {context_window}` (muted) ` · ` `{cost}` (muted) ` · ` `streaming` (green if running)
+- 第三行：`> ` (blue) + TextInput
+- 第四行：`[Enter] send  [Shift+Enter] newline  [/] commands  [@] files` (muted)
+
+---
+
+## 10. 三端对齐表
 
 | 元素 | TUI | Desktop | Mobile |
 |------|-----|---------|--------|
 | **卡片边框** | `round` / `single` + 角色色 | `solid 1px` + 角色色 | `solid 1px` + 角色色 |
 | **卡片内边距** | `paddingX=1` | `12px` | `12px` |
-| **卡片外边距** | `marginY=1` | `8px 0` | `8px 0` |
-| **卡片圆角** | (无) | `6px` | `8px` |
-| **标题字号** | (固定，靠 bold) | `13px` `font-weight: 600` | `14px` `font-weight: 600` |
-| **正文字号** | (固定) | `12px` | `13px` |
-| **弱文字** | `gray` | `--text-muted` `11px` | `--text-muted` `12px` |
-| **代码字号** | (固定) | `12px` mono | `13px` mono |
-| **按钮 padding** | (无按钮) | `6px 12px` | `12px 16px` |
-| **按钮圆角** | — | `4px` | `6px` |
-| **按钮字号** | — | `12px` `font-weight: 600` | `15px` `font-weight: 600` |
+| **卡片圆角** | (无) | `8px` | `12px` |
+| **标题字号** | (固定，靠 bold) | `14px` bold | `15px` bold |
+| **正文字号** | (固定) | `14px` | `15px` |
+| **代码字号** | (固定) | `14px` mono | `15px` mono |
 | **loading 光效** | ShimmerText（三档亮度） | CSS gradient + animation | CSS gradient + animation |
-| **loading 帧率** | 80ms（12.5fps）| 1.6s 一周期 | 1.6s 一周期 |
+| **字体** | 终端默认 | Inter (UI) / JetBrains Mono (code) | 同 Desktop |
 
 ---
 
-## 10. 移除 AI 味清单
+## 11. 移除 AI 味清单
 
-### 10.1 文案替换表
+### 11.1 文案替换表
 
 | 旧（AI 味） | 新（简洁） |
 |-------------|----------|
-| `ask_user (等待你的回答)` | `▸ ask_user · 等待输入` |
-| `permission (等待确认)` | `▸ permission · STD · 等待确认` |
-| `── Input ──` | 小字 `Input` + 顶部 1px 分割线 |
-| `── Result ──` | 小字 `Result` + 顶部 1px 分割线 |
+| `ask_user (等待你的回答)` | `▸ ask_user · waiting for input` |
+| `── Input ──` | 小字 `Input` + 顶部分割线 |
 | `running...` | 删除（标题 `▶ name` 自带流光）|
-| `thinking...` | `▶ Thinking` 流光 + 实时 markdown |
-| `press ESC to close` | 删除（status bar 已有快捷键提示）|
-| `lsp: typescript, rust` | 删除或合并 |
-| `model: gpt-4o  project: ~/foo` | 合并为 `gpt-4o · ~/foo` |
-| `(多选，可选多个)` | `multi-select` |
-| `↑ 当前问题（直接输入文字作为 note）` | focus 用 `▶` 标识 |
-| `+ 5 more` | `+5 more` |
-| `▸ ask_user (已回答)` | `ask_user · 已回答` |
+| `thinking...` | `▶ thinking` 流光 |
 | `Press any key to continue` | 删除 |
 | `✅ Done!` | `✓ done` |
-| `⚠ Warning` | `! warning` |
-| `🔒 Permission Required` | `▸ permission · 等待确认` |
-| `💡 Tip:` | 删除（不解释）|
+| `🔒 Permission Required` | `▸ permission · waiting for approval` |
 
-### 10.2 视觉移除
+### 11.2 文案原则
 
-- ❌ emoji 装饰（🔒 ✓ ⚠ 💡 🚀 ⠋ 等）—— 注意 `✓` 和 `✗` 是允许的（语义字符，非 emoji）
-- ❌ 彩虹色工具卡片（6+ 色 → 1 色）
-- ❌ ASCII 分隔符（`---` `===` `───`）
-- ❌ `Press any key to continue`
-- ❌ 装饰性图标（loading 时除 `▶` 外的其他字符）
-
-### 10.3 文案原则
-
-1. **动词开头**：标题用动词或工具名（`write` / `bash` / `ask_user`），不用名词短语
-2. **状态在右**：状态描述在 `·` 之后，不放最前
-3. **不解释**：删除"提示用户该怎么做"的文案（用户已会）
-4. **不重复**：相同信息不出现两次
-5. **中英一致**：中文文案与英文文案句式对称
-
----
-
-## 11. 实施示例
-
-### 11.1 AskUserCard（TUI）改造
-
-```diff
-- <Box flexStyle="round" borderColor="yellow">
--   <Text color="yellow" bold>▸ ask_user (等待你的回答)</Text>
--   <Text color="cyan">↑ 当前问题（直接输入文字作为 note）</Text>
--   <Text color="gray">输入 1-4 选择 · 文字作为 note · Enter 提交 · Esc 取消</Text>
-- </Box>
-
-+ <Box borderStyle="round" borderColor="warning">
-+   <Text color="warning" bold>▸ ask_user · 等待输入</Text>
-+ </Box>
-```
-
-### 11.2 ToolCard（TUI）改造
-
-```diff
-- CATEGORY_COLOR = {
--   thinking: 'magenta', file: 'blue', command: 'yellow',
--   code: 'yellow', graph: 'green', subagent: 'cyan',
--   plan: 'yellow', workflow: 'magenta', other: 'gray',
-- } // 6 色
-
-+ const ROLE_COLOR = {
-+   interaction: 'warning',
-+   execution: 'accent',
-+   thinking: 'mauve',
-+   done: 'textMuted',
-+   error: 'error',
-+ } // 3 色
-
-- <Text color="gray" dimColor>── Input ──</Text>
-+ <Text color="textMuted" bold>Input</Text>
-
-- <Text color="gray" dimColor italic>running...</Text>
-+ <ShimmerText>{title}</ShimmerText>  // 标题本身就是流光
-```
-
-### 11.3 PermissionCard（React 共享）改造
-
-```diff
-- <span>🔒 权限审批</span>
-- <span style={{ backgroundColor: '#dc2626' }}>YOLO</span>
-- <span>等待你的确认</span>
-
-+ <span>▸ permission</span>
-+ <span className="permission-level-badge">STD</span>
-+ <span className="permission-status">等待确认</span>
-```
+1. **动词开头**：标题用工具名（`write` / `bash` / `ask_user`）
+2. **状态在右**：状态描述在 `·` 之后
+3. **不解释**：删除"提示用户该怎么做"的文案
+4. **中英一致**：中文文案与英文文案句式对称
 
 ---
 
 ## 12. 违规检查清单
-
-PR review 时按此清单逐条勾选：
 
 ### 颜色
 - [ ] 没有硬编码 hex（必须用 token）
@@ -515,33 +371,25 @@ PR review 时按此清单逐条勾选：
 - [ ] 没有 6+ 种颜色滥用
 
 ### 排版
-- [ ] 标题格式符合 §6（前缀符号 + 类别 · 状态 · badge）
-- [ ] spacing 在 8 倍数节奏上（4/8/12/16/24）
-- [ ] 没有 emoji 装饰符（🔒 ✓ ⚠ 💡 🚀 ⠋ 等）
-- [ ] 没有 ASCII 分隔符（`---` `===` `───`）
+- [ ] 标题格式符合 §6（前缀符号 + 类别 · 状态）
+- [ ] spacing 在 8 倍数节奏上
+- [ ] 没有 emoji 装饰符
+- [ ] 没有 ASCII 分隔符
 - [ ] 没有 `italic` 修饰
-- [ ] 没有 `dimColor` 滥用
 - [ ] 没有 `press ESC to close` 这类提示
 
 ### Loading
 - [ ] 写类工具（write/edit/ast_edit）有流光
 - [ ] 执行类工具（bash/launch）有流光
 - [ ] 读类工具（read/grep/glob）有流光
-- [ ] LSP / code_graph 工具**用户主动调用时**有流光；后台调用不强求
 - [ ] thinking 卡片有流光
 - [ ] 流光在完成后立即停止
 
 ### 一致性
 - [ ] 三端使用相同的 token 名
-- [ ] TUI 用 `TUI_COLORS` 导出色名，不直接用 `color="cyan"` 字符串
-- [ ] Desktop/Mobile 用 `var(--*)` 变量，不写 hex
-- [ ] 按钮尺寸符合 §9 对齐表
-- [ ] 圆角符合 §9 对齐表
-
-### 文案
-- [ ] 没有"AI 味"装饰文案（§10.1 表）
-- [ ] 状态描述在 `·` 之后
-- [ ] 不解释用户已知的行为
+- [ ] TUI 用 `TUI_COLORS` 导出色名
+- [ ] Desktop/Mobile 用 `var(--mc-*)` 变量
+- [ ] 按钮尺寸符合 §10 对齐表
 
 ---
 
@@ -549,14 +397,14 @@ PR review 时按此清单逐条勾选：
 
 | Token | TUI 色名 | CSS hex |
 |-------|----------|---------|
-| accent | `cyan` | `#89b4fa` |
-| success | `green` | `#a6e3a1` |
-| warning | `yellow` | `#f9e2af` |
-| error | `red` | `#f38ba8` |
-| mauve | `magenta` | `#cba6f7` |
-| text-primary | `white` | `#cdd6f4` |
-| text-secondary | `gray` | `#a6adc8` |
-| text-muted | `gray` | `#6c7086` |
+| accent/primary | `blue` | `#7aa2f7` |
+| success | `green` | `#9ece6a` |
+| warning | `yellow` | `#e0af68` |
+| error | `red` | `#f7768e` |
+| mauve | `magenta` | `#bb9af7` |
+| cyan/info | `cyan` | `#7dcfff` |
+| text-primary | `white` | `#c0caf5` |
+| text-muted | `gray` | `#565f89` |
 
 ## 附录 B：状态前缀字符
 
@@ -566,87 +414,16 @@ PR review 时按此清单逐条勾选：
 ✓  已完成
 ✗  失败
 ?  待审批
+●  状态点（活跃）
+○  状态点（待办）
+│  树枝线
+▾  展开折叠
+·  分隔符
 ```
 
 ## 附录 C：变更历史
 
-| 日期 | 改动 | 作者 |
-|------|------|------|
-| 2026-07-31 | 初版 | - |
-| 2026-07-31 | §provider: 运行时 Provider CRUD（RwLock 内存替换 + TOML 原子写 + 三端 UI） | - |
-
----
-
-## §provider: 运行时 Provider 管理
-
-### 目标
-让用户在 TUI / Desktop / Mobile 三端运行时增删改 LLM provider（OpenAI / Anthropic / Ollama / Gemini / custom），**无需重启 mcoder** 即可让新 provider/model 立即生效。
-
-### 数据模型
-`~/.mcoder/config.toml` 增 `[providers.<name>]` 段：
-
-```toml
-[providers.openai-official]
-name = "openai-official"
-protocol = "openai"          # openai | openai_responses | anthropic | ollama | gemini | custom
-base_url = "https://api.openai.com/v1"
-api_key = "${OPENAI_API_KEY}" # 支持 ${ENV_VAR} 展开
-models = ["gpt-4o", "gpt-4o-mini"]
-enabled = true
-
-default_model = "gpt-4o"
-default_provider = "openai-official"
-```
-
-兼容旧 `[models.<name>]` 扁平格式（保留读取，不优先）。
-
-### Rust 端
-- `AppConfig.providers: BTreeMap<String, ProviderConfig>`
-- `SessionManager.config: Arc<RwLock<AppConfig>>`（**真正运行时可变**，不是 Arc<AppConfig> 不可变快照）
-  - 读路径（list_models / list_providers / resolve_model / get_config 等）走 `current_config()` 快照克隆（`blocking_read().clone()`，AppConfig ≈ 几 KB，开销可忽略）
-  - 写路径（add/update/delete_provider / set_default）走 `replace_config(new_config).await`：先 `save_config`（tmp + rename 原子写盘），再 `config.write().await` 替换整个 AppConfig，最后 `broadcast_config_updated` 通知所有 client
-- 启动兜底（main.rs）：`default_model` 不存在或 adapter 创建失败时**仍启动 server**，仅 subagent 工具不可用；UI 通过 Setup Mode 引导用户添加 provider
-- `expand_env_var` pub：`save_config` 后 `${ENV_VAR}` 在 `replace_config` 内被展开写回内存（与 `load_config` 一致）
-
-### RPC 方法
-| 方法 | 入参 | 出参 | 说明 |
-|------|------|------|------|
-| `config.list_providers` | - | `ProviderInfo[]` | 列出所有供应商 |
-| `config.list_protocols` | - | `ProtocolInfo[]` | UI 下拉：openai/anthropic/ollama/gemini/custom |
-| `config.list_models` | - | `ModelInfo[]` | 含从 providers 展开的 `provider/model` 名 |
-| `config.add_provider` | `{name, protocol, base_url, api_key, models}` | `{added:true}` | 添加 |
-| `config.update_provider` | `{name, protocol?, base_url?, api_key?, models?, enabled?}` | `{updated:true}` | 部分字段更新 |
-| `config.delete_provider` | `{name}` | `{deleted:true}` | 删除（若删的是 default_provider 自动清空） |
-| `config.set_default` | `{model, provider?}` | `{set:true}` | 设置默认模型 |
-| `config.test_provider` | `{name}` | `{ok, status?, url?, error?, hint?}` | HTTP ping `/models` 或 `/v1/messages` |
-
-### ServerEvent
-```rust
-ServerEvent::ConfigUpdated {
-    op: String,                          // add_provider / update_provider / delete_provider / set_default
-    providers: Vec<Value>,               // 最新 providers 快照
-    models: Vec<Value>,                  // 最新 models 快照
-    default_model: String,
-    default_provider: Option<String>,
-}
-```
-通过 ws_server 推 `config_updated` notification 给所有 client（`target_session = None`，全局事件）。
-
-### 三端 UI
-- **TUI**：`/provider` slash command → `ProviderView` 组件（ink + useInput）
-  - 列表：上下移动光标、a 添加、t 测试、d 删除（y/n 确认）、Enter 设为默认、Esc 关闭
-  - 添加表单：5 字段（name/protocol/base_url/api_key/models）tab/↓ 切换协议、Enter 下一字段、提交后自动刷新
-- **Desktop**：Settings 面板加 tabs（General / Providers）；Providers tab 渲染 `ProviderPanel`
-  - 卡片列表：Test / Enable-Disable / Delete 按钮、Models 列表每项 ★ 设为默认
-  - 添加表单：标准 HTML form，协议 select 切换自动填默认 URL
-- **Mobile**：Settings 页加 tabs；Providers tab 渲染 `ProviderScreen`
-  - 折叠式卡片（点击展开）；Add 进入独立全屏表单页
-  - 触摸友好：大字号、大点击区、`-webkit-appearance: none` 原生 select 样式
-
-三端均订阅 `config_updated` 通知自动刷新（无需手动 reload）。
-
-### 关键不变量
-1. `replace_config` 是**唯一**改 `self.config` 的入口；所有写路径必须先 `save_config` 再 `replace_config` 再 `broadcast_config_updated`，顺序不能颠倒（保证盘上和内存一致后才广播）
-2. `AgentSession` 持有自己的 `Arc<ModelConfig>` clone，配置替换**不影响**已运行的 agent loop / tool 调用；用户通过 `/model set <name>` 重新选择时才会读新 cfg
-3. `ToolContext.app_config: Arc<AppConfig>` 是构造时的快照；已运行的 tool 调用（数 ms 级）继续用旧 cfg 无所谓；新 tool 调用通过 `current_config()` 重新拿当前 cfg
-4. `expand_env_var` 在 `load_config` 和 `replace_config` 两处都调用，保证内存中的 api_key 永远是展开后的明文（不把 `${ENV_VAR}` 字面量泄露给 LLM adapter）
+| 日期 | 改动 |
+|------|------|
+| 2026-07-31 | 初版（Catppuccin Mocha） |
+| 2026-08-03 | v2：迁移到 Tokyo Night 配色；新增 TUI 布局规范（header card + bottom dock）；更新 InputBox / ToolCard / MessageList / TodoSummaryBar |

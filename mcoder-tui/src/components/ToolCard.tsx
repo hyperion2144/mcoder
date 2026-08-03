@@ -1,7 +1,7 @@
-// DESIGN.md §3 / §7: 工具卡片（执行类）
-// - 单一颜色：execution（accent/cyan）；thinking（mauve）单独角色
-// - 标题：loading 时 ShimmerText 流光；完成后静态
-// - 移除：6 种分类色、── Input ── 分隔符、running... 文本
+// mcoder UI Redesign v2 - ToolCard
+// Layout: tool-head (name | file | fill | status) + tool-body (content) + usage-line
+// Status: running (shimmer), done (✓), failed (✗)
+// Bash results get colored borders: success (green), warn (yellow), fail (red)
 
 import React from 'react';
 import { Box, Text } from 'ink';
@@ -15,16 +15,9 @@ import { ShimmerText } from './ShimmerText.js';
 
 interface ToolCardProps {
   block: ContentBlock;
-  /** 工具结果（同 id 的 tool_result block）；null 表示仍在执行 */
   resultBlock?: ContentBlock | null;
 }
 
-/** 折叠指示符 */
-function foldIcon(f: FoldState): string {
-  return f === 'collapsed' ? PREFIX.pending : PREFIX.expanded;
-}
-
-/** 判断结果是否为错误 */
 function isError(output: any): boolean {
   if (output == null) return false;
   if (typeof output === 'object') {
@@ -36,30 +29,42 @@ function isError(output: any): boolean {
   return false;
 }
 
+function isBashSuccess(output: any): boolean {
+  if (output == null || typeof output !== 'object') return false;
+  return output.exit_code === 0 && !output.error;
+}
+
+function isBashFail(output: any): boolean {
+  if (output == null || typeof output !== 'object') return false;
+  return output.exit_code !== undefined && output.exit_code !== 0;
+}
+
 export function ToolCard({ block, resultBlock }: ToolCardProps) {
   const meta = extractToolMeta(block);
   const fold = meta.defaultFold;
   const loading = !resultBlock;
   const status = loading ? 'running' : (isError(resultBlock!.output) ? 'failed' : 'done');
 
-  // DESIGN.md §3: 角色色
-  // - thinking 类别：mauve
-  // - 执行类工具（默认）：accent
-  // - 错误状态：error
-  // - 已完成：textMuted
   const role = status === 'running' ? ROLE_COLOR.execution
     : status === 'failed' ? ROLE_COLOR.error
     : ROLE_COLOR.done;
 
-  // DESIGN.md §6.1: 状态前缀
   const prefix = status === 'running' ? PREFIX.running
     : status === 'failed' ? PREFIX.failed
     : PREFIX.done;
 
   const title = `${prefix} ${meta.title}`;
 
+  // Bash result coloring (for visual status, not used as border in TUI)
+  const bashStatus = !loading && meta.title.startsWith('bash')
+    ? (isBashFail(resultBlock!.output) ? 'fail'
+       : isBashSuccess(resultBlock!.output) ? 'success'
+       : 'neutral')
+    : 'neutral';
+
   return (
     <Box flexDirection="column" marginLeft={2} marginY={0}>
+      {/* Tool head: name | file | fill | status */}
       <Box>
         <Text color={role}>│ </Text>
         {status === 'running'
@@ -69,19 +74,18 @@ export function ToolCard({ block, resultBlock }: ToolCardProps) {
 
       {fold !== 'collapsed' && (
         <Box flexDirection="column" marginLeft={4}>
-          {/* DESIGN.md §6 / §8.1: Input 区块（小字标题 + 1px 分割线，不要 ──）*/}
-          {fold === 'expanded' ? (
+          {/* Input summary */}
+          {fold !== 'expanded' && meta.inputSummary && (
+            <Text color={TUI_COLORS.textMuted}>{meta.inputSummary}</Text>
+          )}
+          {fold === 'expanded' && (
             <Box flexDirection="column">
               <Text color={TUI_COLORS.textMuted}>Input</Text>
               <Text color={TUI_COLORS.textPrimary}>{JSON.stringify(block.args, null, 2)}</Text>
             </Box>
-          ) : (
-            meta.inputSummary && (
-              <Text color={TUI_COLORS.textMuted}>{meta.inputSummary}</Text>
-            )
           )}
 
-          {/* Result 区块 */}
+          {/* Result */}
           {resultBlock && fold === 'expanded' && (
             <Box flexDirection="column" marginTop={1}>
               <Text color={TUI_COLORS.textMuted}>Result</Text>

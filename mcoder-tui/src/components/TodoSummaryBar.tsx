@@ -1,6 +1,5 @@
-// DESIGN.md §4 / §10: TodoSummaryBar（状态条）
-// - single border + textMuted
-// - 移除：▶ ☐ emoji、italic
+// mcoder UI Redesign v2 - TodoSummaryBar (inline dock section)
+// Shows pending todos as an inline section above the input box
 
 import React from 'react';
 import { Box, Text } from 'ink';
@@ -22,14 +21,11 @@ export function TodoSummaryBar({ platform = PLATFORM_TUI }: Props) {
   if (!view) return null;
 
   return (
-    <Box flexDirection="column" paddingX={1} borderStyle="single" borderColor={TUI_COLORS.textMuted}>
-      <Box>
-        <Text bold color={TUI_COLORS.accent}>Todos</Text>
-        <Text color={TUI_COLORS.textMuted}>{` ${PREFIX.sep} ${view.totalUnfinished} unfinished`}</Text>
-      </Box>
+    <Box flexDirection="column" paddingX={1}>
+      <Text color={TUI_COLORS.textMuted}>todos ({view.totalUnfinished})</Text>
       {view.visible.map((t) => {
-        const color = t.status === 'in_progress' ? TUI_COLORS.accent : TUI_COLORS.textPrimary;
-        const prefix = t.status === 'in_progress' ? PREFIX.running : PREFIX.pending;
+        const color = t.status === 'in_progress' ? TUI_COLORS.accent : TUI_COLORS.textMuted;
+        const prefix = t.status === 'in_progress' ? PREFIX.dot : PREFIX.open;
         return (
           <Text key={t.id} color={color}>
             {prefix} {t.content}
@@ -37,7 +33,7 @@ export function TodoSummaryBar({ platform = PLATFORM_TUI }: Props) {
         );
       })}
       {view.remaining > 0 && (
-        <Text color={TUI_COLORS.textMuted}>+{view.remaining} more</Text>
+        <Text color={TUI_COLORS.textMuted}>... ({view.remaining} more)</Text>
       )}
     </Box>
   );

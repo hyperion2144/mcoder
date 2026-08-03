@@ -696,43 +696,7 @@ export function App({ client: initialClient }: Props) {
 
   return (
     <Box flexDirection="column" height="100%">
-      {/* 顶部标题栏：左侧 logo + 项目信息；右侧 模型 + 角色 + 版本 */}
-      <Box justifyContent="space-between" paddingX={1} flexShrink={0}>
-        <Box>
-          <Text color={TUI_COLORS.accent} bold>mcoder</Text>
-          {sessionStore.projectPath && (
-            <>
-              <Text color={TUI_COLORS.textMuted}> {PREFIX.sep} </Text>
-              <Text color={TUI_COLORS.textSecondary}>{sessionStore.projectPath}</Text>
-            </>
-          )}
-          {sessionStore.gitBranch && (
-            <>
-              <Text color={TUI_COLORS.textMuted}> {PREFIX.sep} </Text>
-              <Text color={TUI_COLORS.textMuted}>git:{sessionStore.gitBranch}</Text>
-            </>
-          )}
-          {sessionStore.lspServers.length > 0 && (
-            <>
-              <Text color={TUI_COLORS.textMuted}> {PREFIX.sep} </Text>
-              <Text color={TUI_COLORS.textMuted}>lsp:{sessionStore.lspServers.join(',')}</Text>
-            </>
-          )}
-        </Box>
-        <Box>
-          {sessionStore.currentModel && (
-            <Text color={TUI_COLORS.accent}>{sessionStore.currentModel}</Text>
-          )}
-          {sessionStore.currentRole && sessionStore.currentRole !== 'default' && (
-            <Text color={TUI_COLORS.mauve}> {PREFIX.sep} {sessionStore.currentRole}</Text>
-          )}
-          {sessionStore.version && (
-            <Text color={TUI_COLORS.textMuted}> {PREFIX.sep} v{sessionStore.version}</Text>
-          )}
-        </Box>
-      </Box>
-
-      {/* 消息区（可滚动）。ask 卡片在 MessageList 内联渲染（由 store 中的 pending / lastSubmission 决定）*/}
+      {/* 消息区（可滚动）。header card + messages + tool cards 内联渲染 */}
       <MessageList
         askRenderState={
           pendingAsk
@@ -813,23 +777,6 @@ export function App({ client: initialClient }: Props) {
 
       {/* Phase 3: Resume 入口（固定状态提示附近；非模态） */}
       <ResumeBar sessionId={sid} />
-
-      {/* Bottom status bar - fixed */}
-      <Box justifyContent="space-between" paddingX={1} flexShrink={0}>
-        <Text color={sessionStore.connected ? TUI_COLORS.success : TUI_COLORS.error}>
-          {sessionStore.connected ? '●' : '○'} {sessionStore.connected ? t('ui.connected') : t('ui.disconnected')}
-        </Text>
-        <Text>
-          <Text color={ctxPctNum > 90 ? TUI_COLORS.error : ctxPctNum > 70 ? TUI_COLORS.warning : TUI_COLORS.success}>
-            {ctxStr} ({ctxPctNum.toFixed(1)}%)
-          </Text>
-          {costStr && <Text color={TUI_COLORS.textMuted}> {costStr}</Text>}
-          {getThinkingFor(sid) !== 'none' && (
-            <Text color={TUI_COLORS.mauve}> {PREFIX.thinking}{getThinkingFor(sid)}</Text>
-          )}
-          {msgStore.streaming && <ShimmerText text={`${PREFIX.running} ${t('ui.running')}`} />}
-        </Text>
-      </Box>
 
       {/* 命令选择面板（输入 / 时弹出，显示在输入框上方） */}
       {showCommandPicker && (

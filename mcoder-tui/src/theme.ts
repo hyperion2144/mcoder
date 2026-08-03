@@ -1,59 +1,66 @@
-// DESIGN.md §2.1: TUI 颜色 Token
-// ink 支持的色名映射到 catppuccin mocha
-// 三端统一：TUI 用 TUI_COLORS 导出色名；Desktop/Mobile 用 var(--*)
+// mcoder UI Redesign v2 - Tokyo Night palette
+// Inspired by Tokyo Night, refined for agent orchestration tool.
+// TUI color names mapped to ink-supported colors; Desktop/Mobile use CSS vars.
 
 export const TUI_COLORS = {
-  // 文字
-  textPrimary: 'white',      // #cdd6f4
-  textSecondary: 'gray',     // #a6adc8
-  textMuted: 'gray',         // #6c7086
-
-  // 角色色
-  accent: 'cyan',            // #89b4fa
-  success: 'green',          // #a6e3a1
-  warning: 'yellow',         // #f9e2af
-  error: 'red',              // #f38ba8
-  mauve: 'magenta',          // #cba6f7
+  // Brand primary (blue family)
+  brand: 'blue',           // #7aa2f7
+  accent: 'blue',           // #7aa2f7 (alias)
+  // Text
+  textPrimary: 'white',     // #c0caf5
+  textSecondary: 'gray',    // #a9b1d6
+  textMuted: 'gray',        // #565f89
+  // State colors
+  success: 'green',         // #9ece6a
+  warning: 'yellow',        // #e0af68
+  error: 'red',             // #f7768e
+  mauve: 'magenta',         // #bb9af7
+  orange: 'yellow',         // #ff9e64 (closest ink color)
+  cyan: 'cyan',             // #7dcfff
 } as const;
 
-/// DESIGN.md §3: 卡片角色色（按用途分 5 类）
+/// Card role colors (5 categories per design system)
 export const ROLE_COLOR = {
   interaction: TUI_COLORS.warning,   // ask_user / permission / plan
-  execution: TUI_COLORS.accent,      // 写/执行类工具
-  thinking: TUI_COLORS.mauve,        // LLM 推理
-  done: TUI_COLORS.textMuted,        // 已完成
-  error: TUI_COLORS.error,           // 失败
+  execution: TUI_COLORS.accent,      // write / bash / read / search
+  thinking: TUI_COLORS.mauve,        // LLM reasoning
+  done: TUI_COLORS.textMuted,        // completed
+  error: TUI_COLORS.error,           // failed
 } as const;
 
-/// DESIGN.md §6.1: 状态前缀符号
+/// Status prefix glyphs
 export const PREFIX = {
-  pending: '▸',      // 待操作 / 折叠
-  running: '▶',      // 执行中
-  done: '✓',         // 已完成
-  failed: '✗',       // 失败
-  approval: '?',     // 待审批
-  textMuted: '·',
-  setting: '⚙',
-  loading: '·',
-  error: '✗',
-  thinking: '⚙',  // 思考深度图标（统一用 setting 前缀）
-  expanded: '▾',     // 折叠展开（折角朝下）
-  selected: '▸',     // 列表/选项被选中（语义化别名，与 pending 同字符）
-  sep: '·',          // 标签分隔符（与 textMuted/loading 区分用途）
+  pending: '▸',      // waiting / collapsed
+  running: '▶',      // executing
+  done: '✓',         // completed
+  failed: '✗',       // failed
+  approval: '?',     // pending approval
+  sep: '·',          // separator
+  expanded: '▾',     // expanded fold
+  selected: '▸',     // selected item
+  branch: '│',       // tree branch line
+  dot: '●',          // status dot
+  open: '○',         // open circle
+  // Legacy aliases (used by older components)
+  setting: '⚙',      // settings gear
+  error: '✗',        // error (alias of failed)
+  loading: '·',      // loading dot
+  textMuted: '·',    // muted separator (alias of sep)
+  thinking: '⚙',     // thinking gear
 } as const;
 
-/// DESIGN.md §5: 间距节奏（8 倍数）
+/// Spacing (8pt grid)
 export const SPACING = {
-  xs: 1,   // 4px（最小间距）
+  xs: 1,   // 4px
   sm: 2,   // 8px
   md: 3,   // 12px
   lg: 4,   // 16px
   xl: 6,   // 24px
 } as const;
 
-/// DESIGN.md §4: 边框风格
+/// Border styles
 export const BORDER = {
-  card: 'round',          // 卡片（交互/执行/思考）
-  panel: 'single',        // 面板（session/todo/setting/tree）
-  summary: 'single',      // 摘要（已完成/已决议）
+  card: 'round',
+  panel: 'single',
+  summary: 'single',
 } as const;
