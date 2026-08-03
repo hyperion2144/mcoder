@@ -8,6 +8,19 @@ import { parsePairingString } from './utils/pairing.js';
 
 const DEFAULT_URL = 'ws://127.0.0.1:7654';
 
+// 全屏模式：进入 alternate screen buffer
+function enterFullscreen() {
+  process.stdout.write('\x1b[?1049h'); // 切换到备用屏幕缓冲区
+  process.stdout.write('\x1b[2J\x1b[H'); // 清屏 + 光标归位
+  process.stdout.write('\x1b[?25l'); // 隐藏光标
+}
+
+// 退出全屏模式：恢复主屏幕缓冲区
+function exitFullscreen() {
+  process.stdout.write('\x1b[?25h'); // 显示光标
+  process.stdout.write('\x1b[?1049l'); // 切换回主屏幕缓冲区
+}
+
 async function main() {
   const args = process.argv.slice(2);
   let url = DEFAULT_URL;
@@ -62,7 +75,26 @@ async function main() {
     sessionStore.getState().setSessions(sessions);
   } catch {}
 
-  render(React.createElement(App, { client }));
+  // 进入全屏模式
+  enterFullscreen();
+
+  // 确保退出时恢复终端
+  const cleanup = () => {
+    exitFullscreen();
+    process.exit(0);
+  };
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
+  process.on('exit', () => exitFullscreen());
+
+  const instance = render(React.createElement(App, { client }));
+
+  // 等待应用退出（Ctrl+C 或 exit()）
+  try {
+    await instance.waitUntilExit();
+  } finally {
+    exitFullscreen();
+  }
 }
 
 main();

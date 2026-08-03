@@ -41,7 +41,7 @@ pub struct CommandDef {
 /// 元命令类型（内置，不走文件加载）
 /// 这些命令由服务端直接处理，返回结构化结果而非提示词
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum MetaCommandResult {
     /// 切换 role
     Mode { role: String },
@@ -439,7 +439,7 @@ pub struct CommandDispatcher {
 
 /// 命令分发结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind")]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DispatchResult {
     /// 元命令——返回结构化指令，由调用方执行对应 RPC
     Meta { result: MetaCommandResult },

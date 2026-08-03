@@ -501,6 +501,10 @@ export function App({ client: initialClient }: Props) {
   const handleSlashCommand = async (cmd: string) => {
     try {
       const result = await dispatchSlashCommand(cmd, client);
+      if (!result) {
+        msgStore.setError(`command dispatch returned empty result for: ${cmd}`);
+        return;
+      }
       if (result.reconnect) {
         await handleRemoteConnect(result.reconnect);
         return;
@@ -692,6 +696,42 @@ export function App({ client: initialClient }: Props) {
 
   return (
     <Box flexDirection="column" height="100%">
+      {/* 顶部标题栏：左侧 logo + 项目信息；右侧 模型 + 角色 + 版本 */}
+      <Box justifyContent="space-between" paddingX={1} flexShrink={0}>
+        <Box>
+          <Text color={TUI_COLORS.accent} bold>mcoder</Text>
+          {sessionStore.projectPath && (
+            <>
+              <Text color={TUI_COLORS.textMuted}> {PREFIX.sep} </Text>
+              <Text color={TUI_COLORS.textSecondary}>{sessionStore.projectPath}</Text>
+            </>
+          )}
+          {sessionStore.gitBranch && (
+            <>
+              <Text color={TUI_COLORS.textMuted}> {PREFIX.sep} </Text>
+              <Text color={TUI_COLORS.textMuted}>git:{sessionStore.gitBranch}</Text>
+            </>
+          )}
+          {sessionStore.lspServers.length > 0 && (
+            <>
+              <Text color={TUI_COLORS.textMuted}> {PREFIX.sep} </Text>
+              <Text color={TUI_COLORS.textMuted}>lsp:{sessionStore.lspServers.join(',')}</Text>
+            </>
+          )}
+        </Box>
+        <Box>
+          {sessionStore.currentModel && (
+            <Text color={TUI_COLORS.accent}>{sessionStore.currentModel}</Text>
+          )}
+          {sessionStore.currentRole && sessionStore.currentRole !== 'default' && (
+            <Text color={TUI_COLORS.mauve}> {PREFIX.sep} {sessionStore.currentRole}</Text>
+          )}
+          {sessionStore.version && (
+            <Text color={TUI_COLORS.textMuted}> {PREFIX.sep} v{sessionStore.version}</Text>
+          )}
+        </Box>
+      </Box>
+
       {/* 消息区（可滚动）。ask 卡片在 MessageList 内联渲染（由 store 中的 pending / lastSubmission 决定）*/}
       <MessageList
         askRenderState={
@@ -792,13 +832,14 @@ export function App({ client: initialClient }: Props) {
       </Box>
 
       {/* 命令选择面板（输入 / 时弹出，显示在输入框上方） */}
-      {showCommandPicker && sid && (
+      {showCommandPicker && (
         <CommandPicker
           client={client}
           filter={input}
           onSelect={(cmd) => {
-            setInput(cmd + ' ');
+            setInput('');
             setShowCommandPicker(false);
+            handleSlashCommand(cmd);
           }}
           onClose={() => setShowCommandPicker(false)}
           pendingPermission={!!(sid && permissionStore.pending[sid])}

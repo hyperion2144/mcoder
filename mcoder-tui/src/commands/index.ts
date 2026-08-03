@@ -176,6 +176,9 @@ async function handleDispatchResult(
 
     case 'unknown':
       return { error: `unknown command: /${result.name} (try /help)` };
+
+    default:
+      return { error: `unexpected dispatch result kind: ${(result as any)?.kind ?? 'undefined'}` };
   }
 }
 
